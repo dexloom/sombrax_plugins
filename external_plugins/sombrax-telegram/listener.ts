@@ -595,9 +595,25 @@ function isAuthorized(ctx: Context): boolean {
 /* ------------------------------------------------------------------ */
 
 function spawnClaudeSession(chatId: string, topics: string, cwd: string): ChildProcess {
-  // Open a new Terminal.app window with Claude Code — user can see and interact with it
-  const claudeCmd = `cd ${JSON.stringify(cwd)} && TELEGRAM_CHAT_ID=${JSON.stringify(chatId)} TELEGRAM_TOPIC=${JSON.stringify(topics)} TELEGRAM_DEBUG=${process.env.TELEGRAM_DEBUG ?? ''} claude --dangerously-load-development-channels server:sombrax-telegram --dangerously-skip-permissions --permission-mode bypassPermissions`
-  const script = `tell application "Terminal" to do script ${JSON.stringify(claudeCmd)}`
+  // Open a new Terminal.app window with Claude Code.
+  // Uses expect to auto-accept the development channel confirmation prompt,
+  // then hands control back to the user via interact.
+  const claudeArgs = [
+    '--dangerously-load-development-channels', 'server:sombrax-telegram',
+    '--dangerously-skip-permissions',
+    '--permission-mode', 'bypassPermissions',
+  ].join(' ')
+  const expectScript = [
+    `set timeout 30`,
+    `spawn env TELEGRAM_CHAT_ID=${chatId} TELEGRAM_TOPIC=${topics} TELEGRAM_DEBUG=${process.env.TELEGRAM_DEBUG ?? ''} claude ${claudeArgs}`,
+    `expect {`,
+    `  "development" { send "\\r" }`,
+    `  timeout { }`,
+    `}`,
+    `interact`,
+  ].join('\n')
+  const termCmd = `cd ${JSON.stringify(cwd)} && expect -c ${JSON.stringify(expectScript)}`
+  const script = `tell application "Terminal" to do script ${JSON.stringify(termCmd)}`
   const proc = spawn('osascript', ['-e', script], {
     stdio: 'ignore',
     detached: true,
