@@ -13,7 +13,7 @@
       "name": "sombrax-telegram",
       "source": "./external_plugins/sombrax-telegram",
       "description": "Multi-session Telegram channel for Claude Code with topic routing, listener daemon, and built-in access control",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "author": {
         "name": "dexloom"
       },

@@ -709,9 +709,54 @@ if (CLIENT_MODE) {
     process.exit(1)
   }
 
-  const topics: number[] | 'all' = TOPIC_FILTER === 'all'
-    ? 'all'
-    : TOPIC_FILTER!.split(',').map(s => Number(s.trim()))
+  // Resolve topic names to numeric IDs
+  const TOPIC_NAMES_FILE = join(STATE_DIR, 'topic-names.json')
+
+  async function resolveTopicId(name: string): Promise<number> {
+    // Load existing mappings
+    let mappings: Record<string, Record<string, number>> = {}
+    try { mappings = JSON.parse(readFileSync(TOPIC_NAMES_FILE, 'utf8')) } catch {}
+
+    const chatMap = mappings[LISTENER_CHAT_ID!] ?? {}
+    if (chatMap[name] != null) {
+      log(`Resolved topic name "${name}" → ${chatMap[name]}`)
+      return chatMap[name]
+    }
+
+    // Not found — create the topic
+    process.stderr.write(`telegram channel: creating forum topic "${name}" in ${LISTENER_CHAT_ID}\n`)
+    try {
+      const result = await bot.api.createForumTopic(Number(LISTENER_CHAT_ID), name)
+      const id = result.message_thread_id
+      process.stderr.write(`telegram channel: created topic "${name}" → ${id}\n`)
+
+      // Save mapping
+      if (!mappings[LISTENER_CHAT_ID!]) mappings[LISTENER_CHAT_ID!] = {}
+      mappings[LISTENER_CHAT_ID!][name] = id
+      writeFileSync(TOPIC_NAMES_FILE, JSON.stringify(mappings, null, 2))
+      return id
+    } catch (err: any) {
+      process.stderr.write(`telegram channel: failed to create topic "${name}": ${err.message}\n`)
+      process.stderr.write(`  Bot needs admin + can_manage_topics permission, or use a numeric topic ID\n`)
+      process.exit(1)
+    }
+  }
+
+  let topics: number[] | 'all'
+  if (TOPIC_FILTER === 'all') {
+    topics = 'all'
+  } else {
+    const parts = TOPIC_FILTER!.split(',').map(s => s.trim())
+    const resolved: number[] = []
+    for (const part of parts) {
+      if (/^\d+$/.test(part)) {
+        resolved.push(Number(part))
+      } else {
+        resolved.push(await resolveTopicId(part))
+      }
+    }
+    topics = resolved
+  }
 
   listenerSocket = netConnect(LISTENER_SOCKET_PATH)
   let lsBuf = ''
