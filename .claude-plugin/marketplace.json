@@ -1,0 +1,30 @@
+{
+  "name": "sombrax-plugins",
+  "owner": {
+    "name": "dexloom",
+    "email": "xdexloom@gmail.com"
+  },
+  "metadata": {
+    "description": "SombraX plugins for Claude Code",
+    "version": "1.0.0"
+  },
+  "plugins": [
+    {
+      "name": "sombrax-telegram",
+      "source": "./external_plugins/sombrax-telegram",
+      "description": "Multi-session Telegram channel for Claude Code with topic routing, listener daemon, and built-in access control",
+      "version": "0.1.0",
+      "author": {
+        "name": "dexloom"
+      },
+      "keywords": [
+        "telegram",
+        "channel",
+        "messaging",
+        "multi-session",
+        "topics",
+        "sombrax"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "name": "sombrax-telegram",
+  "description": "SombraX Telegram channel for Claude Code — multi-session messaging bridge with topic routing, built-in access control, and listener daemon. Manage via /telegram:access and /sombrax_telegram_channel.",
+  "version": "0.1.0",
+  "keywords": [
+    "telegram",
+    "messaging",
+    "channel",
+    "mcp",
+    "sombrax",
+    "multi-session",
+    "topics"
+  ]
+}
