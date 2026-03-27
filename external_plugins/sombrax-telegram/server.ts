@@ -652,6 +652,14 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
 })
 
 log(`Starting MCP server — CLIENT_MODE=${CLIENT_MODE} TOPIC_FILTER=${TOPIC_FILTER} CHAT_ID=${LISTENER_CHAT_ID}`)
+mcp.onerror = (err: Error) => {
+  process.stderr.write(`telegram channel: MCP error: ${err.message}\n`)
+}
+mcp.onclose = () => {
+  process.stderr.write('telegram channel: MCP connection closed by Claude Code\n')
+  shutdown()
+}
+
 await mcp.connect(new StdioServerTransport())
 log(`MCP transport connected`)
 
