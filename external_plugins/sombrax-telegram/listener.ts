@@ -32,6 +32,7 @@ import {
 import { homedir } from 'os'
 import { join } from 'path'
 import { createServer, type Socket } from 'net'
+import { spawn, type ChildProcess } from 'child_process'
 
 /* ------------------------------------------------------------------ */
 /*  State + config                                                     */
@@ -273,9 +274,13 @@ interface ClientConn {
   pendingPermissions: Set<string>
   connectedAt: number
   messagesDelivered: number
+  cwd: string | null
+  spawnedProcess: any | null
 }
 
 const clients: ClientConn[] = []
+
+const lastKnownCwd = new Map<string, string>()  // chatId -> cwd
 
 /* ------------------------------------------------------------------ */
 /*  Stats tracking                                                     */
@@ -402,6 +407,31 @@ function handleClientMessage(client: ClientConn, msg: Record<string, unknown>): 
       } else {
         client.topics = 'all'
       }
+      client.cwd = (msg.cwd as string) ?? null
+      if (client.cwd && client.chatId) {
+        lastKnownCwd.set(client.chatId, client.cwd)
+      }
+
+      // Exclusive topic locking: evict older clients with overlapping topics
+      for (const other of [...clients]) {
+        if (other === client) continue
+        if (other.chatId !== client.chatId) continue
+        // Check topic overlap
+        let overlaps = false
+        if (client.topics === 'all' || other.topics === 'all') {
+          overlaps = true
+        } else {
+          for (const t of client.topics) {
+            if (other.topics.includes(t)) { overlaps = true; break }
+          }
+        }
+        if (overlaps) {
+          process.stderr.write(`telegram listener: client ${other.id} evicted — topic conflict with ${client.id}\n`)
+          sendToClient(other, { type: 'shutdown', reason: 'replaced by new session' })
+          setTimeout(() => removeClient(other), 1000)
+        }
+      }
+
       if (!clients.includes(client)) clients.push(client)
       process.stderr.write(
         `telegram listener: client ${client.id} registered — ` +
@@ -561,6 +591,40 @@ function isAuthorized(ctx: Context): boolean {
 }
 
 /* ------------------------------------------------------------------ */
+/*  Session spawn / kill                                               */
+/* ------------------------------------------------------------------ */
+
+function spawnClaudeSession(chatId: string, topics: string, cwd: string): ChildProcess {
+  const env = {
+    ...process.env,
+    TELEGRAM_CHAT_ID: chatId,
+    TELEGRAM_TOPIC: topics,
+  }
+  const proc = spawn('claude', [
+    '--dangerously-load-development-channels', 'server:sombrax-telegram',
+    '--dangerously-skip-permissions',
+    '--permission-mode', 'bypassPermissions',
+  ], {
+    cwd,
+    env,
+    stdio: 'ignore',
+    detached: true,
+  })
+  proc.unref()
+  process.stderr.write(`telegram listener: spawned Claude session pid=${proc.pid} chat=${chatId} topics=${topics} cwd=${cwd}\n`)
+  return proc
+}
+
+function killSession(client: ClientConn, reason: string): void {
+  sendToClient(client, { type: 'shutdown', reason })
+  if (client.spawnedProcess) {
+    try { client.spawnedProcess.kill('SIGTERM') } catch {}
+  }
+  // Give the client time to shut down gracefully
+  setTimeout(() => removeClient(client), 2000)
+}
+
+/* ------------------------------------------------------------------ */
 /*  Bot commands — DM-only                                             */
 /* ------------------------------------------------------------------ */
 
@@ -591,7 +655,10 @@ bot.command('help', async ctx => {
     `/usage — listener stats and uptime\n` +
     `/sessions — connected Claude sessions\n\n` +
     `Group/topic commands:\n` +
-    `/new — reset the Claude session for this topic\n` +
+    `/new — restart the Claude session for this topic\n` +
+    `/restart — restart the Claude session for this topic\n` +
+    `/kill — stop Claude session for this topic\n` +
+    `/launch <topic> [cwd] — launch new Claude session\n` +
     `/usage — stats for this chat\n` +
     `/sessions — sessions for this chat`,
   )
@@ -632,8 +699,93 @@ bot.command('status', async ctx => {
 /* ------------------------------------------------------------------ */
 
 bot.command('new', async ctx => {
-  // /new resets the Claude session for the current topic.
-  // Works in groups (resets the session for that topic) and DMs.
+  // /new restarts the Claude session for the current topic.
+  // Works in groups (restarts the session for that topic) and DMs.
+  if (!isAuthorized(ctx)) return
+
+  const chatId = String(ctx.chat!.id)
+  const threadId = ctx.message?.message_thread_id ?? null
+  const matching = findClients(chatId, threadId)
+
+  if (matching.length === 0) {
+    const fallbackCwd = lastKnownCwd.get(chatId)
+    if (!fallbackCwd) {
+      const opts = threadId != null ? { message_thread_id: threadId } : {}
+      await bot.api.sendMessage(chatId, 'No session to restart (no known CWD).', opts)
+      return
+    }
+    // No client but we have a CWD — spawn fresh
+    const topicStr = threadId != null ? String(threadId) : 'all'
+    const proc = spawnClaudeSession(chatId, topicStr, fallbackCwd)
+    const opts = threadId != null ? { message_thread_id: threadId } : {}
+    await bot.api.sendMessage(chatId, `Spawning new Claude session (pid=${proc.pid}) in ${fallbackCwd}`, opts)
+    return
+  }
+
+  for (const client of matching) {
+    const savedCwd = client.cwd ?? lastKnownCwd.get(chatId)
+    const savedTopics = client.topics === 'all' ? 'all' : client.topics.join(',')
+    killSession(client, 'restarted via /new')
+    if (savedCwd) {
+      setTimeout(() => {
+        const proc = spawnClaudeSession(chatId, savedTopics, savedCwd)
+        process.stderr.write(`telegram listener: respawned session pid=${proc.pid} after /new\n`)
+      }, 3000)
+    }
+  }
+
+  const opts = threadId != null ? { message_thread_id: threadId } : {}
+  await bot.api.sendMessage(
+    chatId,
+    `Restarting ${matching.length} session(s). New Claude session will start shortly.`,
+    opts,
+  )
+})
+
+bot.command('restart', async ctx => {
+  // /restart is an alias for /new — restarts the Claude session for the current topic.
+  if (!isAuthorized(ctx)) return
+
+  const chatId = String(ctx.chat!.id)
+  const threadId = ctx.message?.message_thread_id ?? null
+  const matching = findClients(chatId, threadId)
+
+  if (matching.length === 0) {
+    const fallbackCwd = lastKnownCwd.get(chatId)
+    if (!fallbackCwd) {
+      const opts = threadId != null ? { message_thread_id: threadId } : {}
+      await bot.api.sendMessage(chatId, 'No session to restart (no known CWD).', opts)
+      return
+    }
+    const topicStr = threadId != null ? String(threadId) : 'all'
+    const proc = spawnClaudeSession(chatId, topicStr, fallbackCwd)
+    const opts = threadId != null ? { message_thread_id: threadId } : {}
+    await bot.api.sendMessage(chatId, `Spawning new Claude session (pid=${proc.pid}) in ${fallbackCwd}`, opts)
+    return
+  }
+
+  for (const client of matching) {
+    const savedCwd = client.cwd ?? lastKnownCwd.get(chatId)
+    const savedTopics = client.topics === 'all' ? 'all' : client.topics.join(',')
+    killSession(client, 'restarted via /restart')
+    if (savedCwd) {
+      setTimeout(() => {
+        const proc = spawnClaudeSession(chatId, savedTopics, savedCwd)
+        process.stderr.write(`telegram listener: respawned session pid=${proc.pid} after /restart\n`)
+      }, 3000)
+    }
+  }
+
+  const opts = threadId != null ? { message_thread_id: threadId } : {}
+  await bot.api.sendMessage(
+    chatId,
+    `Restarting ${matching.length} session(s). New Claude session will start shortly.`,
+    opts,
+  )
+})
+
+bot.command('kill', async ctx => {
+  // /kill [topic] — stop the Claude session for this topic without restarting
   if (!isAuthorized(ctx)) return
 
   const chatId = String(ctx.chat!.id)
@@ -647,21 +799,59 @@ bot.command('new', async ctx => {
   }
 
   for (const client of matching) {
-    sendToClient(client, {
-      type: 'session_reset',
-      chat_id: chatId,
-      ...(threadId != null ? { message_thread_id: String(threadId) } : {}),
-      user: ctx.from?.username ?? String(ctx.from?.id ?? 'unknown'),
-      user_id: String(ctx.from?.id ?? ''),
-    })
+    killSession(client, 'killed via /kill')
   }
 
   const opts = threadId != null ? { message_thread_id: threadId } : {}
   await bot.api.sendMessage(
     chatId,
-    `Session reset requested for ${matching.length} session(s). Claude will start fresh.`,
+    `Killed ${matching.length} session(s). Use /launch to start a new one.`,
     opts,
   )
+})
+
+bot.command('launch', async ctx => {
+  // /launch <topic> [cwd] — launch a new Claude session for a topic
+  if (!isAuthorized(ctx)) return
+
+  const chatId = String(ctx.chat!.id)
+  const threadId = ctx.message?.message_thread_id ?? null
+  const rawArgs = (ctx.message?.text ?? '').replace(/^\/launch(@\w+)?\s*/, '').trim()
+  const parts = rawArgs.split(/\s+/)
+  const topicArg = parts[0] || null
+  const cwdArg = parts.slice(1).join(' ') || null
+
+  const topicStr = topicArg ?? (threadId != null ? String(threadId) : null)
+  if (!topicStr) {
+    const opts = threadId != null ? { message_thread_id: threadId } : {}
+    await bot.api.sendMessage(chatId, 'Usage: /launch <topic> [cwd]\nProvide a topic ID or use in a topic thread.', opts)
+    return
+  }
+
+  const cwd = cwdArg ?? lastKnownCwd.get(chatId)
+  if (!cwd) {
+    const opts = threadId != null ? { message_thread_id: threadId } : {}
+    await bot.api.sendMessage(chatId, 'No CWD provided and no previous session CWD known. Usage: /launch <topic> <cwd>', opts)
+    return
+  }
+
+  // Check if topic is already taken
+  const topicNum = Number(topicStr)
+  const existing = clients.filter(c => {
+    if (c.chatId !== chatId) return false
+    if (c.topics === 'all') return true
+    if (!isNaN(topicNum) && c.topics.includes(topicNum)) return true
+    return false
+  })
+  if (existing.length > 0) {
+    const opts = threadId != null ? { message_thread_id: threadId } : {}
+    await bot.api.sendMessage(chatId, `Topic ${topicStr} is already served by session ${existing[0].id}. Use /restart to replace it.`, opts)
+    return
+  }
+
+  const proc = spawnClaudeSession(chatId, topicStr, cwd)
+  const opts = threadId != null ? { message_thread_id: threadId } : {}
+  await bot.api.sendMessage(chatId, `Launched new Claude session (pid=${proc.pid}) for topic ${topicStr} in ${cwd}`, opts)
 })
 
 bot.command('usage', async ctx => {
@@ -729,6 +919,7 @@ bot.command('sessions', async ctx => {
     text += `  topics: ${JSON.stringify(c.topics)}\n`
     text += `  messages: ${c.messagesDelivered}\n`
     text += `  uptime: ${age}\n`
+    text += `  cwd: ${c.cwd ?? '(unknown)'}\n`
     text += `  permissions pending: ${c.pendingPermissions.size}\n\n`
   }
 
@@ -885,6 +1076,8 @@ const socketServer = createServer(socket => {
     pendingPermissions: new Set(),
     connectedAt: Date.now(),
     messagesDelivered: 0,
+    cwd: null,
+    spawnedProcess: null,
   }
   process.stderr.write(`telegram listener: client ${client.id} connected\n`)
 
@@ -935,10 +1128,13 @@ void (async () => {
             ],
             { scope: { type: 'all_private_chats' } },
           ).catch(() => {})
-          // Group commands (include new/usage/sessions)
+          // Group commands (include new/restart/kill/launch/usage/sessions)
           void bot.api.setMyCommands(
             [
-              { command: 'new', description: 'Reset Claude session for this topic' },
+              { command: 'new', description: 'Restart Claude session for this topic' },
+              { command: 'restart', description: 'Restart Claude session for this topic' },
+              { command: 'kill', description: 'Stop Claude session for this topic' },
+              { command: 'launch', description: 'Launch new Claude session for a topic' },
               { command: 'usage', description: 'Stats and uptime' },
               { command: 'sessions', description: 'Connected Claude sessions' },
             ],

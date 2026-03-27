@@ -714,6 +714,7 @@ if (CLIENT_MODE) {
       type: 'register',
       chat_id: LISTENER_CHAT_ID,
       topics,
+      cwd: process.cwd(),
     }) + '\n')
   })
 
@@ -786,6 +787,12 @@ if (CLIENT_MODE) {
             }).catch(err => {
               process.stderr.write(`telegram channel: failed to deliver session_reset to Claude: ${err}\n`)
             })
+            break
+          }
+
+          case 'shutdown': {
+            process.stderr.write(`telegram channel: shutdown requested by listener: ${msg.reason ?? 'no reason'}\n`)
+            shutdown()
             break
           }
         }
