@@ -916,10 +916,27 @@ bot.command('resume', async ctx => {
     return
   }
 
+  // Filter sessions: if a client is connected for this chat, only show sessions
+  // from the same CWD. If no client is connected, show all sessions.
+  const activeClients = clients.filter(c => c.chatId === chatId)
+  const activeCwd = activeClients.length > 0 && activeClients[0].cwd ? activeClients[0].cwd : null
+  const filtered = activeCwd
+    ? sessions.filter(s => s.cwd === activeCwd)
+    : sessions
+
+  if (filtered.length === 0) {
+    const hint = activeCwd ? ` for ${activeCwd}` : ''
+    await bot.api.sendMessage(chatId, `No saved sessions found${hint}.`, opts)
+    return
+  }
+
   // No args — list available sessions with inline buttons
-  let text = `Sessions (${sessions.length}):\n\n`
+  const shown = filtered.slice(-10) // last 10
+  let text = activeCwd
+    ? `Sessions in ${activeCwd} (${shown.length}/${filtered.length}):\n\n`
+    : `All sessions (${shown.length}/${filtered.length}):\n\n`
   const buttons: { text: string; data: string }[][] = []
-  for (const s of sessions.slice(-10)) { // last 10
+  for (const s of shown) {
     const label = s.name || s.cwd.split('/').pop() || s.sessionId.slice(0, 8)
     text += `${s.sessionId.slice(0, 8)} — ${s.cwd}${s.name ? ` (${s.name})` : ''}\n`
     buttons.push([{ text: `Resume ${label}`, data: `resume:${s.sessionId}` }])
