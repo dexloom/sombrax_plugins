@@ -595,23 +595,15 @@ function isAuthorized(ctx: Context): boolean {
 /* ------------------------------------------------------------------ */
 
 function spawnClaudeSession(chatId: string, topics: string, cwd: string): ChildProcess {
-  const env = {
-    ...process.env,
-    TELEGRAM_CHAT_ID: chatId,
-    TELEGRAM_TOPIC: topics,
-  }
-  const proc = spawn('claude', [
-    '--dangerously-load-development-channels', 'server:sombrax-telegram',
-    '--dangerously-skip-permissions',
-    '--permission-mode', 'bypassPermissions',
-  ], {
-    cwd,
-    env,
+  // Open a new Terminal.app window with Claude Code — user can see and interact with it
+  const claudeCmd = `cd ${JSON.stringify(cwd)} && TELEGRAM_CHAT_ID=${JSON.stringify(chatId)} TELEGRAM_TOPIC=${JSON.stringify(topics)} TELEGRAM_DEBUG=${process.env.TELEGRAM_DEBUG ?? ''} claude --dangerously-load-development-channels server:sombrax-telegram --dangerously-skip-permissions --permission-mode bypassPermissions`
+  const script = `tell application "Terminal" to do script ${JSON.stringify(claudeCmd)}`
+  const proc = spawn('osascript', ['-e', script], {
     stdio: 'ignore',
     detached: true,
   })
   proc.unref()
-  process.stderr.write(`telegram listener: spawned Claude session pid=${proc.pid} chat=${chatId} topics=${topics} cwd=${cwd}\n`)
+  process.stderr.write(`telegram listener: opening Terminal window — chat=${chatId} topics=${topics} cwd=${cwd}\n`)
   return proc
 }
 
