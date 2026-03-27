@@ -594,7 +594,7 @@ function isAuthorized(ctx: Context): boolean {
 /*  Session spawn / kill                                               */
 /* ------------------------------------------------------------------ */
 
-function spawnClaudeSession(chatId: string, topics: string, cwd: string): ChildProcess {
+function spawnClaudeSession(chatId: string, topics: string, cwd: string, resumeId?: string): ChildProcess {
   // Open a new Terminal.app window with Claude Code.
   // Uses expect to auto-accept the development channel confirmation prompt,
   // then hands control back to the user via interact.
@@ -602,6 +602,7 @@ function spawnClaudeSession(chatId: string, topics: string, cwd: string): ChildP
     '--dangerously-load-development-channels', 'server:sombrax-telegram',
     '--dangerously-skip-permissions',
     '--permission-mode', 'bypassPermissions',
+    ...(resumeId ? ['--resume', resumeId] : []),
   ].join(' ')
   const expectScript = `set timeout 30; spawn env TELEGRAM_CHAT_ID=${chatId} TELEGRAM_TOPIC=${topics} TELEGRAM_DEBUG=${process.env.TELEGRAM_DEBUG ?? ''} claude ${claudeArgs}; expect "development" { send "\\r" }; interact`
   const termCmd = `cd ${JSON.stringify(cwd)} && expect -c ${JSON.stringify(expectScript)}`
@@ -611,8 +612,33 @@ function spawnClaudeSession(chatId: string, topics: string, cwd: string): ChildP
     detached: true,
   })
   proc.unref()
-  process.stderr.write(`telegram listener: opening Terminal window — chat=${chatId} topics=${topics} cwd=${cwd}\n`)
+  process.stderr.write(`telegram listener: opening Terminal window — chat=${chatId} topics=${topics} cwd=${cwd}${resumeId ? ` resume=${resumeId}` : ''}\n`)
   return proc
+}
+
+type SessionInfo = { sessionId: string; cwd: string; name: string; pid: string }
+
+function listClaudeSessions(): SessionInfo[] {
+  const sessDir = join(homedir(), '.claude', 'sessions')
+  const sessions: SessionInfo[] = []
+  try {
+    for (const file of readdirSync(sessDir)) {
+      if (!file.endsWith('.json')) continue
+      try {
+        const raw = readFileSync(join(sessDir, file), 'utf8')
+        const d = JSON.parse(raw)
+        if (d.sessionId) {
+          sessions.push({
+            sessionId: d.sessionId,
+            cwd: d.cwd ?? '?',
+            name: d.name ?? '',
+            pid: file.replace('.json', ''),
+          })
+        }
+      } catch {}
+    }
+  } catch {}
+  return sessions
 }
 
 function killSession(client: ClientConn, reason: string): void {
@@ -659,6 +685,7 @@ bot.command('help', async ctx => {
     `/restart — restart the Claude session for this topic\n` +
     `/kill — stop Claude session for this topic\n` +
     `/launch <topic> [cwd] — launch new Claude session\n` +
+    `/resume [session-id] — resume a saved Claude session\n` +
     `/usage — stats for this chat\n` +
     `/sessions — sessions for this chat`,
   )
@@ -854,6 +881,54 @@ bot.command('launch', async ctx => {
   await bot.api.sendMessage(chatId, `Launched new Claude session (pid=${proc.pid}) for topic ${topicStr} in ${cwd}`, opts)
 })
 
+bot.command('resume', async ctx => {
+  if (!isAuthorized(ctx)) return
+
+  const chatId = String(ctx.chat!.id)
+  const threadId = ctx.message?.message_thread_id ?? null
+  const opts = threadId != null ? { message_thread_id: threadId } : {}
+  const args = (ctx.message?.text ?? '').replace(/^\/resume\s*/, '').trim()
+
+  const sessions = listClaudeSessions()
+  if (sessions.length === 0) {
+    await bot.api.sendMessage(chatId, 'No saved sessions found.', opts)
+    return
+  }
+
+  // If a session ID (or prefix) is provided, resume it directly
+  if (args) {
+    const match = sessions.find(s => s.sessionId === args || s.sessionId.startsWith(args) || s.pid === args)
+    if (!match) {
+      await bot.api.sendMessage(chatId, `No session matching "${args}". Use /resume to list.`, opts)
+      return
+    }
+
+    const topic = threadId != null ? String(threadId) : 'all'
+
+    // Check for existing client on this topic
+    const existing = findClients(chatId, threadId)
+    for (const old of existing) {
+      killSession(old, 'replaced by resumed session')
+    }
+
+    spawnClaudeSession(chatId, topic, match.cwd, match.sessionId)
+    await bot.api.sendMessage(chatId, `Resuming session ${match.sessionId.slice(0, 8)}... in ${match.cwd}`, opts)
+    return
+  }
+
+  // No args — list available sessions with inline buttons
+  let text = `Sessions (${sessions.length}):\n\n`
+  const buttons: { text: string; data: string }[][] = []
+  for (const s of sessions.slice(-10)) { // last 10
+    const label = s.name || s.cwd.split('/').pop() || s.sessionId.slice(0, 8)
+    text += `${s.sessionId.slice(0, 8)} — ${s.cwd}${s.name ? ` (${s.name})` : ''}\n`
+    buttons.push([{ text: `Resume ${label}`, data: `resume:${s.sessionId}` }])
+  }
+
+  const keyboard = { inline_keyboard: buttons.map(row => row.map(b => ({ text: b.text, callback_data: b.data }))) }
+  await bot.api.sendMessage(chatId, text, { ...opts, reply_markup: keyboard })
+})
+
 bot.command('usage', async ctx => {
   if (!isAuthorized(ctx)) return
 
@@ -933,6 +1008,39 @@ bot.command('sessions', async ctx => {
 
 bot.on('callback_query:data', async ctx => {
   const data = ctx.callbackQuery.data
+
+  // Handle resume button clicks
+  const resumeMatch = /^resume:(.+)$/.exec(data)
+  if (resumeMatch) {
+    const access = loadAccess()
+    const senderId = String(ctx.from.id)
+    if (!access.allowFrom.includes(senderId)) {
+      await ctx.answerCallbackQuery({ text: 'Not authorized.' }).catch(() => {})
+      return
+    }
+    const sessionId = resumeMatch[1]
+    const sessions = listClaudeSessions()
+    const session = sessions.find(s => s.sessionId === sessionId)
+    if (!session) {
+      await ctx.answerCallbackQuery({ text: 'Session not found.' }).catch(() => {})
+      return
+    }
+    const chatId = String(ctx.callbackQuery.message?.chat.id ?? '')
+    const threadId = ctx.callbackQuery.message?.message_thread_id ?? null
+    const topic = threadId != null ? String(threadId) : 'all'
+
+    // Kill existing sessions on this topic
+    const existing = findClients(chatId, threadId)
+    for (const old of existing) {
+      killSession(old, 'replaced by resumed session')
+    }
+
+    spawnClaudeSession(chatId, topic, session.cwd, session.sessionId)
+    await ctx.answerCallbackQuery({ text: 'Resuming...' }).catch(() => {})
+    await ctx.editMessageText(`Resuming session ${session.sessionId.slice(0, 8)}... in ${session.cwd}`).catch(() => {})
+    return
+  }
+
   const m = /^perm:(allow|deny|more):([a-km-z]{5})$/.exec(data)
   if (!m) {
     await ctx.answerCallbackQuery().catch(() => {})
@@ -1135,6 +1243,7 @@ void (async () => {
               { command: 'restart', description: 'Restart Claude session for this topic' },
               { command: 'kill', description: 'Stop Claude session for this topic' },
               { command: 'launch', description: 'Launch new Claude session for a topic' },
+              { command: 'resume', description: 'Resume a saved Claude session' },
               { command: 'usage', description: 'Stats and uptime' },
               { command: 'sessions', description: 'Connected Claude sessions' },
             ],
