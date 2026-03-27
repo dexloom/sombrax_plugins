@@ -603,15 +603,7 @@ function spawnClaudeSession(chatId: string, topics: string, cwd: string): ChildP
     '--dangerously-skip-permissions',
     '--permission-mode', 'bypassPermissions',
   ].join(' ')
-  const expectScript = [
-    `set timeout 30`,
-    `spawn env TELEGRAM_CHAT_ID=${chatId} TELEGRAM_TOPIC=${topics} TELEGRAM_DEBUG=${process.env.TELEGRAM_DEBUG ?? ''} claude ${claudeArgs}`,
-    `expect {`,
-    `  "development" { send "\\r" }`,
-    `  timeout { }`,
-    `}`,
-    `interact`,
-  ].join('\n')
+  const expectScript = `set timeout 30; spawn env TELEGRAM_CHAT_ID=${chatId} TELEGRAM_TOPIC=${topics} TELEGRAM_DEBUG=${process.env.TELEGRAM_DEBUG ?? ''} claude ${claudeArgs}; expect "development" { send "\\r" }; interact`
   const termCmd = `cd ${JSON.stringify(cwd)} && expect -c ${JSON.stringify(expectScript)}`
   const script = `tell application "Terminal" to do script ${JSON.stringify(termCmd)}`
   const proc = spawn('osascript', ['-e', script], {
