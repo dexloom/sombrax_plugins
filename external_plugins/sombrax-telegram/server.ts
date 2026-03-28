@@ -32,6 +32,26 @@ function log(msg: string): void {
   process.stderr.write(line)
   try { appendFileSync(LOG_FILE, line) } catch {}
 }
+/** Always log to file regardless of DEBUG — for critical events */
+function logCritical(msg: string): void {
+  const line = `[${new Date().toISOString()}] ${msg}\n`
+  process.stderr.write(line)
+  try { appendFileSync(LOG_FILE, line) } catch {}
+}
+/** Safe MCP notification — catches broken pipe errors instead of crashing */
+let mcpAlive = true
+async function safeMcpNotify(method: string, params: Record<string, any>): Promise<boolean> {
+  if (!mcpAlive) return false
+  try {
+    await mcp.notification({ method, params })
+    return true
+  } catch (err: any) {
+    logCritical(`MCP notification failed (${method}): ${err.message ?? err}`)
+    mcpAlive = false
+    shutdown()
+    return false
+  }
+}
 
 const STATE_DIR = process.env.TELEGRAM_STATE_DIR ?? join(homedir(), '.claude', 'channels', 'telegram')
 const ACCESS_FILE = join(STATE_DIR, 'access.json')
@@ -76,10 +96,10 @@ let listenerSocket: Socket | null = null
 // Last-resort safety net — without these the process dies silently on any
 // unhandled promise rejection. With them it logs and keeps serving tools.
 process.on('unhandledRejection', err => {
-  process.stderr.write(`telegram channel: unhandled rejection: ${err}\n`)
+  logCritical(`UNHANDLED REJECTION: ${err}`)
 })
 process.on('uncaughtException', err => {
-  process.stderr.write(`telegram channel: uncaught exception: ${err}\n`)
+  logCritical(`UNCAUGHT EXCEPTION: ${err}`)
 })
 
 // Permission-reply spec from anthropics/claude-cli-internal
@@ -89,6 +109,9 @@ process.on('uncaughtException', err => {
 const PERMISSION_REPLY_RE = /^\s*(y|yes|n|no)\s+([a-km-z]{5})\s*$/i
 
 const bot = new Bot(TOKEN)
+bot.catch((err) => {
+  logCritical(`Grammy bot error: ${err.message ?? err}`)
+})
 let botUsername = ''
 
 type PendingEntry = {
@@ -653,15 +676,15 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
 
 log(`Starting MCP server — CLIENT_MODE=${CLIENT_MODE} TOPIC_FILTER=${TOPIC_FILTER} CHAT_ID=${LISTENER_CHAT_ID}`)
 mcp.onerror = (err: Error) => {
-  process.stderr.write(`telegram channel: MCP error: ${err.message}\n`)
+  logCritical(`MCP error: ${err.message}`)
 }
 mcp.onclose = () => {
-  process.stderr.write('telegram channel: MCP connection closed by Claude Code\n')
+  logCritical('MCP connection closed by Claude Code')
   shutdown()
 }
 
 await mcp.connect(new StdioServerTransport())
-log(`MCP transport connected`)
+logCritical(`MCP transport connected — CLIENT_MODE=${CLIENT_MODE} pid=${process.pid}`)
 
 // When Claude Code closes the MCP connection, stdin gets EOF. Without this
 // the bot keeps polling forever as a zombie, holding the token and blocking
@@ -805,22 +828,12 @@ if (CLIENT_MODE) {
             if (msg.attachment_name) meta.attachment_name = msg.attachment_name
 
             log(`Sending MCP notification: method=notifications/claude/channel content="${(msg.text ?? '').slice(0, 40)}" meta=${JSON.stringify(meta)}`)
-            mcp.notification({
-              method: 'notifications/claude/channel',
-              params: { content: msg.text, meta },
-            }).then(() => {
-              log(`MCP notification sent OK`)
-            }).catch(err => {
-              log(`MCP notification FAILED: ${err}`)
-            })
+            safeMcpNotify('notifications/claude/channel', { content: msg.text, meta })
             break
           }
 
           case 'permission_response':
-            void mcp.notification({
-              method: 'notifications/claude/channel/permission',
-              params: { request_id: msg.request_id, behavior: msg.behavior },
-            })
+            safeMcpNotify('notifications/claude/channel/permission', { request_id: msg.request_id, behavior: msg.behavior })
             break
 
           case 'session_reset': {
@@ -831,14 +844,9 @@ if (CLIENT_MODE) {
               user_id: msg.user_id,
             }
             if (msg.message_thread_id) resetMeta.message_thread_id = msg.message_thread_id
-            mcp.notification({
-              method: 'notifications/claude/channel',
-              params: {
-                content: '[Session reset requested via /new command. Please acknowledge and start fresh — disregard prior conversation context from this topic.]',
-                meta: resetMeta,
-              },
-            }).catch(err => {
-              process.stderr.write(`telegram channel: failed to deliver session_reset to Claude: ${err}\n`)
+            safeMcpNotify('notifications/claude/channel', {
+              content: '[Session reset requested via /new command. Please acknowledge and start fresh — disregard prior conversation context from this topic.]',
+              meta: resetMeta,
             })
             break
           }
@@ -972,10 +980,7 @@ if (CLIENT_MODE) {
       return
     }
 
-    void mcp.notification({
-      method: 'notifications/claude/channel/permission',
-      params: { request_id, behavior },
-    })
+    safeMcpNotify('notifications/claude/channel/permission', { request_id, behavior })
     pendingPermissions.delete(request_id)
     const label = behavior === 'allow' ? '✅ Allowed' : '❌ Denied'
     await ctx.answerCallbackQuery({ text: label }).catch(() => {})
@@ -1130,12 +1135,9 @@ if (CLIENT_MODE) {
     // (non-allowlisted senders were dropped above), so we trust the reply.
     const permMatch = PERMISSION_REPLY_RE.exec(text)
     if (permMatch) {
-      void mcp.notification({
-        method: 'notifications/claude/channel/permission',
-        params: {
-          request_id: permMatch[2]!.toLowerCase(),
-          behavior: permMatch[1]!.toLowerCase().startsWith('y') ? 'allow' : 'deny',
-        },
+      safeMcpNotify('notifications/claude/channel/permission', {
+        request_id: permMatch[2]!.toLowerCase(),
+        behavior: permMatch[1]!.toLowerCase().startsWith('y') ? 'allow' : 'deny',
       })
       if (msgId != null) {
         const emoji = permMatch[1]!.toLowerCase().startsWith('y') ? '✅' : '❌'
@@ -1166,29 +1168,24 @@ if (CLIENT_MODE) {
 
     // image_path goes in meta only — an in-content "[image attached — read: PATH]"
     // annotation is forgeable by any allowlisted sender typing that string.
-    mcp.notification({
-      method: 'notifications/claude/channel',
-      params: {
-        content: text,
-        meta: {
-          chat_id,
-          ...(msgId != null ? { message_id: String(msgId) } : {}),
-          ...(threadId != null ? { message_thread_id: String(threadId) } : {}),
-          user: from.username ?? String(from.id),
-          user_id: String(from.id),
-          ts: new Date((ctx.message?.date ?? 0) * 1000).toISOString(),
-          ...(imagePath ? { image_path: imagePath } : {}),
-          ...(attachment ? {
-            attachment_kind: attachment.kind,
-            attachment_file_id: attachment.file_id,
-            ...(attachment.size != null ? { attachment_size: String(attachment.size) } : {}),
-            ...(attachment.mime ? { attachment_mime: attachment.mime } : {}),
-            ...(attachment.name ? { attachment_name: attachment.name } : {}),
-          } : {}),
-        },
+    safeMcpNotify('notifications/claude/channel', {
+      content: text,
+      meta: {
+        chat_id,
+        ...(msgId != null ? { message_id: String(msgId) } : {}),
+        ...(threadId != null ? { message_thread_id: String(threadId) } : {}),
+        user: from.username ?? String(from.id),
+        user_id: String(from.id),
+        ts: new Date((ctx.message?.date ?? 0) * 1000).toISOString(),
+        ...(imagePath ? { image_path: imagePath } : {}),
+        ...(attachment ? {
+          attachment_kind: attachment.kind,
+          attachment_file_id: attachment.file_id,
+          ...(attachment.size != null ? { attachment_size: String(attachment.size) } : {}),
+          ...(attachment.mime ? { attachment_mime: attachment.mime } : {}),
+          ...(attachment.name ? { attachment_name: attachment.name } : {}),
+        } : {}),
       },
-    }).catch(err => {
-      process.stderr.write(`telegram channel: failed to deliver inbound to Claude: ${err}\n`)
     })
   }
 

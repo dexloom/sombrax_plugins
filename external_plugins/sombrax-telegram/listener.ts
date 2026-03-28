@@ -678,6 +678,7 @@ bot.command('help', async ctx => {
     `DM commands:\n` +
     `/start — pairing instructions\n` +
     `/status — check your pairing state\n` +
+    `/logs [n] — last n lines of server.log (default 30)\n` +
     `/usage — listener stats and uptime\n` +
     `/sessions — connected Claude sessions\n\n` +
     `Group/topic commands:\n` +
@@ -944,6 +945,35 @@ bot.command('resume', async ctx => {
 
   const keyboard = { inline_keyboard: buttons.map(row => row.map(b => ({ text: b.text, callback_data: b.data }))) }
   await bot.api.sendMessage(chatId, text, { ...opts, reply_markup: keyboard })
+})
+
+bot.command('logs', async ctx => {
+  if (!isAuthorized(ctx)) return
+
+  const chatId = String(ctx.chat!.id)
+  const threadId = ctx.message?.message_thread_id ?? null
+  const opts = threadId != null ? { message_thread_id: threadId } : {}
+  const args = (ctx.message?.text ?? '').replace(/^\/logs\s*/, '').trim()
+  const lines = Number(args) || 30
+
+  const logFile = join(homedir(), '.claude', 'channels', 'telegram', 'server.log')
+  try {
+    const content = readFileSync(logFile, 'utf8')
+    const allLines = content.split('\n').filter(Boolean)
+    const tail = allLines.slice(-lines).join('\n')
+    if (!tail) {
+      await bot.api.sendMessage(chatId, 'Server log is empty.', opts)
+    } else {
+      // Telegram message limit is 4096 chars
+      const truncated = tail.length > 4000 ? '...' + tail.slice(-4000) : tail
+      await bot.api.sendMessage(chatId, `\`\`\`\n${truncated}\n\`\`\``, { ...opts, parse_mode: 'MarkdownV2' }).catch(async () => {
+        // Fallback without markdown if escaping fails
+        await bot.api.sendMessage(chatId, truncated, opts)
+      })
+    }
+  } catch {
+    await bot.api.sendMessage(chatId, 'No server log found.', opts)
+  }
 })
 
 bot.command('usage', async ctx => {
@@ -1261,6 +1291,7 @@ void (async () => {
               { command: 'kill', description: 'Stop Claude session for this topic' },
               { command: 'launch', description: 'Launch new Claude session for a topic' },
               { command: 'resume', description: 'Resume a saved Claude session' },
+              { command: 'logs', description: 'View server.log (last 30 lines)' },
               { command: 'usage', description: 'Stats and uptime' },
               { command: 'sessions', description: 'Connected Claude sessions' },
             ],
