@@ -413,6 +413,9 @@ function handleClientMessage(client: ClientConn, msg: Record<string, unknown>): 
       }
 
       // Exclusive topic locking: evict older clients with overlapping topics
+      // Cooldown: don't evict clients that connected less than 60s ago
+      // (prevents rapid cycling when Claude Code harness spawns duplicates)
+      const EVICT_COOLDOWN_MS = 60_000
       for (const other of [...clients]) {
         if (other === client) continue
         if (other.chatId !== client.chatId) continue
@@ -426,6 +429,14 @@ function handleClientMessage(client: ClientConn, msg: Record<string, unknown>): 
           }
         }
         if (overlaps) {
+          const age = Date.now() - other.connectedAt
+          if (age < EVICT_COOLDOWN_MS) {
+            // Existing client is too fresh — reject the newcomer instead
+            process.stderr.write(`telegram listener: rejecting client ${client.id} — client ${other.id} is ${Math.round(age / 1000)}s old (cooldown ${EVICT_COOLDOWN_MS / 1000}s)\n`)
+            sendToClient(client, { type: 'shutdown', reason: 'topic already served by a recent session' })
+            setTimeout(() => removeClient(client), 1000)
+            return
+          }
           process.stderr.write(`telegram listener: client ${other.id} evicted — topic conflict with ${client.id}\n`)
           sendToClient(other, { type: 'shutdown', reason: 'replaced by new session' })
           setTimeout(() => removeClient(other), 1000)
