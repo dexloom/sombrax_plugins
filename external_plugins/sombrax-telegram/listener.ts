@@ -609,10 +609,12 @@ function spawnClaudeSession(chatId: string, topics: string, cwd: string, resumeI
   // Open a new Terminal.app window with Claude Code.
   // Uses expect to auto-accept the development channel confirmation prompt,
   // then hands control back to the user via interact.
+  const channelPrompt = `You are connected to a Telegram channel. chat_id=${chatId} message_thread_id=${topics}. When replying to Telegram messages, always pass chat_id="${chatId}" and message_thread_id="${topics}" to the reply tool. You do not need to ask for these values — they are fixed for this session.`
   const claudeArgs = [
     '--dangerously-load-development-channels', 'server:sombrax-telegram',
     '--dangerously-skip-permissions',
     '--permission-mode', 'bypassPermissions',
+    '--append-system-prompt', JSON.stringify(channelPrompt),
     ...(resumeId ? ['--resume', resumeId] : []),
   ].join(' ')
   const expectScript = `set timeout 30; spawn env TELEGRAM_CHAT_ID=${chatId} TELEGRAM_TOPIC=${topics} TELEGRAM_DEBUG=${process.env.TELEGRAM_DEBUG ?? ''} claude ${claudeArgs}; expect "development" { send "\\r" }; interact`
