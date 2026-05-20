@@ -76,14 +76,40 @@ Show listener and session status.
 4. Report connected sessions if possible
 
 ### `tui`
-Open a live terminal dashboard of running sessions.
+Open a live interactive terminal dashboard.
 
 1. Requires the listener daemon to already be running (`start` first)
 2. Run in the foreground: `bun ${CLAUDE_PLUGIN_ROOT}/listener.ts --tui`
 3. The dashboard connects to the running listener over its Unix socket and
-   refreshes every 2s, showing per session: folder (cwd), session id,
-   git branch, and worktree (path if running in a linked git worktree, else `-`)
-4. Press `q` or Ctrl-C to quit. It auto-reconnects if the listener restarts.
+   refreshes every 2s. Auto-reconnects if the listener restarts.
+
+**Views**
+
+- **Main** — sessions table. Columns: folder · session id (Claude sessionId
+  when available, else listener client id) · branch (with `*` for dirty and
+  `↑N`/`↓N` for ahead/behind upstream) · worktree (path when running in a
+  linked git worktree, else `-`) · MSG · PEND · UP.
+- **Detail** — full per-session view plus a list of pending permission
+  requests with input preview; approve/deny inline.
+- **Resume** — picker over `~/.claude/sessions/*.json` to resume a saved
+  Claude session into a chat/topic.
+- **Logs** — tail of `server.log`.
+- **Coverage** — sessions grouped by chat and topic, with recent dropped
+  messages and a `⚠ overlap` marker when two sessions claim the same topic.
+
+**Keys**
+
+- `↑` `↓` — select row
+- `Enter` / `d` — open detail; `Esc` / `d` to go back
+- `k` — kill selected (confirm); `r` — restart selected (confirm)
+- `l` — launch new (prompts for chat_id, topic, cwd)
+- `R` — open resume picker; `Enter` picks; then prompts for chat_id and topic
+- `L` — log tail; `c` — coverage view
+- `/` — filter (matches cwd / branch / chat / topic / id); `Esc` clears
+- `s` — cycle sort field (cwd · branch · uptime · pending · msgs);
+  `S` — toggle direction
+- In detail view: `a` approve / `D` deny the highlighted permission
+- `q` or Ctrl-C — quit
 
 ### `topics`
 Help the user configure topic routing for Claude Code sessions.

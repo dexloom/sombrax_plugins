@@ -63,24 +63,50 @@ const DEBUG = !!process.env.TELEGRAM_DEBUG
 /* ------------------------------------------------------------------ */
 /*  --tui : live dashboard of running sessions                         */
 /* ------------------------------------------------------------------ */
-/*  Runs as a thin client: connects to an already-running listener     */
-/*  over the Unix socket, asks for a session dump every 2s, and        */
-/*  renders a table. It never binds the socket or polls Telegram, so   */
-/*  module execution is suspended here (top-level await) and the       */
-/*  daemon bootstrap below never runs in this mode.                    */
+/*  Thin client: connects to an already-running listener over the      */
+/*  Unix socket, polls list_sessions every 2s, and exposes a           */
+/*  multi-view interactive dashboard. Module execution suspends at the */
+/*  top-level await below so the daemon bootstrap never runs here.     */
+/*                                                                     */
+/*  Views: main (sessions table) · detail (single session + pending    */
+/*  permissions) · resume (saved-session picker) · logs (server.log    */
+/*  tail) · coverage (topic ownership + recent drops).                 */
 
+interface PendingPerm {
+  request_id: string
+  tool_name: string
+  description: string
+  input_preview: string
+  ageMs: number
+}
 interface TuiSession {
   id: string
   sessionId: string | null
   cwd: string | null
   branch: string
   worktree: string
+  dirty: boolean
+  ahead: number
+  behind: number
+  hasUpstream: boolean
   topics: string
   chatId: string | null
   uptimeMs: number
   messages: number
   pending: number
+  pendingPerms: PendingPerm[]
 }
+interface TuiStatus {
+  daemonStartedAt: number
+  daemonUptimeMs: number
+  totalInbound: number
+  totalDelivered: number
+  totalDropped: number
+  recentDrops: Array<{ chatId: string; threadId: number | null; ts: number }>
+  socketPath: string
+  clientsCount: number
+}
+interface SavedSession { sessionId: string; cwd: string; name: string; pid: string }
 
 if (process.argv.includes('--tui')) {
   await runTuiClient()
@@ -99,68 +125,519 @@ function fmtUptimeShort(ms: number): string {
 
 /** Truncate keeping the tail (more informative for paths). */
 function truncTail(s: string, w: number): string {
+  if (w <= 0) return ''
   if (s.length <= w) return s.padEnd(w)
   return ('…' + s.slice(-(w - 1))).padEnd(w)
 }
 function truncHead(s: string, w: number): string {
+  if (w <= 0) return ''
   if (s.length <= w) return s.padEnd(w)
   return (s.slice(0, w - 1) + '…').padEnd(w)
 }
 
-function renderTui(sessions: TuiSession[], connected: boolean): string {
-  const total = (process.stdout.columns || 120)
-  const out: string[] = []
-  const ts = new Date().toLocaleTimeString()
-  out.push(`\x1b[1mSombraX Telegram — sessions\x1b[0m  (${sessions.length} connected)   ${ts}`)
-  out.push('')
+/** Compose the branch column with dirty/ahead/behind annotations. */
+function fmtBranch(s: TuiSession): string {
+  if (!s.branch) return '-'
+  let out = s.branch
+  if (s.dirty) out += '*'
+  if (s.hasUpstream && (s.ahead || s.behind)) {
+    const parts: string[] = []
+    if (s.ahead) parts.push(`↑${s.ahead}`)
+    if (s.behind) parts.push(`↓${s.behind}`)
+    out += ' ' + parts.join(' ')
+  }
+  return out
+}
 
-  if (!connected) {
-    out.push('\x1b[31mListener not running.\x1b[0m  Start it with /sombrax_telegram_channel start')
-  } else if (sessions.length === 0) {
-    out.push('\x1b[2mNo sessions connected.\x1b[0m')
-  } else {
-    // Column widths: SESSION + BRANCH fixed, FOLDER/WORKTREE share the rest.
-    const wSess = 12, wBranch = 18, wUp = 7
-    const rest = Math.max(40, total - wSess - wBranch - wUp - 5)
-    const wFolder = Math.ceil(rest * 0.55)
-    const wTree = rest - wFolder
-    const hdr =
-      'FOLDER'.padEnd(wFolder) + ' ' +
-      'SESSION'.padEnd(wSess) + ' ' +
-      'BRANCH'.padEnd(wBranch) + ' ' +
-      'WORKTREE'.padEnd(wTree) + ' ' +
-      'UP'.padEnd(wUp)
-    out.push('\x1b[1m' + hdr + '\x1b[0m')
-    out.push('\x1b[2m' + '─'.repeat(Math.min(total, hdr.length)) + '\x1b[0m')
-    for (const s of sessions) {
-      const sess = s.sessionId ? s.sessionId.slice(0, wSess) : s.id
-      out.push(
-        truncTail(s.cwd ?? '(unknown)', wFolder) + ' ' +
-        truncHead(sess, wSess) + ' ' +
-        truncHead(s.branch || '-', wBranch) + ' ' +
-        truncTail(s.worktree || '-', wTree) + ' ' +
-        fmtUptimeShort(s.uptimeMs).padEnd(wUp),
-      )
+type SortField = 'cwd' | 'branch' | 'uptime' | 'pending' | 'msgs'
+type View = 'main' | 'detail' | 'resume' | 'logs' | 'coverage'
+type InputMode =
+  | null
+  | { kind: 'filter'; value: string }
+  | { kind: 'confirm'; prompt: string; onYes: () => void }
+  | { kind: 'launchChat'; chatId: string; topics: string; cwd: string; value: string }
+  | { kind: 'launchTopic'; chatId: string; topics: string; cwd: string; value: string }
+  | { kind: 'launchCwd';   chatId: string; topics: string; cwd: string; value: string }
+  | { kind: 'resumeTopic'; sessionId: string; chatId: string; cwd: string; value: string }
+  | { kind: 'resumeChat';  sessionId: string; chatId: string; cwd: string; value: string }
+
+function sortSessions(list: TuiSession[], field: SortField, dir: 'asc' | 'desc'): TuiSession[] {
+  const cmp = (a: TuiSession, b: TuiSession): number => {
+    switch (field) {
+      case 'cwd':     return (a.cwd ?? '').localeCompare(b.cwd ?? '')
+      case 'branch':  return (a.branch ?? '').localeCompare(b.branch ?? '')
+      case 'uptime':  return a.uptimeMs - b.uptimeMs
+      case 'pending': return a.pending - b.pending
+      case 'msgs':    return a.messages - b.messages
     }
   }
-  out.push('')
-  out.push('\x1b[2mrefreshing every 2s · press q or Ctrl-C to quit\x1b[0m')
-  return out.join('\n')
+  const sorted = [...list].sort(cmp)
+  return dir === 'desc' ? sorted.reverse() : sorted
+}
+
+function filterSessions(list: TuiSession[], q: string): TuiSession[] {
+  if (!q) return list
+  const needle = q.toLowerCase()
+  return list.filter(s =>
+    (s.cwd ?? '').toLowerCase().includes(needle) ||
+    (s.branch ?? '').toLowerCase().includes(needle) ||
+    (s.chatId ?? '').includes(needle) ||
+    s.topics.toLowerCase().includes(needle) ||
+    s.id.includes(needle) ||
+    (s.sessionId ?? '').toLowerCase().includes(needle),
+  )
 }
 
 function runTuiClient(): Promise<void> {
   return new Promise(resolve => {
+    // --- State -----------------------------------------------------
     let connected = false
     let sessions: TuiSession[] = []
+    let status: TuiStatus | null = null
+    let savedSessions: SavedSession[] = []
+    let logs: string[] = []
+    let view: View = 'main'
+    let selIdx = 0
+    let permIdx = 0
+    let savedIdx = 0
+    let sortField: SortField = 'uptime'
+    let sortDir: 'asc' | 'desc' = 'desc'
+    let filter = ''
+    let inputMode: InputMode = null
+    let flash: { text: string; until: number } | null = null
+    let lastVisible: TuiSession[] = []  // visible after sort+filter; used by actions
+
     let buffer = ''
     let sock: Socket | null = null
     let pollTimer: ReturnType<typeof setInterval> | null = null
     let done = false
 
-    const draw = () => {
-      if (!done) process.stdout.write('\x1b[2J\x1b[H' + renderTui(sessions, connected) + '\n')
+    // --- Helpers ---------------------------------------------------
+    const send = (m: Record<string, unknown>) => { try { sock?.write(JSON.stringify(m) + '\n') } catch {} }
+    const flashOk = (t: string) => { flash = { text: t, until: Date.now() + 2500 }; draw() }
+    const flashErr = (t: string) => { flash = { text: '✗ ' + t, until: Date.now() + 3500 }; draw() }
+
+    const selected = (): TuiSession | null => {
+      if (!lastVisible.length) return null
+      if (selIdx < 0) selIdx = 0
+      if (selIdx >= lastVisible.length) selIdx = lastVisible.length - 1
+      return lastVisible[selIdx]
     }
 
+    const draw = () => { if (!done) process.stdout.write('\x1b[2J\x1b[H' + render() + '\n') }
+
+    // --- Render ----------------------------------------------------
+    const render = (): string => {
+      const cols = process.stdout.columns || 120
+      const rows = process.stdout.rows || 30
+      const out: string[] = []
+      const now = Date.now()
+      const flashTxt = flash && flash.until > now ? flash.text : ''
+
+      // Header (always shown)
+      const ts = new Date().toLocaleTimeString()
+      if (status) {
+        out.push(
+          `\x1b[1mSombraX Telegram\x1b[0m · ` +
+          `up ${fmtUptimeShort(status.daemonUptimeMs)} · ` +
+          `sessions ${status.clientsCount} · ` +
+          `in ${status.totalInbound} / del ${status.totalDelivered} / drop ${status.totalDropped} · ${ts}`,
+        )
+      } else {
+        out.push(`\x1b[1mSombraX Telegram\x1b[0m · ${ts}`)
+      }
+
+      if (!connected) {
+        out.push('')
+        out.push('\x1b[31mListener not running.\x1b[0m  Start it with /sombrax_telegram_channel start')
+        out.push('')
+        out.push('\x1b[2mpress q or Ctrl-C to quit · auto-reconnecting…\x1b[0m')
+        return out.join('\n')
+      }
+
+      // View-specific body
+      if (view === 'main') out.push(...renderMain(cols))
+      else if (view === 'detail') out.push(...renderDetail(cols, rows))
+      else if (view === 'resume') out.push(...renderResume(cols, rows))
+      else if (view === 'logs') out.push(...renderLogs(cols, rows))
+      else if (view === 'coverage') out.push(...renderCoverage(cols, rows))
+
+      // Footer: input prompt or help
+      out.push('')
+      if (inputMode) out.push(renderInput())
+      else out.push('\x1b[2m' + helpForView() + '\x1b[0m')
+      if (flashTxt) out.push('\x1b[33m' + flashTxt + '\x1b[0m')
+
+      return out.join('\n')
+    }
+
+    const helpForView = (): string => {
+      switch (view) {
+        case 'main':
+          return '↑↓ select · Enter/d detail · k kill · r restart · l launch · R resume · L logs · c coverage · / filter · s sort · S dir · q quit'
+        case 'detail':
+          return 'Esc/d back · ↑↓ select perm · a approve · D deny · k kill · r restart · q quit'
+        case 'resume':
+          return '↑↓ select · Enter resume · Esc back · q quit'
+        case 'logs':
+          return 'Esc/L back · q quit'
+        case 'coverage':
+          return 'Esc/c back · q quit'
+      }
+    }
+
+    const renderInput = (): string => {
+      if (!inputMode) return ''
+      switch (inputMode.kind) {
+        case 'filter':       return `\x1b[36mfilter:\x1b[0m ${inputMode.value}_   \x1b[2m(Enter=apply Esc=cancel)\x1b[0m`
+        case 'confirm':      return `\x1b[33m${inputMode.prompt}\x1b[0m  \x1b[2m(y/N)\x1b[0m`
+        case 'launchChat':   return `\x1b[36mlaunch chat_id:\x1b[0m ${inputMode.value}_   \x1b[2m(Enter=next Esc=cancel)\x1b[0m`
+        case 'launchTopic':  return `\x1b[36mlaunch topic:\x1b[0m ${inputMode.value}_   \x1b[2m(default 'all', Enter=next Esc=cancel)\x1b[0m`
+        case 'launchCwd':    return `\x1b[36mlaunch cwd:\x1b[0m ${inputMode.value}_   \x1b[2m(Enter=launch Esc=cancel)\x1b[0m`
+        case 'resumeChat':   return `\x1b[36mresume chat_id:\x1b[0m ${inputMode.value}_   \x1b[2m(Enter=next Esc=cancel)\x1b[0m`
+        case 'resumeTopic':  return `\x1b[36mresume topic:\x1b[0m ${inputMode.value}_   \x1b[2m(default 'all', Enter=resume Esc=cancel)\x1b[0m`
+      }
+    }
+
+    const renderMain = (cols: number): string[] => {
+      const out: string[] = []
+      out.push(
+        `\x1b[2mfilter:\x1b[0m "${filter}" · ` +
+        `\x1b[2msort:\x1b[0m ${sortField} ${sortDir === 'desc' ? '↓' : '↑'}`,
+      )
+      out.push('')
+
+      const visible = filterSessions(sortSessions(sessions, sortField, sortDir), filter)
+      lastVisible = visible
+      if (visible.length === 0) {
+        out.push('\x1b[2m' + (sessions.length ? 'No sessions match filter.' : 'No sessions connected.') + '\x1b[0m')
+        return out
+      }
+      if (selIdx >= visible.length) selIdx = visible.length - 1
+      if (selIdx < 0) selIdx = 0
+
+      const wSel = 2, wSess = 12, wBranch = 22, wMsg = 5, wPend = 5, wUp = 7
+      const fixed = wSel + wSess + wBranch + wMsg + wPend + wUp + 5
+      const rest = Math.max(40, cols - fixed)
+      const wFolder = Math.ceil(rest * 0.55)
+      const wTree = rest - wFolder
+      const hdr =
+        '  '.padEnd(wSel) +
+        'FOLDER'.padEnd(wFolder) + ' ' +
+        'SESSION'.padEnd(wSess) + ' ' +
+        'BRANCH'.padEnd(wBranch) + ' ' +
+        'WORKTREE'.padEnd(wTree) + ' ' +
+        'MSG'.padStart(wMsg) + ' ' +
+        'PEND'.padStart(wPend) + ' ' +
+        'UP'.padEnd(wUp)
+      out.push('\x1b[1m' + hdr + '\x1b[0m')
+      out.push('\x1b[2m' + '─'.repeat(Math.min(cols, hdr.length)) + '\x1b[0m')
+
+      visible.forEach((s, i) => {
+        const sess = s.sessionId ? s.sessionId.slice(0, wSess) : s.id
+        const arrow = i === selIdx ? '▶ ' : '  '
+        const line =
+          arrow +
+          truncTail(s.cwd ?? '(unknown)', wFolder) + ' ' +
+          truncHead(sess, wSess) + ' ' +
+          truncHead(fmtBranch(s), wBranch) + ' ' +
+          truncTail(s.worktree || '-', wTree) + ' ' +
+          String(s.messages).padStart(wMsg) + ' ' +
+          (s.pending ? `\x1b[33m${String(s.pending).padStart(wPend)}\x1b[0m` : String(s.pending).padStart(wPend)) + ' ' +
+          fmtUptimeShort(s.uptimeMs).padEnd(wUp)
+        out.push(i === selIdx ? '\x1b[7m' + line + '\x1b[0m' : line)
+      })
+      return out
+    }
+
+    const renderDetail = (cols: number, rows: number): string[] => {
+      const out: string[] = []
+      const s = selected()
+      if (!s) { out.push('\x1b[2mNo session selected.\x1b[0m'); return out }
+      out.push('')
+      out.push(`\x1b[1mSession\x1b[0m ${s.id}` + (s.sessionId ? `   \x1b[2m(claude ${s.sessionId})\x1b[0m` : ''))
+      out.push('')
+      out.push(`  cwd:      ${s.cwd ?? '(unknown)'}`)
+      out.push(`  chat:     ${s.chatId ?? '(unknown)'}`)
+      out.push(`  topics:   ${s.topics}`)
+      out.push(`  branch:   ${fmtBranch(s) || '-'}`)
+      out.push(`  worktree: ${s.worktree || '-'}`)
+      out.push(`  uptime:   ${fmtUptimeShort(s.uptimeMs)}`)
+      out.push(`  messages: ${s.messages}`)
+      out.push(`  pending:  ${s.pending}`)
+      out.push('')
+      out.push('\x1b[1mPending permissions\x1b[0m')
+      if (!s.pendingPerms.length) {
+        out.push('  \x1b[2m(none)\x1b[0m')
+      } else {
+        if (permIdx >= s.pendingPerms.length) permIdx = s.pendingPerms.length - 1
+        if (permIdx < 0) permIdx = 0
+        s.pendingPerms.forEach((p, i) => {
+          const arrow = i === permIdx ? '▶ ' : '  '
+          const head = `${arrow}[${i + 1}] ${p.tool_name.padEnd(10)}  ${fmtUptimeShort(p.ageMs).padStart(5)}  ${truncHead(p.description, Math.max(20, cols - 30))}`
+          out.push(i === permIdx ? '\x1b[7m' + head + '\x1b[0m' : head)
+          if (i === permIdx && p.input_preview) {
+            const preview = p.input_preview.split('\n').slice(0, Math.min(8, rows - out.length - 6))
+            for (const ln of preview) out.push('     \x1b[2m' + truncHead(ln, cols - 6) + '\x1b[0m')
+          }
+        })
+      }
+      return out
+    }
+
+    const renderResume = (cols: number, rows: number): string[] => {
+      const out: string[] = []
+      out.push('')
+      out.push('\x1b[1mSaved Claude sessions\x1b[0m  ' + (savedSessions.length ? `(${savedSessions.length})` : ''))
+      out.push('')
+      if (!savedSessions.length) {
+        out.push('  \x1b[2m(no saved sessions found in ~/.claude/sessions)\x1b[0m')
+        return out
+      }
+      if (savedIdx >= savedSessions.length) savedIdx = savedSessions.length - 1
+      if (savedIdx < 0) savedIdx = 0
+      const wId = 12, wPid = 8
+      const wCwd = Math.max(30, cols - wId - wPid - 8)
+      const hdr = '  ' + 'SESSION'.padEnd(wId) + ' ' + 'PID'.padEnd(wPid) + ' ' + 'CWD'.padEnd(wCwd)
+      out.push('\x1b[1m' + hdr + '\x1b[0m')
+      out.push('\x1b[2m' + '─'.repeat(Math.min(cols, hdr.length)) + '\x1b[0m')
+      const limit = Math.max(5, rows - out.length - 4)
+      savedSessions.slice(0, limit).forEach((s, i) => {
+        const arrow = i === savedIdx ? '▶ ' : '  '
+        const line = arrow + truncHead(s.sessionId, wId) + ' ' + truncHead(s.pid, wPid) + ' ' + truncTail(s.cwd, wCwd)
+        out.push(i === savedIdx ? '\x1b[7m' + line + '\x1b[0m' : line)
+      })
+      return out
+    }
+
+    const renderLogs = (cols: number, rows: number): string[] => {
+      const out: string[] = []
+      out.push('\x1b[1mserver.log\x1b[0m  \x1b[2m(last ' + logs.length + ' lines)\x1b[0m')
+      out.push('')
+      const limit = Math.max(5, rows - 6)
+      const slice = logs.slice(-limit)
+      if (!slice.length) out.push('  \x1b[2m(no log lines)\x1b[0m')
+      for (const ln of slice) out.push(truncHead(ln, cols))
+      return out
+    }
+
+    const renderCoverage = (cols: number, rows: number): string[] => {
+      const out: string[] = []
+      out.push('\x1b[1mTopic coverage\x1b[0m')
+      out.push('')
+      // Group sessions by chat
+      const byChat = new Map<string, TuiSession[]>()
+      for (const s of sessions) {
+        const k = s.chatId ?? '(unknown)'
+        if (!byChat.has(k)) byChat.set(k, [])
+        byChat.get(k)!.push(s)
+      }
+      if (!byChat.size) out.push('  \x1b[2m(no sessions)\x1b[0m')
+      for (const [chatId, list] of byChat) {
+        out.push(`  \x1b[1m${chatId}\x1b[0m`)
+        // collect topic -> session ids
+        const topicMap = new Map<string, string[]>()
+        for (const s of list) {
+          const key = s.topics
+          if (!topicMap.has(key)) topicMap.set(key, [])
+          topicMap.get(key)!.push(s.id + (s.branch ? ` \x1b[2m(${s.branch})\x1b[0m` : ''))
+        }
+        for (const [topics, ids] of topicMap) {
+          const marker = ids.length > 1 ? '\x1b[31m⚠ overlap\x1b[0m ' : ''
+          out.push(`    ${topics.padEnd(14)}  ${marker}${ids.join(', ')}`)
+        }
+      }
+      out.push('')
+      out.push('\x1b[1mRecent drops\x1b[0m')
+      const drops = status?.recentDrops ?? []
+      if (!drops.length) out.push('  \x1b[2m(none)\x1b[0m')
+      const limit = Math.max(3, rows - out.length - 5)
+      for (const d of drops.slice(-limit).reverse()) {
+        const t = new Date(d.ts).toLocaleTimeString()
+        out.push(`  ${t}  ${d.chatId}  topic=${d.threadId ?? '∅'}`)
+      }
+      return out
+    }
+
+    // --- Key handling ----------------------------------------------
+    const onKey = (raw: string) => {
+      // Quit shortcuts work in any mode/view (except eating chars inside text input)
+      if (!inputMode && (raw === 'q' || raw === '\x03')) return quit()
+      if (raw === '\x03') return quit()  // Ctrl-C always
+
+      if (inputMode) return onKeyInput(raw)
+
+      // View-specific
+      if (view === 'main') return onKeyMain(raw)
+      if (view === 'detail') return onKeyDetail(raw)
+      if (view === 'resume') return onKeyResume(raw)
+      if (view === 'logs' || view === 'coverage') {
+        if (raw === '\x1b' || raw === 'L' || raw === 'c') { view = 'main'; draw() }
+        return
+      }
+    }
+
+    const onKeyInput = (raw: string) => {
+      if (!inputMode) return
+      const k = inputMode.kind
+
+      // Confirm prompts use y/n
+      if (k === 'confirm') {
+        if (raw === 'y' || raw === 'Y' || raw === '\r' || raw === '\n') {
+          const fn = inputMode.onYes; inputMode = null; fn(); draw()
+        } else if (raw === 'n' || raw === 'N' || raw === '\x1b') {
+          inputMode = null; draw()
+        }
+        return
+      }
+
+      // Text-input prompts
+      if (raw === '\x1b') { inputMode = null; draw(); return }
+      if (raw === '\r' || raw === '\n') return submitInput()
+      if (raw === '\x7f' || raw === '\b') {
+        inputMode = { ...inputMode, value: inputMode.value.slice(0, -1) } as InputMode
+        draw(); return
+      }
+      // Append printable characters (ignore other control bytes)
+      if (raw.length === 1 && raw >= ' ' && raw !== '\x7f') {
+        inputMode = { ...inputMode, value: inputMode.value + raw } as InputMode
+        draw()
+      } else if (raw.length > 1 && raw.charCodeAt(0) >= 0x20) {
+        // Paste / multi-byte text input
+        inputMode = { ...inputMode, value: inputMode.value + raw.replace(/[\r\n]/g, '') } as InputMode
+        draw()
+      }
+    }
+
+    const submitInput = () => {
+      if (!inputMode) return
+      const m = inputMode
+      if (m.kind === 'filter') {
+        filter = m.value
+        inputMode = null
+        selIdx = 0
+        draw()
+        return
+      }
+      if (m.kind === 'launchChat') {
+        const next = m.value || m.chatId
+        inputMode = { kind: 'launchTopic', chatId: next, topics: m.topics, cwd: m.cwd, value: m.topics }
+        draw(); return
+      }
+      if (m.kind === 'launchTopic') {
+        const next = m.value || m.topics || 'all'
+        inputMode = { kind: 'launchCwd', chatId: m.chatId, topics: next, cwd: m.cwd, value: m.cwd }
+        draw(); return
+      }
+      if (m.kind === 'launchCwd') {
+        const cwd = m.value || m.cwd
+        if (!m.chatId || !cwd) { flashErr('launch needs chat_id and cwd'); inputMode = null; draw(); return }
+        send({ type: 'launch_session', chatId: m.chatId, topics: m.topics, cwd })
+        flashOk(`launched chat=${m.chatId} topic=${m.topics}`)
+        inputMode = null; draw(); return
+      }
+      if (m.kind === 'resumeChat') {
+        const next = m.value || m.chatId
+        if (!next) { flashErr('resume needs chat_id'); return }
+        inputMode = { kind: 'resumeTopic', sessionId: m.sessionId, chatId: next, cwd: m.cwd, value: 'all' }
+        draw(); return
+      }
+      if (m.kind === 'resumeTopic') {
+        const topic = m.value || 'all'
+        send({ type: 'resume_session', sessionId: m.sessionId, chatId: m.chatId, topic, cwd: m.cwd })
+        flashOk(`resumed ${m.sessionId.slice(0, 8)} chat=${m.chatId} topic=${topic}`)
+        inputMode = null
+        view = 'main'
+        draw(); return
+      }
+    }
+
+    const onKeyMain = (raw: string) => {
+      if (raw === '\x1b[A') { selIdx = Math.max(0, selIdx - 1); draw(); return }      // ↑
+      if (raw === '\x1b[B') { selIdx = selIdx + 1; draw(); return }                    // ↓
+      if (raw === '\r' || raw === '\n' || raw === 'd') { view = 'detail'; permIdx = 0; draw(); return }
+      if (raw === '/') { inputMode = { kind: 'filter', value: filter }; draw(); return }
+      if (raw === '\x1b') { filter = ''; draw(); return }
+      if (raw === 's') {
+        const order: SortField[] = ['cwd', 'branch', 'uptime', 'pending', 'msgs']
+        sortField = order[(order.indexOf(sortField) + 1) % order.length]
+        draw(); return
+      }
+      if (raw === 'S') { sortDir = sortDir === 'asc' ? 'desc' : 'asc'; draw(); return }
+      if (raw === 'k') {
+        const s = selected(); if (!s) return
+        inputMode = { kind: 'confirm', prompt: `Kill session ${s.id}?`, onYes: () => {
+          send({ type: 'kill_session', id: s.id }); flashOk(`kill sent for ${s.id}`)
+        }}; draw(); return
+      }
+      if (raw === 'r') {
+        const s = selected(); if (!s) return
+        inputMode = { kind: 'confirm', prompt: `Restart session ${s.id}?`, onYes: () => {
+          send({ type: 'restart_session', id: s.id }); flashOk(`restart sent for ${s.id}`)
+        }}; draw(); return
+      }
+      if (raw === 'l') {
+        const s = selected()
+        const chatDefault = s?.chatId ?? sessions.find(x => x.chatId)?.chatId ?? ''
+        const cwdDefault = s?.cwd ?? sessions.find(x => x.cwd)?.cwd ?? process.cwd()
+        const topicDefault = s ? s.topics.replace(/[\[\]"]/g, '') : 'all'
+        inputMode = { kind: 'launchChat', chatId: chatDefault, topics: topicDefault, cwd: cwdDefault, value: chatDefault }
+        draw(); return
+      }
+      if (raw === 'R') {
+        send({ type: 'list_saved_sessions' })
+        view = 'resume'; savedIdx = 0
+        draw(); return
+      }
+      if (raw === 'L') {
+        send({ type: 'tail_logs', lines: 100 })
+        view = 'logs'
+        draw(); return
+      }
+      if (raw === 'c') { view = 'coverage'; draw(); return }
+    }
+
+    const onKeyDetail = (raw: string) => {
+      if (raw === '\x1b' || raw === 'd') { view = 'main'; draw(); return }
+      const s = selected()
+      if (!s) return
+      if (raw === '\x1b[A') { permIdx = Math.max(0, permIdx - 1); draw(); return }
+      if (raw === '\x1b[B') { permIdx = permIdx + 1; draw(); return }
+      if (raw === 'a' || raw === 'D') {
+        const p = s.pendingPerms[permIdx]
+        if (!p) { flashErr('no pending permission selected'); return }
+        const behavior = raw === 'a' ? 'allow' : 'deny'
+        send({ type: 'permission_respond', request_id: p.request_id, behavior })
+        flashOk(`${behavior} sent for ${p.tool_name}`)
+        return
+      }
+      if (raw === 'k') {
+        inputMode = { kind: 'confirm', prompt: `Kill session ${s.id}?`, onYes: () => {
+          send({ type: 'kill_session', id: s.id }); flashOk(`kill sent for ${s.id}`); view = 'main'
+        }}; draw(); return
+      }
+      if (raw === 'r') {
+        inputMode = { kind: 'confirm', prompt: `Restart session ${s.id}?`, onYes: () => {
+          send({ type: 'restart_session', id: s.id }); flashOk(`restart sent for ${s.id}`)
+        }}; draw(); return
+      }
+    }
+
+    const onKeyResume = (raw: string) => {
+      if (raw === '\x1b') { view = 'main'; draw(); return }
+      if (raw === '\x1b[A') { savedIdx = Math.max(0, savedIdx - 1); draw(); return }
+      if (raw === '\x1b[B') { savedIdx = savedIdx + 1; draw(); return }
+      if (raw === '\r' || raw === '\n') {
+        const saved = savedSessions[savedIdx]
+        if (!saved) { flashErr('no saved session selected'); return }
+        const cur = selected()
+        const chatDefault = cur?.chatId ?? sessions.find(s => s.chatId)?.chatId ?? ''
+        inputMode = { kind: 'resumeChat', sessionId: saved.sessionId, chatId: chatDefault, cwd: saved.cwd, value: chatDefault }
+        draw(); return
+      }
+    }
+
+    // --- Lifecycle -------------------------------------------------
     const quit = () => {
       if (done) return
       done = true
@@ -172,19 +649,19 @@ function runTuiClient(): Promise<void> {
       resolve()
     }
 
-    if (process.stdin.isTTY) {
-      try { process.stdin.setRawMode(true) } catch {}
-      process.stdin.resume()
-      process.stdin.on('data', d => {
-        const k = d.toString()
-        if (k === 'q' || k === '\x03' /* Ctrl-C */) quit()
-      })
-    }
+    // Raw mode lets us read keypresses (arrows, single chars) without
+    // requiring Enter; skip when stdin isn't a TTY (piped input still
+    // works for scripted testing, just one keystroke per chunk).
+    try { if (process.stdin.isTTY) process.stdin.setRawMode(true) } catch {}
+    process.stdin.resume()
+    process.stdin.on('data', (d: any) => onKey(d.toString()))
     process.on('SIGINT', quit)
     process.on('SIGTERM', quit)
 
-    // (Re)connect to the listener. Retries every 2s so the dashboard
-    // recovers if the listener is restarted while the TUI is open.
+    // Periodic redraw so flash messages clear and uptime updates between
+    // server polls.
+    setInterval(() => { if (!done) draw() }, 1000).unref()
+
     const connectOnce = () => {
       if (done) return
       buffer = ''
@@ -193,7 +670,7 @@ function runTuiClient(): Promise<void> {
 
       s.on('connect', () => {
         connected = true
-        const ask = () => { try { s.write(JSON.stringify({ type: 'list_sessions' }) + '\n') } catch {} }
+        const ask = () => send({ type: 'list_sessions' })
         ask()
         if (pollTimer) clearInterval(pollTimer)
         pollTimer = setInterval(ask, 2000)
@@ -208,10 +685,21 @@ function runTuiClient(): Promise<void> {
           buffer = buffer.slice(nl + 1)
           if (!line) continue
           try {
-            const msg = JSON.parse(line)
-            if (msg.type === 'sessions') {
-              sessions = msg.sessions as TuiSession[]
+            const m = JSON.parse(line)
+            if (m.type === 'sessions') {
+              sessions = m.sessions as TuiSession[]
+              status = m.status as TuiStatus
               draw()
+            } else if (m.type === 'saved_sessions') {
+              savedSessions = m.sessions as SavedSession[]
+              draw()
+            } else if (m.type === 'logs') {
+              logs = m.lines as string[]
+              draw()
+            } else if (m.type === 'action_ok') {
+              // optimistic flash already shown; nothing to do
+            } else if (m.type === 'action_err') {
+              flashErr(`${m.action}: ${m.error}`)
             }
           } catch {}
         }
@@ -459,12 +947,23 @@ const lastKnownCwd = new Map<string, string>()  // chatId -> cwd
 /*  Stats tracking                                                     */
 /* ------------------------------------------------------------------ */
 
+interface DropRecord { chatId: string; threadId: number | null; ts: number }
+const RECENT_DROPS_CAP = 100
+
 const stats = {
   startedAt: Date.now(),
   totalInbound: 0,
   totalDelivered: 0,
   totalDropped: 0,
   byChat: new Map<string, { inbound: number; delivered: number }>(),
+  recentDrops: [] as DropRecord[],
+}
+
+function recordDrop(chatId: string | undefined, threadId: number | null): void {
+  stats.recentDrops.push({ chatId: chatId ?? '', threadId, ts: Date.now() })
+  if (stats.recentDrops.length > RECENT_DROPS_CAP) {
+    stats.recentDrops.splice(0, stats.recentDrops.length - RECENT_DROPS_CAP)
+  }
 }
 
 function removeClient(client: ClientConn): void {
@@ -510,6 +1009,7 @@ function dispatchToClients(msg: Record<string, string | undefined>): boolean {
     chatStats.delivered++
   } else {
     stats.totalDropped++
+    recordDrop(chatId, threadId)
   }
   return delivered
 }
@@ -519,11 +1019,13 @@ function dispatchToClients(msg: Record<string, string | undefined>): boolean {
 /* ------------------------------------------------------------------ */
 
 // Stores permission details for "See more" expansion, plus which client owns it.
+// createdAt lets the TUI surface request age.
 const permissionDetails = new Map<string, {
   tool_name: string
   description: string
   input_preview: string
   clientId: string
+  createdAt: number
 }>()
 
 function handlePermissionRequest(client: ClientConn, msg: {
@@ -534,7 +1036,7 @@ function handlePermissionRequest(client: ClientConn, msg: {
 }): void {
   const { request_id, tool_name, description, input_preview } = msg
   client.pendingPermissions.add(request_id)
-  permissionDetails.set(request_id, { tool_name, description, input_preview, clientId: client.id })
+  permissionDetails.set(request_id, { tool_name, description, input_preview, clientId: client.id, createdAt: Date.now() })
 
   const access = loadAccess()
   const text = `🔐 Permission: ${tool_name}`
@@ -629,24 +1131,143 @@ function handleClientMessage(client: ClientConn, msg: Record<string, unknown>): 
       // Used by the --tui dashboard. The requester is just a socket
       // connection (it never sends `register`), so it is not in clients[].
       const claude = listClaudeSessions()
+      const now = Date.now()
       const payload = clients.map(c => {
         const g = gitInfoFor(c.cwd)
         // Best-effort match of a Claude sessionId by working directory.
         const match = c.cwd ? claude.find(s => s.cwd === c.cwd) : undefined
+        // Resolve pending-permission details for the inline approval view.
+        const pendingPerms: Array<{
+          request_id: string; tool_name: string; description: string; input_preview: string; ageMs: number
+        }> = []
+        for (const rid of c.pendingPermissions) {
+          const d = permissionDetails.get(rid)
+          if (d) pendingPerms.push({
+            request_id: rid,
+            tool_name: d.tool_name,
+            description: d.description,
+            input_preview: d.input_preview,
+            ageMs: now - d.createdAt,
+          })
+        }
         return {
           id: c.id,
           sessionId: match?.sessionId ?? null,
           cwd: c.cwd,
           branch: g.branch,
           worktree: g.worktree,
+          dirty: g.dirty,
+          ahead: g.ahead,
+          behind: g.behind,
+          hasUpstream: g.hasUpstream,
           topics: JSON.stringify(c.topics),
           chatId: c.chatId,
-          uptimeMs: Date.now() - c.connectedAt,
+          uptimeMs: now - c.connectedAt,
           messages: c.messagesDelivered,
           pending: c.pendingPermissions.size,
+          pendingPerms,
         }
       })
-      sendToClient(client, { type: 'sessions', sessions: payload })
+      const status = {
+        daemonStartedAt: stats.startedAt,
+        daemonUptimeMs: now - stats.startedAt,
+        totalInbound: stats.totalInbound,
+        totalDelivered: stats.totalDelivered,
+        totalDropped: stats.totalDropped,
+        recentDrops: stats.recentDrops.slice(-25),
+        socketPath: SOCKET_PATH,
+        clientsCount: clients.length,
+      }
+      sendToClient(client, { type: 'sessions', sessions: payload, status })
+      break
+    }
+    case 'kill_session': {
+      if (client.chatId !== null) break  // only admin (non-registered) sockets
+      const id = String(msg.id ?? '')
+      const target = clients.find(c => c.id === id)
+      if (!target) { sendToClient(client, { type: 'action_err', action: 'kill', id, error: 'not found' }); break }
+      killSession(target, 'killed via TUI')
+      sendToClient(client, { type: 'action_ok', action: 'kill', id })
+      break
+    }
+    case 'restart_session': {
+      if (client.chatId !== null) break
+      const id = String(msg.id ?? '')
+      const target = clients.find(c => c.id === id)
+      if (!target) { sendToClient(client, { type: 'action_err', action: 'restart', id, error: 'not found' }); break }
+      const chatIdR = target.chatId
+      const cwdR = target.cwd ?? (chatIdR ? lastKnownCwd.get(chatIdR) ?? '' : '')
+      const topicsR = target.topics === 'all' ? 'all' : (target.topics as number[]).join(',')
+      if (!chatIdR || !cwdR) {
+        sendToClient(client, { type: 'action_err', action: 'restart', id, error: 'missing chat/cwd' })
+        break
+      }
+      killSession(target, 'restarted via TUI')
+      setTimeout(() => spawnClaudeSession(chatIdR, topicsR, cwdR), 500)
+      sendToClient(client, { type: 'action_ok', action: 'restart', id })
+      break
+    }
+    case 'launch_session': {
+      if (client.chatId !== null) break
+      const chatIdL = String(msg.chatId ?? '')
+      const topicsL = String(msg.topics ?? 'all')
+      const cwdL = String(msg.cwd ?? '')
+      if (!chatIdL || !cwdL) {
+        sendToClient(client, { type: 'action_err', action: 'launch', error: 'missing chatId/cwd' })
+        break
+      }
+      spawnClaudeSession(chatIdL, topicsL, cwdL)
+      sendToClient(client, { type: 'action_ok', action: 'launch' })
+      break
+    }
+    case 'list_saved_sessions': {
+      if (client.chatId !== null) break
+      sendToClient(client, { type: 'saved_sessions', sessions: listClaudeSessions() })
+      break
+    }
+    case 'resume_session': {
+      if (client.chatId !== null) break
+      const sid = String(msg.sessionId ?? '')
+      const chatIdR2 = String(msg.chatId ?? '')
+      const topicR = String(msg.topic ?? 'all')
+      const cwdR2 = String(msg.cwd ?? '')
+      if (!sid || !chatIdR2 || !cwdR2) {
+        sendToClient(client, { type: 'action_err', action: 'resume', error: 'missing sessionId/chatId/cwd' })
+        break
+      }
+      // Kick any existing session serving this chat+topic first.
+      for (const c of [...clients]) {
+        if (c.chatId !== chatIdR2) continue
+        const overlap = c.topics === 'all' || topicR === 'all'
+          || (c.topics as number[]).includes(Number(topicR))
+        if (overlap) killSession(c, 'replaced by resumed session')
+      }
+      setTimeout(() => spawnClaudeSession(chatIdR2, topicR, cwdR2, sid), 500)
+      sendToClient(client, { type: 'action_ok', action: 'resume' })
+      break
+    }
+    case 'permission_respond': {
+      if (client.chatId !== null) break
+      const rid = String(msg.request_id ?? '')
+      const behavior = String(msg.behavior ?? '')
+      if (!rid || !behavior) {
+        sendToClient(client, { type: 'action_err', action: 'permission_respond', error: 'missing request_id/behavior' })
+        break
+      }
+      routePermissionResponse(rid, behavior)
+      sendToClient(client, { type: 'action_ok', action: 'permission_respond' })
+      break
+    }
+    case 'tail_logs': {
+      if (client.chatId !== null) break
+      const n = Math.max(1, Math.min(500, Number(msg.lines) || 30))
+      const logFile = join(homedir(), '.claude', 'channels', 'telegram', 'server.log')
+      let logLines: string[] = []
+      try {
+        const content = readFileSync(logFile, 'utf8')
+        logLines = content.split('\n').filter(Boolean).slice(-n)
+      } catch {}
+      sendToClient(client, { type: 'logs', lines: logLines })
       break
     }
     case 'permission_request': {
@@ -826,14 +1447,25 @@ function spawnClaudeSession(chatId: string, topics: string, cwd: string, resumeI
   return proc
 }
 
+interface GitInfo {
+  branch: string
+  worktree: string
+  dirty: boolean
+  ahead: number
+  behind: number
+  hasUpstream: boolean
+}
+
 /**
- * Resolve the git branch and (linked) worktree path for a directory.
- * `worktree` is the worktree root only when `cwd` lives inside a linked
- * git worktree (its git dir is under .git/worktrees/...); for a normal
- * clone it is '' so the dashboard shows '-'.
+ * Resolve the git branch, (linked) worktree path, working-tree dirtiness,
+ * and upstream ahead/behind counts for a directory. `worktree` is the
+ * worktree root only when `cwd` lives inside a linked git worktree (its
+ * git dir is under .git/worktrees/...); for a normal clone it is '' so
+ * the dashboard shows '-'. All fields fail soft when `cwd` is not a repo.
  */
-function gitInfoFor(cwd: string | null): { branch: string; worktree: string } {
-  if (!cwd) return { branch: '', worktree: '' }
+function gitInfoFor(cwd: string | null): GitInfo {
+  const empty: GitInfo = { branch: '', worktree: '', dirty: false, ahead: 0, behind: 0, hasUpstream: false }
+  if (!cwd) return empty
   const git = (...args: string[]): string => {
     try {
       const r = spawnSync('git', ['-C', cwd, ...args], { encoding: 'utf8', timeout: 2000 })
@@ -842,7 +1474,7 @@ function gitInfoFor(cwd: string | null): { branch: string; worktree: string } {
     } catch { return '' }
   }
   let branch = git('rev-parse', '--abbrev-ref', 'HEAD')
-  if (!branch) return { branch: '', worktree: '' }  // not a git repo
+  if (!branch) return empty  // not a git repo
   if (branch === 'HEAD') {
     const sha = git('rev-parse', '--short', 'HEAD')
     branch = sha ? `(detached ${sha})` : '(detached)'
@@ -851,7 +1483,20 @@ function gitInfoFor(cwd: string | null): { branch: string; worktree: string } {
   const worktree = gitDir.includes('/worktrees/')
     ? git('rev-parse', '--show-toplevel')
     : ''
-  return { branch, worktree }
+  const dirty = git('status', '--porcelain').length > 0
+  // ahead/behind: `git rev-list --left-right --count @{upstream}...HEAD`
+  // emits "<behind>\t<ahead>". Fails (empty) if there is no upstream.
+  const ab = git('rev-list', '--left-right', '--count', '@{upstream}...HEAD')
+  let ahead = 0, behind = 0, hasUpstream = false
+  if (ab) {
+    const parts = ab.split(/\s+/)
+    if (parts.length === 2) {
+      behind = Number(parts[0]) || 0
+      ahead = Number(parts[1]) || 0
+      hasUpstream = true
+    }
+  }
+  return { branch, worktree, dirty, ahead, behind, hasUpstream }
 }
 
 type SessionInfo = { sessionId: string; cwd: string; name: string; pid: string }
