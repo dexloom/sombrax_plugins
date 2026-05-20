@@ -75,6 +75,16 @@ Show listener and session status.
    - Configured groups
 4. Report connected sessions if possible
 
+### `tui`
+Open a live terminal dashboard of running sessions.
+
+1. Requires the listener daemon to already be running (`start` first)
+2. Run in the foreground: `bun ${CLAUDE_PLUGIN_ROOT}/listener.ts --tui`
+3. The dashboard connects to the running listener over its Unix socket and
+   refreshes every 2s, showing per session: folder (cwd), session id,
+   git branch, and worktree (path if running in a linked git worktree, else `-`)
+4. Press `q` or Ctrl-C to quit. It auto-reconnects if the listener restarts.
+
 ### `topics`
 Help the user configure topic routing for Claude Code sessions.
 

@@ -8,7 +8,9 @@
  * in the same group simultaneously.
  *
  * Usage:
- *   bun listener.ts
+ *   bun listener.ts            # run the daemon
+ *   bun listener.ts --tui      # live dashboard of running sessions
+ *                              # (connects to an already-running daemon)
  *
  * Then start Claude Code sessions with topic routing:
  *   TELEGRAM_CHAT_ID="-1001234567890" TELEGRAM_TOPIC=123 claude
@@ -31,8 +33,8 @@ import {
 } from 'fs'
 import { homedir } from 'os'
 import { join } from 'path'
-import { createServer, type Socket } from 'net'
-import { spawn, type ChildProcess } from 'child_process'
+import { createServer, connect, type Socket } from 'net'
+import { spawn, spawnSync, type ChildProcess } from 'child_process'
 
 /* ------------------------------------------------------------------ */
 /*  State + config                                                     */
@@ -57,6 +59,177 @@ try {
 const TOKEN = process.env.TELEGRAM_BOT_TOKEN
 const STATIC = process.env.TELEGRAM_ACCESS_MODE === 'static'
 const DEBUG = !!process.env.TELEGRAM_DEBUG
+
+/* ------------------------------------------------------------------ */
+/*  --tui : live dashboard of running sessions                         */
+/* ------------------------------------------------------------------ */
+/*  Runs as a thin client: connects to an already-running listener     */
+/*  over the Unix socket, asks for a session dump every 2s, and        */
+/*  renders a table. It never binds the socket or polls Telegram, so   */
+/*  module execution is suspended here (top-level await) and the       */
+/*  daemon bootstrap below never runs in this mode.                    */
+
+interface TuiSession {
+  id: string
+  sessionId: string | null
+  cwd: string | null
+  branch: string
+  worktree: string
+  topics: string
+  chatId: string | null
+  uptimeMs: number
+  messages: number
+  pending: number
+}
+
+if (process.argv.includes('--tui')) {
+  await runTuiClient()
+  process.exit(0)
+}
+
+function fmtUptimeShort(ms: number): string {
+  const s = Math.floor(ms / 1000)
+  if (s < 60) return `${s}s`
+  const m = Math.floor(s / 60)
+  if (m < 60) return `${m}m`
+  const h = Math.floor(m / 60)
+  if (h < 24) return `${h}h${m % 60}m`
+  return `${Math.floor(h / 24)}d${h % 24}h`
+}
+
+/** Truncate keeping the tail (more informative for paths). */
+function truncTail(s: string, w: number): string {
+  if (s.length <= w) return s.padEnd(w)
+  return ('…' + s.slice(-(w - 1))).padEnd(w)
+}
+function truncHead(s: string, w: number): string {
+  if (s.length <= w) return s.padEnd(w)
+  return (s.slice(0, w - 1) + '…').padEnd(w)
+}
+
+function renderTui(sessions: TuiSession[], connected: boolean): string {
+  const total = (process.stdout.columns || 120)
+  const out: string[] = []
+  const ts = new Date().toLocaleTimeString()
+  out.push(`\x1b[1mSombraX Telegram — sessions\x1b[0m  (${sessions.length} connected)   ${ts}`)
+  out.push('')
+
+  if (!connected) {
+    out.push('\x1b[31mListener not running.\x1b[0m  Start it with /sombrax_telegram_channel start')
+  } else if (sessions.length === 0) {
+    out.push('\x1b[2mNo sessions connected.\x1b[0m')
+  } else {
+    // Column widths: SESSION + BRANCH fixed, FOLDER/WORKTREE share the rest.
+    const wSess = 12, wBranch = 18, wUp = 7
+    const rest = Math.max(40, total - wSess - wBranch - wUp - 5)
+    const wFolder = Math.ceil(rest * 0.55)
+    const wTree = rest - wFolder
+    const hdr =
+      'FOLDER'.padEnd(wFolder) + ' ' +
+      'SESSION'.padEnd(wSess) + ' ' +
+      'BRANCH'.padEnd(wBranch) + ' ' +
+      'WORKTREE'.padEnd(wTree) + ' ' +
+      'UP'.padEnd(wUp)
+    out.push('\x1b[1m' + hdr + '\x1b[0m')
+    out.push('\x1b[2m' + '─'.repeat(Math.min(total, hdr.length)) + '\x1b[0m')
+    for (const s of sessions) {
+      const sess = s.sessionId ? s.sessionId.slice(0, wSess) : s.id
+      out.push(
+        truncTail(s.cwd ?? '(unknown)', wFolder) + ' ' +
+        truncHead(sess, wSess) + ' ' +
+        truncHead(s.branch || '-', wBranch) + ' ' +
+        truncTail(s.worktree || '-', wTree) + ' ' +
+        fmtUptimeShort(s.uptimeMs).padEnd(wUp),
+      )
+    }
+  }
+  out.push('')
+  out.push('\x1b[2mrefreshing every 2s · press q or Ctrl-C to quit\x1b[0m')
+  return out.join('\n')
+}
+
+function runTuiClient(): Promise<void> {
+  return new Promise(resolve => {
+    let connected = false
+    let sessions: TuiSession[] = []
+    let buffer = ''
+    let sock: Socket | null = null
+    let pollTimer: ReturnType<typeof setInterval> | null = null
+    let done = false
+
+    const draw = () => {
+      if (!done) process.stdout.write('\x1b[2J\x1b[H' + renderTui(sessions, connected) + '\n')
+    }
+
+    const quit = () => {
+      if (done) return
+      done = true
+      if (pollTimer) clearInterval(pollTimer)
+      try { sock?.destroy() } catch {}
+      try { if (process.stdin.isTTY) process.stdin.setRawMode(false) } catch {}
+      process.stdin.pause()
+      process.stdout.write('\x1b[2J\x1b[H')
+      resolve()
+    }
+
+    if (process.stdin.isTTY) {
+      try { process.stdin.setRawMode(true) } catch {}
+      process.stdin.resume()
+      process.stdin.on('data', d => {
+        const k = d.toString()
+        if (k === 'q' || k === '\x03' /* Ctrl-C */) quit()
+      })
+    }
+    process.on('SIGINT', quit)
+    process.on('SIGTERM', quit)
+
+    // (Re)connect to the listener. Retries every 2s so the dashboard
+    // recovers if the listener is restarted while the TUI is open.
+    const connectOnce = () => {
+      if (done) return
+      buffer = ''
+      const s = connect(SOCKET_PATH)
+      sock = s
+
+      s.on('connect', () => {
+        connected = true
+        const ask = () => { try { s.write(JSON.stringify({ type: 'list_sessions' }) + '\n') } catch {} }
+        ask()
+        if (pollTimer) clearInterval(pollTimer)
+        pollTimer = setInterval(ask, 2000)
+        draw()
+      })
+
+      s.on('data', chunk => {
+        buffer += chunk.toString()
+        let nl: number
+        while ((nl = buffer.indexOf('\n')) !== -1) {
+          const line = buffer.slice(0, nl)
+          buffer = buffer.slice(nl + 1)
+          if (!line) continue
+          try {
+            const msg = JSON.parse(line)
+            if (msg.type === 'sessions') {
+              sessions = msg.sessions as TuiSession[]
+              draw()
+            }
+          } catch {}
+        }
+      })
+
+      s.on('error', () => {})
+      s.on('close', () => {
+        if (done) return
+        connected = false
+        if (pollTimer) { clearInterval(pollTimer); pollTimer = null }
+        draw()
+        setTimeout(connectOnce, 2000)
+      })
+    }
+
+    connectOnce()
+  })
+}
 
 if (!TOKEN) {
   process.stderr.write(
@@ -452,6 +625,30 @@ function handleClientMessage(client: ClientConn, msg: Record<string, unknown>): 
       sendToClient(client, { type: 'registered', id: client.id })
       break
     }
+    case 'list_sessions': {
+      // Used by the --tui dashboard. The requester is just a socket
+      // connection (it never sends `register`), so it is not in clients[].
+      const claude = listClaudeSessions()
+      const payload = clients.map(c => {
+        const g = gitInfoFor(c.cwd)
+        // Best-effort match of a Claude sessionId by working directory.
+        const match = c.cwd ? claude.find(s => s.cwd === c.cwd) : undefined
+        return {
+          id: c.id,
+          sessionId: match?.sessionId ?? null,
+          cwd: c.cwd,
+          branch: g.branch,
+          worktree: g.worktree,
+          topics: JSON.stringify(c.topics),
+          chatId: c.chatId,
+          uptimeMs: Date.now() - c.connectedAt,
+          messages: c.messagesDelivered,
+          pending: c.pendingPermissions.size,
+        }
+      })
+      sendToClient(client, { type: 'sessions', sessions: payload })
+      break
+    }
     case 'permission_request': {
       handlePermissionRequest(client, msg as {
         request_id: string
@@ -627,6 +824,34 @@ function spawnClaudeSession(chatId: string, topics: string, cwd: string, resumeI
   proc.unref()
   process.stderr.write(`telegram listener: opening Terminal window — chat=${chatId} topics=${topics} cwd=${cwd}${resumeId ? ` resume=${resumeId}` : ''}\n`)
   return proc
+}
+
+/**
+ * Resolve the git branch and (linked) worktree path for a directory.
+ * `worktree` is the worktree root only when `cwd` lives inside a linked
+ * git worktree (its git dir is under .git/worktrees/...); for a normal
+ * clone it is '' so the dashboard shows '-'.
+ */
+function gitInfoFor(cwd: string | null): { branch: string; worktree: string } {
+  if (!cwd) return { branch: '', worktree: '' }
+  const git = (...args: string[]): string => {
+    try {
+      const r = spawnSync('git', ['-C', cwd, ...args], { encoding: 'utf8', timeout: 2000 })
+      if (r.status !== 0) return ''
+      return (r.stdout ?? '').trim()
+    } catch { return '' }
+  }
+  let branch = git('rev-parse', '--abbrev-ref', 'HEAD')
+  if (!branch) return { branch: '', worktree: '' }  // not a git repo
+  if (branch === 'HEAD') {
+    const sha = git('rev-parse', '--short', 'HEAD')
+    branch = sha ? `(detached ${sha})` : '(detached)'
+  }
+  const gitDir = git('rev-parse', '--absolute-git-dir')
+  const worktree = gitDir.includes('/worktrees/')
+    ? git('rev-parse', '--show-toplevel')
+    : ''
+  return { branch, worktree }
 }
 
 type SessionInfo = { sessionId: string; cwd: string; name: string; pid: string }
