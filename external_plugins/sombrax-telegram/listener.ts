@@ -24,7 +24,7 @@
  *   TELEGRAM_ACCESS_MODE   — set to "static" for read-only access control
  */
 
-import { Bot, GrammyError, InlineKeyboard, type Context } from 'grammy'
+import { Bot, GrammyError, InlineKeyboard, InputFile, type Context } from 'grammy'
 import type { ReactionTypeEmoji } from 'grammy/types'
 import { randomBytes } from 'crypto'
 import {
@@ -32,7 +32,7 @@ import {
   renameSync, chmodSync, unlinkSync, existsSync,
 } from 'fs'
 import { homedir } from 'os'
-import { join } from 'path'
+import { join, extname } from 'path'
 import { createServer, connect, type Socket } from 'net'
 import { spawn, spawnSync, type ChildProcess } from 'child_process'
 
@@ -46,6 +46,12 @@ const APPROVED_DIR = join(STATE_DIR, 'approved')
 const ENV_FILE = join(STATE_DIR, '.env')
 const SOCKET_PATH = process.env.TELEGRAM_LISTENER_SOCKET ?? join(STATE_DIR, 'listener.sock')
 const INBOX_DIR = join(STATE_DIR, 'inbox')
+// Topic-name registry: { "<chat_id>": { "<name>": <thread_id> } }. The
+// listener owns this file in Phase 4 — clients used to maintain a copy
+// next to themselves (server.ts), but topic creation is now listener-
+// resolved at register time so name → thread mappings live with the
+// process that creates them.
+const TOPIC_NAMES_FILE = join(STATE_DIR, 'topic-names.json')
 
 // Load .env — same logic as server.ts
 try {
@@ -833,6 +839,60 @@ function resolveDefaultChat(): string | null {
 }
 
 /**
+ * Topic-name registry (chat_id → name → thread_id). Persisted to
+ * TOPIC_NAMES_FILE. Read on demand and rewritten atomically when
+ * creating a new topic. Mirrors what server.ts used to do, with the
+ * listener now as the single source of truth.
+ */
+type TopicNameMap = Record<string, Record<string, number>>
+
+function loadTopicNames(): TopicNameMap {
+  try {
+    const raw = readFileSync(TOPIC_NAMES_FILE, 'utf8')
+    const parsed = JSON.parse(raw) as unknown
+    if (parsed && typeof parsed === 'object') return parsed as TopicNameMap
+  } catch {}
+  return {}
+}
+
+function saveTopicNames(map: TopicNameMap): void {
+  try {
+    mkdirSync(STATE_DIR, { recursive: true, mode: 0o700 })
+    const tmp = TOPIC_NAMES_FILE + '.tmp'
+    writeFileSync(tmp, JSON.stringify(map, null, 2) + '\n', { mode: 0o600 })
+    renameSync(tmp, TOPIC_NAMES_FILE)
+  } catch (err) {
+    process.stderr.write(`telegram listener: saveTopicNames failed: ${err}\n`)
+  }
+}
+
+/**
+ * Resolve one topic spec (either a numeric thread id as a string, or a
+ * symbolic name) to a numeric thread id under the given chat. Creates
+ * the forum topic via Bot API on cache miss and persists the mapping.
+ * Returns null if creation fails (caller logs).
+ */
+async function resolveTopicForChat(chatId: string, spec: string): Promise<number | null> {
+  if (/^\d+$/.test(spec)) return Number(spec)
+  const map = loadTopicNames()
+  const chatMap = map[chatId] ?? {}
+  if (chatMap[spec] != null) return chatMap[spec]
+  // Cache miss — create the topic.
+  try {
+    const result = await bot.api.createForumTopic(Number(chatId), spec)
+    const id = result.message_thread_id
+    if (!map[chatId]) map[chatId] = {}
+    map[chatId][spec] = id
+    saveTopicNames(map)
+    process.stderr.write(`telegram listener: created forum topic "${spec}" → ${id} in chat ${chatId}\n`)
+    return id
+  } catch (err) {
+    process.stderr.write(`telegram listener: createForumTopic("${spec}", chat=${chatId}) failed: ${err}\n`)
+    return null
+  }
+}
+
+/**
  * Split a text into Telegram-safe chunks (4096 char hard cap). Listener
  * uses this for the bus-side mirror when a publish frame arrives without
  * pre-chunked text. Mirrors server.ts:chunk(); kept inline so the listener
@@ -1130,78 +1190,225 @@ function routePermissionResponse(request_id: string, behavior: string): void {
 /*  Client protocol handler                                            */
 /* ------------------------------------------------------------------ */
 
+/**
+ * Async portion of the register handler. Owns topic-name resolution
+ * (Phase 4 step 1) — non-numeric topic specs are looked up in the
+ * registry or created via bot.api.createForumTopic. The synchronous
+ * eviction logic runs only after numeric thread ids are known.
+ */
+async function applyRegister(client: ClientConn, msg: Record<string, unknown>): Promise<void> {
+  // chat_id is optional — listener owns the channel→chat mapping.
+  const providedChat = msg.chat_id as string | undefined
+  client.chatId = providedChat && providedChat.length > 0
+    ? providedChat
+    : resolveDefaultChat()
+  client.role = (msg.role as string) === 'observer' ? 'observer' : 'owner'
+  client.cwd = (msg.cwd as string) ?? null
+
+  // Parse raw topic specs into an array of strings (names or numerics)
+  // or 'all'. Accept legacy shapes ('all', number[], comma-string) plus
+  // the new 'channel'/'topics' field that may now contain names.
+  const rawTopics = msg.topics ?? msg.channel
+  let topicSpecs: string[] | 'all'
+  if (rawTopics === 'all' || rawTopics == null) {
+    topicSpecs = 'all'
+  } else if (Array.isArray(rawTopics)) {
+    topicSpecs = rawTopics.map(String)
+  } else {
+    topicSpecs = String(rawTopics).split(',').map(s => s.trim()).filter(Boolean)
+  }
+
+  // Resolve names → numeric thread ids. Requires a chat to create new
+  // topics in; if no chat resolves and any topic is non-numeric, fail
+  // the registration explicitly so the client gets a clear error.
+  if (topicSpecs === 'all') {
+    client.topics = 'all'
+  } else {
+    const numeric: number[] = []
+    const hasNames = topicSpecs.some(s => !/^\d+$/.test(s))
+    if (hasNames && !client.chatId) {
+      process.stderr.write(`telegram listener: client ${client.id} register failed — topic name resolution needs a chat (none resolved)\n`)
+      sendToClient(client, { type: 'shutdown', reason: 'topic name resolution requires a chat' })
+      setTimeout(() => removeClient(client), 1000)
+      return
+    }
+    for (const spec of topicSpecs) {
+      const id = /^\d+$/.test(spec)
+        ? Number(spec)
+        : await resolveTopicForChat(client.chatId!, spec)
+      if (id == null) {
+        sendToClient(client, { type: 'shutdown', reason: `failed to create or resolve topic "${spec}"` })
+        setTimeout(() => removeClient(client), 1000)
+        return
+      }
+      numeric.push(id)
+    }
+    client.topics = numeric
+  }
+
+  if (client.cwd && client.chatId) {
+    lastKnownCwd.set(client.chatId, client.cwd)
+  }
+
+  // Exclusive topic locking applies only between *owners*.
+  // - Observer ↔ owner: coexist (supervisor watches an owner's topic).
+  // - Observer ↔ observer: coexist (multiple watchers fine).
+  // - Owner ↔ owner: cooldown-protected eviction as before.
+  // dispatchToClients already delivers to every matching client, so
+  // both an owner and an observer on the same topic each get inbound.
+  const EVICT_COOLDOWN_MS = 60_000
+  if (client.role === 'owner') {
+    for (const other of [...clients]) {
+      if (other === client) continue
+      if (other.role !== 'owner') continue  // observers don't conflict
+      if (other.chatId !== client.chatId) continue
+      // Check topic overlap
+      let overlaps = false
+      if (client.topics === 'all' || other.topics === 'all') {
+        overlaps = true
+      } else {
+        for (const t of client.topics) {
+          if (other.topics.includes(t)) { overlaps = true; break }
+        }
+      }
+      if (overlaps) {
+        const age = Date.now() - other.connectedAt
+        if (age < EVICT_COOLDOWN_MS) {
+          process.stderr.write(`telegram listener: rejecting client ${client.id} — client ${other.id} is ${Math.round(age / 1000)}s old (cooldown ${EVICT_COOLDOWN_MS / 1000}s)\n`)
+          sendToClient(client, { type: 'shutdown', reason: 'topic already served by a recent session' })
+          setTimeout(() => removeClient(client), 1000)
+          return
+        }
+        process.stderr.write(`telegram listener: client ${other.id} evicted — topic conflict with ${client.id}\n`)
+        sendToClient(other, { type: 'shutdown', reason: 'replaced by new session' })
+        setTimeout(() => removeClient(other), 1000)
+      }
+    }
+  }
+
+  if (!clients.includes(client)) clients.push(client)
+  process.stderr.write(
+    `telegram listener: client ${client.id} registered — ` +
+    `chat=${client.chatId} topics=${JSON.stringify(client.topics)} ` +
+    `role=${client.role} (${clients.length} total)\n`,
+  )
+  // Echo back the resolved chat AND resolved numeric topics so the
+  // client can adopt them as effectiveChatId / effectiveTopics without
+  // having been told either by env.
+  sendToClient(client, {
+    type: 'registered',
+    id: client.id,
+    chat_id: client.chatId,
+    topics: client.topics,
+    role: client.role,
+  })
+}
+
+// Photo extensions that go via sendPhoto (inline preview); the rest go
+// via sendDocument. Mirrors server.ts:PHOTO_EXTS.
+const TG_PHOTO_EXTS = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp'])
+
+/**
+ * RPC dispatcher for `tg_request`. Each op is a Telegram-side operation
+ * whose result the client needs synchronously (a new message_id, a
+ * downloaded file path, …). Mirrors the bot.api.* calls that used to
+ * live in server.ts so the agent process can stay tokenless.
+ *
+ * Returns once a tg_response has been sent. Errors thrown here are
+ * caught by the case-arm and translated into ok:false responses.
+ */
+async function handleTgRequest(
+  client: ClientConn,
+  reqId: string,
+  op: string,
+  args: Record<string, unknown>,
+): Promise<void> {
+  const chatId = (args.chat_id as string | undefined) || client.chatId || ''
+  const reply = (payload: Record<string, unknown>) => {
+    sendToClient(client, { type: 'tg_response', req_id: reqId, ...payload })
+  }
+  if (!chatId) return reply({ ok: false, error: 'no chat_id resolved for client' })
+
+  switch (op) {
+    case 'send_file': {
+      const files = (args.files as string[] | undefined) ?? []
+      if (!files.length) return reply({ ok: false, error: 'no files' })
+      const messageThreadId = args.message_thread_id != null ? Number(args.message_thread_id) : undefined
+      const replyTo = args.reply_to != null ? Number(args.reply_to) : undefined
+      const access = loadAccess()
+      const replyMode = access.replyToMode ?? 'first'
+      const messageIds: number[] = []
+      for (let i = 0; i < files.length; i++) {
+        const f = files[i]
+        const ext = extname(f).toLowerCase()
+        const input = new InputFile(f)
+        const opts: Record<string, unknown> = {
+          ...(messageThreadId != null ? { message_thread_id: messageThreadId } : {}),
+          ...(replyTo != null && replyMode !== 'off' && (replyMode === 'all' || i === 0)
+            ? { reply_parameters: { message_id: replyTo } }
+            : {}),
+        }
+        const sent = TG_PHOTO_EXTS.has(ext)
+          ? await bot.api.sendPhoto(chatId, input, opts)
+          : await bot.api.sendDocument(chatId, input, opts)
+        messageIds.push(sent.message_id)
+      }
+      return reply({ ok: true, result: { message_ids: messageIds } })
+    }
+    case 'react': {
+      const messageId = Number(args.message_id)
+      const emoji = String(args.emoji ?? '')
+      if (!messageId || !emoji) return reply({ ok: false, error: 'message_id and emoji required' })
+      await bot.api.setMessageReaction(chatId, messageId, [
+        { type: 'emoji', emoji } as ReactionTypeEmoji,
+      ])
+      return reply({ ok: true })
+    }
+    case 'edit': {
+      const messageId = Number(args.message_id)
+      const text = String(args.text ?? '')
+      if (!messageId || !text) return reply({ ok: false, error: 'message_id and text required' })
+      const format = (args.format as string | undefined) ?? 'text'
+      const parseMode = format === 'markdownv2' ? 'MarkdownV2' as const : undefined
+      const edited = await bot.api.editMessageText(chatId, messageId, text, {
+        ...(parseMode ? { parse_mode: parseMode } : {}),
+      })
+      // Telegram returns `true | Message`; pull the id when present.
+      const editedId = typeof edited === 'object' && edited != null && 'message_id' in edited
+        ? (edited as { message_id: number }).message_id
+        : messageId
+      return reply({ ok: true, result: { message_id: editedId } })
+    }
+    case 'download': {
+      const fileId = String(args.file_id ?? '')
+      if (!fileId) return reply({ ok: false, error: 'file_id required' })
+      const file = await bot.api.getFile(fileId)
+      if (!file.file_path) return reply({ ok: false, error: 'no file_path from Telegram' })
+      const url = `https://api.telegram.org/file/bot${TOKEN}/${file.file_path}`
+      const res = await fetch(url)
+      if (!res.ok) return reply({ ok: false, error: `download failed: ${res.status} ${res.statusText}` })
+      const buf = new Uint8Array(await res.arrayBuffer())
+      const ext = file.file_path.includes('.') ? file.file_path.split('.').pop() : 'bin'
+      mkdirSync(INBOX_DIR, { recursive: true, mode: 0o700 })
+      const path = join(INBOX_DIR, `${Date.now()}-${file.file_unique_id}.${ext}`)
+      writeFileSync(path, buf)
+      return reply({ ok: true, result: { path } })
+    }
+    default:
+      return reply({ ok: false, error: `unknown op: ${op}` })
+  }
+}
+
 function handleClientMessage(client: ClientConn, msg: Record<string, unknown>): void {
   switch (msg.type) {
     case 'register': {
-      // chat_id is now optional — the listener owns the channel→chat
-      // mapping. When the client doesn't supply one, fall back to
-      // resolveDefaultChat() (env override > sole configured group).
-      const providedChat = msg.chat_id as string | undefined
-      client.chatId = providedChat && providedChat.length > 0
-        ? providedChat
-        : resolveDefaultChat()
-      const rawTopics = msg.topics
-      if (rawTopics === 'all') {
-        client.topics = 'all'
-      } else if (Array.isArray(rawTopics)) {
-        client.topics = rawTopics.map(Number)
-      } else if (typeof rawTopics === 'string') {
-        client.topics = rawTopics.split(',').map(s => Number(s.trim()))
-      } else {
-        client.topics = 'all'
-      }
-      client.role = (msg.role as string) === 'observer' ? 'observer' : 'owner'
-      client.cwd = (msg.cwd as string) ?? null
-      if (client.cwd && client.chatId) {
-        lastKnownCwd.set(client.chatId, client.cwd)
-      }
-
-      // Exclusive topic locking applies only between *owners*.
-      // - Observer ↔ owner: coexist (supervisor watches an owner's topic).
-      // - Observer ↔ observer: coexist (multiple watchers fine).
-      // - Owner ↔ owner: cooldown-protected eviction as before.
-      // dispatchToClients already delivers to every matching client, so
-      // both an owner and an observer on the same topic each get inbound.
-      const EVICT_COOLDOWN_MS = 60_000
-      if (client.role === 'owner') {
-        for (const other of [...clients]) {
-          if (other === client) continue
-          if (other.role !== 'owner') continue  // observers don't conflict
-          if (other.chatId !== client.chatId) continue
-          // Check topic overlap
-          let overlaps = false
-          if (client.topics === 'all' || other.topics === 'all') {
-            overlaps = true
-          } else {
-            for (const t of client.topics) {
-              if (other.topics.includes(t)) { overlaps = true; break }
-            }
-          }
-          if (overlaps) {
-            const age = Date.now() - other.connectedAt
-            if (age < EVICT_COOLDOWN_MS) {
-              // Existing owner is too fresh — reject the newcomer instead
-              process.stderr.write(`telegram listener: rejecting client ${client.id} — client ${other.id} is ${Math.round(age / 1000)}s old (cooldown ${EVICT_COOLDOWN_MS / 1000}s)\n`)
-              sendToClient(client, { type: 'shutdown', reason: 'topic already served by a recent session' })
-              setTimeout(() => removeClient(client), 1000)
-              return
-            }
-            process.stderr.write(`telegram listener: client ${other.id} evicted — topic conflict with ${client.id}\n`)
-            sendToClient(other, { type: 'shutdown', reason: 'replaced by new session' })
-            setTimeout(() => removeClient(other), 1000)
-          }
-        }
-      }
-
-      if (!clients.includes(client)) clients.push(client)
-      process.stderr.write(
-        `telegram listener: client ${client.id} registered — ` +
-        `chat=${client.chatId} topics=${JSON.stringify(client.topics)} ` +
-        `role=${client.role} (${clients.length} total)\n`,
-      )
-      // Echo back the resolved chat so the client can adopt it as
-      // `effectiveChatId` without ever being told the chat by env.
-      sendToClient(client, { type: 'registered', id: client.id, chat_id: client.chatId, role: client.role })
+      // Async — name resolution may create topics via Bot API. We never
+      // await from the sync caller; errors land in stderr / a shutdown
+      // frame to the client.
+      void applyRegister(client, msg).catch(err => {
+        process.stderr.write(`telegram listener: applyRegister error: ${err}\n`)
+        try { sendToClient(client, { type: 'shutdown', reason: 'register failed' }) } catch {}
+      })
       break
     }
     case 'publish': {
@@ -1277,6 +1484,29 @@ function handleClientMessage(client: ClientConn, msg: Record<string, unknown>): 
         ts: String(Date.now()),
       }
       dispatchToClients(payload, client.id)
+      break
+    }
+    case 'tg_request': {
+      // RPC: the client asks the listener to perform a Telegram-side
+      // operation that needs a reply (op = send_file | react | edit |
+      // download). The listener owns the bot token; the agent process
+      // remains tokenless. Gated to registered clients.
+      if (client.chatId === null) {
+        sendToClient(client, { type: 'tg_response', req_id: msg.req_id, ok: false, error: 'not registered' })
+        break
+      }
+      const reqId = String(msg.req_id ?? '')
+      const op = String(msg.op ?? '')
+      const rawArgs = msg.args
+      const args = (rawArgs && typeof rawArgs === 'object' ? rawArgs : {}) as Record<string, unknown>
+      if (!reqId) {
+        sendToClient(client, { type: 'tg_response', req_id: '', ok: false, error: 'missing req_id' })
+        break
+      }
+      void handleTgRequest(client, reqId, op, args).catch(err => {
+        const error = err instanceof Error ? err.message : String(err)
+        sendToClient(client, { type: 'tg_response', req_id: reqId, ok: false, error })
+      })
       break
     }
     case 'list_sessions': {

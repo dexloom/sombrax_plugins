@@ -71,15 +71,6 @@ try {
 
 const TOKEN = process.env.TELEGRAM_BOT_TOKEN
 const STATIC = process.env.TELEGRAM_ACCESS_MODE === 'static'
-
-if (!TOKEN) {
-  process.stderr.write(
-    `telegram channel: TELEGRAM_BOT_TOKEN required\n` +
-    `  set in ${ENV_FILE}\n` +
-    `  format: TELEGRAM_BOT_TOKEN=123456789:AAH...\n`,
-  )
-  process.exit(1)
-}
 const INBOX_DIR = join(STATE_DIR, 'inbox')
 
 // Client mode: connect to a running listener.ts instead of polling Telegram directly.
@@ -97,6 +88,19 @@ const LISTENER_SOCKET_PATH = process.env.TELEGRAM_LISTENER_SOCKET ?? join(STATE_
 const ROLE = (process.env.TELEGRAM_ROLE === 'observer' ? 'observer' : 'owner') as 'owner' | 'observer'
 const CLIENT_MODE = !!TOPIC_FILTER
 
+// TELEGRAM_BOT_TOKEN is only required in standalone mode (the agent
+// process itself talks to Telegram). In CLIENT_MODE the listener holds
+// the token and the agent process stays tokenless — Phase 4.
+if (!CLIENT_MODE && !TOKEN) {
+  process.stderr.write(
+    `telegram channel: TELEGRAM_BOT_TOKEN required in standalone mode\n` +
+    `  set in ${ENV_FILE}\n` +
+    `  format: TELEGRAM_BOT_TOKEN=123456789:AAH...\n` +
+    `  or set TELEGRAM_TOPIC=<channel> to run in client mode (token-free)\n`,
+  )
+  process.exit(1)
+}
+
 // In client mode, we hold a reference to the listener socket.
 // Permission requests go through the listener; tool calls use bot.api directly.
 let listenerSocket: Socket | null = null
@@ -109,6 +113,43 @@ let myClientId: string | null = null
 // needs to know the chat ahead of time — the listener tells it which one it
 // resolved. Falls back to LISTENER_CHAT_ID when explicitly set.
 let effectiveChatId: string | null = LISTENER_CHAT_ID ?? null
+
+// Numeric topic ids resolved by the listener (names → ids happen there
+// in Phase 4). Used by ownChannelId() to default `channel_send` targets.
+let effectiveTopics: number[] | 'all' | null = null
+
+/**
+ * Pending RPC table for `tg_request` / `tg_response`. Each tool call in
+ * CLIENT_MODE that needs a Telegram-side result (a new message_id, a
+ * downloaded path) registers here, writes the request to the socket,
+ * and waits for the matching response. The listener owns the bot token;
+ * we just relay typed payloads.
+ */
+type RpcEntry = { resolve: (v: any) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }
+const pendingRpc = new Map<string, RpcEntry>()
+
+function tgRequest(op: string, args: Record<string, unknown>, timeoutMs = 30_000): Promise<any> {
+  return new Promise((resolve, reject) => {
+    if (!listenerSocket) return reject(new Error('listener socket not connected'))
+    // Bun ≥ 1.0 has crypto.randomUUID at the global; fall back to a
+    // monotonic counter shape for older runtimes.
+    const reqId = (typeof crypto !== 'undefined' && crypto.randomUUID)
+      ? crypto.randomUUID()
+      : `r_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`
+    const timer = setTimeout(() => {
+      pendingRpc.delete(reqId)
+      reject(new Error(`tg_request(${op}) timed out after ${timeoutMs}ms`))
+    }, timeoutMs)
+    pendingRpc.set(reqId, { resolve, reject, timer })
+    try {
+      listenerSocket.write(JSON.stringify({ type: 'tg_request', req_id: reqId, op, args }) + '\n')
+    } catch (err) {
+      pendingRpc.delete(reqId)
+      clearTimeout(timer)
+      reject(err instanceof Error ? err : new Error(String(err)))
+    }
+  })
+}
 
 // Last-resort safety net — without these the process dies silently on any
 // unhandled promise rejection. With them it logs and keeps serving tools.
@@ -125,10 +166,16 @@ process.on('uncaughtException', err => {
 // Strict: no bare yes/no (conversational), no prefix/suffix chatter.
 const PERMISSION_REPLY_RE = /^\s*(y|yes|n|no)\s+([a-km-z]{5})\s*$/i
 
-const bot = new Bot(TOKEN)
-bot.catch((err) => {
-  logCritical(`Grammy bot error: ${err.message ?? err}`)
-})
+// Phase 4: in CLIENT_MODE the listener owns the bot token; the agent
+// process is tokenless and never constructs grammy's Bot. We still
+// import grammy for InlineKeyboard / InputFile in standalone paths.
+const TOKEN_AVAILABLE = !!TOKEN
+const bot: Bot | null = TOKEN_AVAILABLE ? new Bot(TOKEN!) : null
+if (bot) {
+  bot.catch((err) => {
+    logCritical(`Grammy bot error: ${err.message ?? err}`)
+  })
+}
 let botUsername = ''
 
 type PendingEntry = {
@@ -381,7 +428,10 @@ function checkApprovals(): void {
   }
 }
 
-if (!STATIC) setInterval(checkApprovals, 5000).unref()
+// checkApprovals is meaningful only in standalone mode — pairing/approvals
+// land here when the agent process polls Telegram directly. In CLIENT_MODE
+// the listener owns pairing; nothing in the agent process should DM users.
+if (!STATIC && !CLIENT_MODE) setInterval(checkApprovals, 5000).unref()
 
 // Telegram caps messages at 4096 chars. Split long replies, preferring
 // paragraph boundaries when chunkMode is 'newline'.
@@ -593,7 +643,13 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
 
 // Resolve the agent's own channel id (first topic) when one is set. Used
 // as the default for channel_send / reply when no target is specified.
+// Prefers the listener-resolved numeric ids; falls back to a numeric
+// TOPIC_FILTER when registration hasn't completed yet.
 function ownChannelId(): number | undefined {
+  if (effectiveTopics && effectiveTopics !== 'all') {
+    if (effectiveTopics.length === 1) return effectiveTopics[0]
+    return undefined
+  }
   if (!TOPIC_FILTER || TOPIC_FILTER === 'all') return undefined
   const parts = TOPIC_FILTER.split(',').map(s => s.trim())
   if (parts.length !== 1) return undefined
@@ -687,24 +743,36 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
           }
         }
 
-        // Files always go directly (listener-owned file upload is out of
-        // Phase 2 scope). Thread under reply_to if the access policy allows.
-        const fileReplyMode = loadAccess().replyToMode ?? 'first'
-        for (const f of files) {
-          const ext = extname(f).toLowerCase()
-          const input = new InputFile(f)
-          const opts = {
-            ...(message_thread_id != null ? { message_thread_id } : {}),
-            ...(reply_to != null && fileReplyMode !== 'off'
-              ? { reply_parameters: { message_id: reply_to } }
-              : {}),
-          }
-          if (PHOTO_EXTS.has(ext)) {
-            const sent = await bot.api.sendPhoto(chat_id, input, opts)
-            sentIds.push(sent.message_id)
+        // Files: in CLIENT_MODE go through the listener via tg_request
+        // (the listener has the token); in standalone mode go direct.
+        if (files.length) {
+          if (listenerSocket && myClientId) {
+            const res = await tgRequest('send_file', {
+              chat_id,
+              message_thread_id,
+              files,
+              reply_to,
+            })
+            for (const id of (res?.message_ids ?? []) as number[]) sentIds.push(id)
           } else {
-            const sent = await bot.api.sendDocument(chat_id, input, opts)
-            sentIds.push(sent.message_id)
+            const fileReplyMode = loadAccess().replyToMode ?? 'first'
+            for (const f of files) {
+              const ext = extname(f).toLowerCase()
+              const input = new InputFile(f)
+              const opts = {
+                ...(message_thread_id != null ? { message_thread_id } : {}),
+                ...(reply_to != null && fileReplyMode !== 'off'
+                  ? { reply_parameters: { message_id: reply_to } }
+                  : {}),
+              }
+              if (PHOTO_EXTS.has(ext)) {
+                const sent = await bot.api.sendPhoto(chat_id, input, opts)
+                sentIds.push(sent.message_id)
+              } else {
+                const sent = await bot.api.sendDocument(chat_id, input, opts)
+                sentIds.push(sent.message_id)
+              }
+            }
           }
         }
 
@@ -716,14 +784,30 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
         return { content: [{ type: 'text', text: result }] }
       }
       case 'react': {
-        assertAllowedChat(args.chat_id as string)
-        await bot.api.setMessageReaction(args.chat_id as string, Number(args.message_id), [
-          { type: 'emoji', emoji: args.emoji as ReactionTypeEmoji['emoji'] },
-        ])
+        const reactChatId = (args.chat_id as string | undefined) || effectiveChatId
+        if (!reactChatId) throw new Error('no chat_id available')
+        assertAllowedChat(reactChatId)
+        if (listenerSocket && myClientId) {
+          await tgRequest('react', {
+            chat_id: reactChatId,
+            message_id: Number(args.message_id),
+            emoji: args.emoji,
+          })
+        } else {
+          await bot.api.setMessageReaction(reactChatId, Number(args.message_id), [
+            { type: 'emoji', emoji: args.emoji as ReactionTypeEmoji['emoji'] },
+          ])
+        }
         return { content: [{ type: 'text', text: 'reacted' }] }
       }
       case 'download_attachment': {
         const file_id = args.file_id as string
+        if (listenerSocket && myClientId) {
+          const res = await tgRequest('download', { file_id })
+          const path = res?.path as string
+          if (!path) throw new Error('listener returned no path')
+          return { content: [{ type: 'text', text: path }] }
+        }
         const file = await bot.api.getFile(file_id)
         if (!file.file_path) throw new Error('Telegram returned no file_path — file may have expired')
         const url = `https://api.telegram.org/file/bot${TOKEN}/${file.file_path}`
@@ -741,16 +825,29 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
         return { content: [{ type: 'text', text: path }] }
       }
       case 'edit_message': {
-        assertAllowedChat(args.chat_id as string)
+        const editChatId = (args.chat_id as string | undefined) || effectiveChatId
+        if (!editChatId) throw new Error('no chat_id available')
+        assertAllowedChat(editChatId)
         const editFormat = (args.format as string | undefined) ?? 'text'
         const editParseMode = editFormat === 'markdownv2' ? 'MarkdownV2' as const : undefined
-        const edited = await bot.api.editMessageText(
-          args.chat_id as string,
-          Number(args.message_id),
-          args.text as string,
-          ...(editParseMode ? [{ parse_mode: editParseMode }] : []),
-        )
-        const id = typeof edited === 'object' ? edited.message_id : args.message_id
+        let id: number
+        if (listenerSocket && myClientId) {
+          const res = await tgRequest('edit', {
+            chat_id: editChatId,
+            message_id: Number(args.message_id),
+            text: args.text,
+            format: editFormat,
+          })
+          id = res?.message_id ?? Number(args.message_id)
+        } else {
+          const edited = await bot.api.editMessageText(
+            editChatId,
+            Number(args.message_id),
+            args.text as string,
+            ...(editParseMode ? [{ parse_mode: editParseMode }] : []),
+          )
+          id = typeof edited === 'object' ? edited.message_id : Number(args.message_id)
+        }
         return { content: [{ type: 'text', text: `edited (id: ${id})` }] }
       }
       default:
@@ -795,7 +892,8 @@ function shutdown(): void {
     // bot.stop() signals the poll loop to end; the current getUpdates request
     // may take up to its long-poll timeout to return. Force-exit after 2s.
     setTimeout(() => process.exit(0), 2000)
-    void Promise.resolve(bot.stop()).finally(() => process.exit(0))
+    if (bot) void Promise.resolve(bot.stop()).finally(() => process.exit(0))
+    else process.exit(0)
   }
 }
 process.stdin.on('end', shutdown)
@@ -813,15 +911,10 @@ if (CLIENT_MODE) {
   // TELEGRAM_CHAT_ID is optional under the channel-bus model: the listener
   // resolves the chat at registration time and hands it back. We only need
   // it up front if TELEGRAM_TOPIC contains a *name* (topic-name resolution
-  // happens before register).
-  const topicLooksNumeric = TOPIC_FILTER === 'all' || /^[\d,\s]+$/.test(TOPIC_FILTER!)
-  if (!LISTENER_CHAT_ID && !topicLooksNumeric) {
-    process.stderr.write(
-      'telegram channel: TELEGRAM_CHAT_ID required for topic-name resolution\n' +
-      '  either set TELEGRAM_CHAT_ID, or pass numeric TELEGRAM_TOPIC ids\n',
-    )
-    process.exit(1)
-  }
+  // Phase 4: topic-name resolution and forum-topic creation have moved
+  // to the listener. The agent process no longer needs TELEGRAM_CHAT_ID
+  // or topic-names.json. We just hand the raw filter to the listener
+  // and adopt the resolved numeric thread ids back in `registered`.
 
   if (!existsSync(LISTENER_SOCKET_PATH)) {
     process.stderr.write(
@@ -831,54 +924,9 @@ if (CLIENT_MODE) {
     process.exit(1)
   }
 
-  // Resolve topic names to numeric IDs
-  const TOPIC_NAMES_FILE = join(STATE_DIR, 'topic-names.json')
-
-  async function resolveTopicId(name: string): Promise<number> {
-    // Load existing mappings
-    let mappings: Record<string, Record<string, number>> = {}
-    try { mappings = JSON.parse(readFileSync(TOPIC_NAMES_FILE, 'utf8')) } catch {}
-
-    const chatMap = mappings[LISTENER_CHAT_ID!] ?? {}
-    if (chatMap[name] != null) {
-      log(`Resolved topic name "${name}" → ${chatMap[name]}`)
-      return chatMap[name]
-    }
-
-    // Not found — create the topic
-    process.stderr.write(`telegram channel: creating forum topic "${name}" in ${LISTENER_CHAT_ID}\n`)
-    try {
-      const result = await bot.api.createForumTopic(Number(LISTENER_CHAT_ID), name)
-      const id = result.message_thread_id
-      process.stderr.write(`telegram channel: created topic "${name}" → ${id}\n`)
-
-      // Save mapping
-      if (!mappings[LISTENER_CHAT_ID!]) mappings[LISTENER_CHAT_ID!] = {}
-      mappings[LISTENER_CHAT_ID!][name] = id
-      writeFileSync(TOPIC_NAMES_FILE, JSON.stringify(mappings, null, 2))
-      return id
-    } catch (err: any) {
-      process.stderr.write(`telegram channel: failed to create topic "${name}": ${err.message}\n`)
-      process.stderr.write(`  Bot needs admin + can_manage_topics permission, or use a numeric topic ID\n`)
-      process.exit(1)
-    }
-  }
-
-  let topics: number[] | 'all'
-  if (TOPIC_FILTER === 'all') {
-    topics = 'all'
-  } else {
-    const parts = TOPIC_FILTER!.split(',').map(s => s.trim())
-    const resolved: number[] = []
-    for (const part of parts) {
-      if (/^\d+$/.test(part)) {
-        resolved.push(Number(part))
-      } else {
-        resolved.push(await resolveTopicId(part))
-      }
-    }
-    topics = resolved
-  }
+  // The raw filter is sent verbatim. The listener parses 'all', numeric
+  // ids, or names and creates/resolves accordingly.
+  const rawTopics: string = TOPIC_FILTER!
 
   listenerSocket = netConnect(LISTENER_SOCKET_PATH)
   let lsBuf = ''
@@ -890,7 +938,7 @@ if (CLIENT_MODE) {
       // Send chat_id when we have one (back-compat / disambiguation hint);
       // otherwise the listener picks via resolveDefaultChat() and tells us.
       ...(LISTENER_CHAT_ID ? { chat_id: LISTENER_CHAT_ID } : {}),
-      topics,
+      topics: rawTopics,   // names OK — listener creates/resolves
       role: ROLE,
       cwd: process.cwd(),
     }) + '\n')
@@ -904,16 +952,21 @@ if (CLIENT_MODE) {
       lsBuf = lsBuf.slice(nl + 1)
       if (!line) continue
       try {
-        const msg = JSON.parse(line) as Record<string, string>
+        const msg = JSON.parse(line) as Record<string, any>
         switch (msg.type) {
           case 'registered':
             myClientId = msg.id
             // Adopt the listener-resolved chat id when we didn't have one.
             // Keeps an explicit LISTENER_CHAT_ID authoritative if both exist.
             if (!effectiveChatId && msg.chat_id) effectiveChatId = msg.chat_id
+            // Adopt the listener-resolved numeric topics. Names sent in
+            // register come back as numbers.
+            if (msg.topics === 'all') effectiveTopics = 'all'
+            else if (Array.isArray(msg.topics)) effectiveTopics = msg.topics.map(Number)
             process.stderr.write(
               `telegram channel: registered with listener as ${msg.id} — ` +
-              `topics=${JSON.stringify(topics)} role=${msg.role ?? ROLE} chat=${effectiveChatId ?? '(unresolved)'}\n`,
+              `topics=${JSON.stringify(effectiveTopics ?? rawTopics)} ` +
+              `role=${msg.role ?? ROLE} chat=${effectiveChatId ?? '(unresolved)'}\n`,
             )
             break
 
@@ -959,6 +1012,16 @@ if (CLIENT_MODE) {
               content: '[Session reset requested via /new command. Please acknowledge and start fresh — disregard prior conversation context from this topic.]',
               meta: resetMeta,
             })
+            break
+          }
+
+          case 'tg_response': {
+            const entry = pendingRpc.get(String(msg.req_id))
+            if (!entry) break
+            pendingRpc.delete(String(msg.req_id))
+            clearTimeout(entry.timer)
+            if (msg.ok) entry.resolve(msg.result ?? null)
+            else entry.reject(new Error(String(msg.error ?? 'tg_request failed')))
             break
           }
 

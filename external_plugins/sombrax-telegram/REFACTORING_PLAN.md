@@ -1,183 +1,141 @@
-# Refactoring Plan — Channel Bus for Multi-Agent Orchestration
+# Refactoring Plan — Listener-Owned Channel Bus
 
-> Turn the Telegram listener into a **transport-agnostic channel bus**. Agents (Claude Code
-> sessions) see only an opaque **channel** — "publish your updates here" — and never touch
-> Telegram concepts (chat_id, thread_id, Bot API). The listener owns the entire mapping
-> `channel ↔ (chat, topic)` and all Telegram I/O. This enables agent↔agent communication and
-> a supervisor that observes/steers many channels, with Telegram as one human-facing façade.
-
-## Target topology
-
-```
-   Telegram supergroup (one chat)                Unix socket
-   ├── topic "feat/foo"  ◀── human  ───┐
-   ├── topic "feat/bar"  ◀── human  ─┐ │
-   └── ...                            │ │
-                                      ▼ ▼
-                                 listener.ts  (the bus: owns all Bot API + channel map)
-                                   │   │   │
-        owner (exclusive) ─────────┘   │   └───────── observer (non-exclusive)
-        dev agent on "feat/foo"        │             supervisor on ALL channels
-                          dev agent on "feat/bar"     (listens + publishes anywhere)
-```
-
-- **channel = one git branch** → one Telegram forum topic named after the branch.
-- **one dev agent per channel**, registered as its **owner** (exclusive).
-- a **supervisor** registers as an **observer**: subscribes to many/all channels, receives
-  everything, and can publish into any channel. Coexists with owners.
-- humans on Telegram are just another producer into a channel.
+> **Principle:** the **listener is the sole Telegram client**. It holds the bot token and
+> makes *every* Bot API call (poll, send, files, react, edit, download, topic creation). An
+> agent's `server.ts` is a pure Unix-socket client that holds **no token** and speaks only in
+> opaque **channels**. vibe-kanban just names the channel (the git branch). Telegram is one
+> human-facing façade on a multi-agent message bus.
 
 ## Status
 
 | Phase | What | State |
 |---|---|---|
-| 1 | `publish` relay (client→listener fan-out + Telegram mirror) | ✅ **DONE & live** |
-| 2 | Channel abstraction + roles (owner/observer) + listener owns chat | ⬜ planned |
-| 3 | VK spawn integration (branch topic, inject channel, post task) | ⬜ planned |
+| 1 | `publish` relay (client→listener fan-out + mirror) | ✅ done & live |
+| 2 | Channel abstraction + roles (owner/observer) + chat-optional | ✅ done & live |
+| 3 | VK spawn integration — inject channel name, tokenless | ✅ done (VK side) |
+| **4** | **Listener owns ALL Telegram I/O (this doc)** | ⬜ **plugin work** |
+
+Phase 4 is the remaining gap: text sends already route through the listener, but topic
+creation, files, reactions, edits and downloads still call `bot.api.*` from the agent's
+`server.ts` — which is the only reason the agent process still needs the token.
 
 ---
 
-## Phase 1 — Publish relay ✅ DONE
+## Current split (audit)
 
-Added the missing client→listener primitive so an agent's outbound both fans out to the
-channel's other subscribers and is mirrored to Telegram.
+**Already through the listener:** outbound text. `channel_send`/`reply` in client mode
+publishes to the listener, which does the chunked Bot API send (`server.ts` ~640: *"the
+listener is the sole sender to Telegram"*).
 
-- `listener.ts:992` — `dispatchToClients(msg, excludeClientId?)`; skips the sender at `:1003`.
-- `listener.ts:1138` — `case 'publish'`: builds a payload and `dispatchToClients(payload, client.id)`.
-- `server.ts:98` — `myClientId` captured from the `registered` reply (`server.ts:837`).
-- `server.ts:612` — the `reply` tool also writes a `publish` frame to the listener socket.
+**Still calling `bot.api.*` directly from `server.ts` (client side):**
 
-Telegram mirror stays in the sender's direct send; dupe-free because Telegram's `getUpdates`
-never echoes the bot's own messages. **Verified: live listener (authoritative copy) carries it.**
+| Call | server.ts | Tool / purpose |
+|---|---|---|
+| `createForumTopic` | ~851 (`resolveTopicId`) | topic creation by branch name |
+| `sendPhoto` / `sendDocument` | ~703 / ~706 | file attachments on `channel_send` |
+| `setMessageReaction` | ~720 | `react` tool |
+| `editMessageText` | ~747 | `edit_message` tool |
+| `getFile` (+ fetch) | ~727 | `download_attachment` tool |
 
----
+These stayed client-side because `publish` is **fire-and-forget**, but each of these needs a
+**reply** (the created thread id, the new `message_id`, the downloaded file path). The
+request/response plumbing over the socket wasn't built — that's all Phase 4 adds.
 
-## Phase 2 — Channel abstraction + roles
-
-Goal: the agent's entire surface becomes channel-centric. The listener becomes the sole owner
-of Telegram specifics.
-
-### 2a. A `channel` is the client-facing primitive
-
-- The agent is launched knowing only its channel id (the env var `server.ts` reads can stay
-  named `TELEGRAM_*` — it's internal; what matters is the **agent never sees chat/thread**).
-- The listener maps `channel → { chat_id, message_thread_id }`. Recommended id scheme:
-  **channel id = the forum topic's `message_thread_id`** under the listener's single default
-  chat. (Optional niceties: also accept a human name like the branch via a small
-  `channel-registry.json` that VK populates at topic creation — defer unless needed.)
-- **chat_id becomes implicit.** `CLIENT_MODE` already keys off the topic, not chat
-  (`server.ts:97`), so this is mostly removing chat_id from the surface.
-
-**`listener.ts` changes**
-- Add a `resolveDefaultChat()`: prefer `process.env.TELEGRAM_CHAT_ID` (listener-level
-  override); else the sole key of `loadAccess().groups` (`listener.ts:811`) when there is
-  exactly one; else `null` + a warning.
-- `register` handler (`listener.ts:1081`): if `msg.chat_id`/channel carries no chat, set
-  `client.chatId = resolveDefaultChat()`. Continue to set `client.topics` from the channel.
-- Include the resolved chat in the `registered` reply (the `sendToClient(client, { type:
-  'registered', id })` near `:1129`) so the client can address outbound without ever being
-  told the chat.
-- **Listener owns Bot API for the bus.** The `publish` handler (`:1138`) should perform the
-  Telegram mirror itself (`bot.api.sendMessage`, `bot` is at `listener.ts:740`) **and** fan
-  out — so the *client* no longer needs to call Telegram at all. (Supersedes Phase 1's
-  "mirror stays in server.ts"; keep dupe-safety by having exactly one sender — the listener.)
-
-**`server.ts` changes**
-- Make `TELEGRAM_CHAT_ID` optional (`server.ts:88`). Register without a chat; adopt the chat
-  the listener returns in `registered` (`server.ts:837`) into an `effectiveChatId`.
-- Reshape the outbound tool: rename `reply` → `channel_send` (keep `reply` as a hidden alias
-  for compat). Make `chat_id` and `message_thread_id` **optional** — default to the agent's
-  own channel. Add optional `to` (target channel id) for cross-agent / supervisor sends.
-  Route through the listener `publish` (not a direct Bot API call) so the listener owns I/O.
-  Drop `chat_id` from `required` (`server.ts:504`).
-- Rewrite the agent-facing guidance (`server.ts:419`) to be transport-neutral, e.g.:
-  *"You have a channel. Messages from it arrive as `notifications/claude/channel`. Publish
-  progress and results to your channel with `channel_send`. You don't manage chat ids or
-  threads — the channel is your address."* Inbound `<channel>` framing drops
-  `source="telegram"` / `chat_id` from what the agent sees (keep the meta internally for the
-  listener's mapping). Inbound notification name is already neutral
-  (`notifications/claude/channel`) — no change.
-
-### 2b. Roles: owner vs observer  *(decision: "Role on register")*
-
-The supervisor must share a channel with the dev owner without the exclusive-topic eviction
-killing either. Introduce a role.
-
-**`listener.ts` changes**
-- `ClientConn` (type near `listener.ts:90`): add `role: 'owner' | 'observer'`.
-- `register` (`:1081`): `client.role = (msg.role as string) === 'observer' ? 'observer' : 'owner'`
-  (default **owner**).
-- Eviction block (`listener.ts:1097-1128`): only evict on overlap **when both `client.role`
-  and `other.role` are `'owner'`**. Observers never evict and are never evicted. (Keep the
-  60s newcomer cooldown for the owner-vs-owner case.)
-- `dispatchToClients` already delivers to *every* matching client, so an owner and an observer
-  on the same channel both receive inbound with no further change.
-
-**`server.ts` changes**
-- Read `role` from env (e.g. `TELEGRAM_ROLE`, default `owner`) and include it in the `register`
-  payload (`server.ts:819`). Dev agents omit it (→ owner); the supervisor sets `observer`.
-
-### 2c. Test (Phase 2)
-
-1. Restart the listener from the authoritative copy; confirm a single poller (else `409`).
-2. Dev agent A: launch on channel `T_A` as owner (default). Dev agent B: channel `T_B` owner.
-3. Supervisor S: launch as `observer` on `all`.
-4. Assert: a human message in `T_A` reaches **both** A and S; S can `channel_send to=T_B` and
-   B receives it + it appears in Telegram topic `T_B`; launching a second owner on `T_A`
-   evicts/----rejects per cooldown, but S is untouched.
+(Standalone/no-listener mode keeps its own `bot.api` path — see the caveat at the end. Phase 4
+only changes **client mode**, which is the multi-agent / VK setup.)
 
 ---
 
-## Phase 3 — Vibe Kanban spawn integration
+## Phase 4 · Step 1 — Topic creation → listener  *(do first; unblocks VK)*
 
-Make VK create the branch channel at spawn and hand the dev agent its channel — nothing more.
+Move branch-name → topic resolution from `server.ts` into the listener, which owns the token
+and the chat.
 
-**Hook point (verified):** `crates/local-deployment/src/container.rs` →
-`start_execution_inner` builds a fresh `ExecutionEnv` per spawn at `:1359` and already calls
-`env.insert("VK_WORKSPACE_ID", …)` / `VK_WORKSPACE_BRANCH` at `:1366-1367`. `workspace.branch`,
-`workspace.name`, `workspace.id` are all in scope. Spawn happens at `:1372`; post-spawn
-side-effects fit at `:1389-1396`.
+### `server.ts`
+- In `register` (~820), send the channel **name** instead of resolving it locally. Replace the
+  pre-register `resolveTopicId` loop with: pass `topics` through as-is (names allowed), e.g.
+  `{ type: 'register', channel: TOPIC_FILTER, role: ROLE, cwd }`.
+- **Delete** `resolveTopicId` (~837), its `createForumTopic` call (~851), the `topic-names.json`
+  read/write, and the "TELEGRAM_CHAT_ID required for topic-name resolution" guard (~820). The
+  agent no longer needs `TELEGRAM_CHAT_ID` at all for naming.
+- On the `registered` reply, adopt the listener-resolved numeric thread(s) (extend the handler
+  at ~838 where `myClientId`/`effectiveChatId` are captured) and use the resolved thread as
+  `ownChannelId()`'s value (so `channel_send` defaults to the right topic).
 
-For a Claude-Code workspace, when Telegram is enabled:
-1. **Create the branch topic.** Topic **name = `workspace.branch`** (user requirement). Use
-   `utils::telegram::Telegram::{new, create_forum_topic}` (`crates/utils/src/telegram.rs:21,39`)
-   and `telegram_config::{load, resolve_bot_token}`. (Adjust `topic_name` to use branch, or
-   pass `name = None` so it falls back to branch — `crates/utils/src/telegram_config.rs:68`.)
-2. **Inject one env var** — the channel (the new topic's `message_thread_id`). Keep using the
-   existing `TELEGRAM_TOPIC` env name that `server.ts` reads; **no chat_id, no `--mcp-config`**
-   (the sombrax MCP loads as a user-scope plugin — verify a fresh line in
-   `~/.claude/channels/telegram/server.log` on first run). Role defaults to **owner**.
-3. **Persist** `workspace_id → thread_id` to the **shared** `~/.vibe-kanban/telegram-topics.json`
-   so the bridge's `ensure_topic` fast path reuses it (no duplicate topics). The `TopicMap`
-   type currently lives privately in `crates/telegram-bridge/src/topics.rs`; lift it into
-   `crates/utils` so VK and the bridge share one definition.
-4. **Post the task** into the channel and tell the agent to keep it updated — the spawn posts
-   the task text to the topic, and VK's initial prompt instructs the agent to `channel_send`
-   progress/results as it works.
+### `listener.ts`
+- Own the name registry: move `topic-names.json` here (`{ "<chat_id>": { "<name>": <thread> } }`),
+  loaded/saved by the listener.
+- In the `register` handler (~1081): for each requested topic that is **non-numeric**, resolve
+  it via the registry; if absent, `bot.api.createForumTopic(chat, name)` (the listener has
+  `bot` at ~740 and `resolveDefaultChat()` at ~824), persist the mapping, and use the resulting
+  thread. Set `client.topics` to the resolved numeric ids. Keep `role`/eviction exactly as is.
+- Include the resolved `topics` (and `chat_id`) in the `registered` reply so the client adopts
+  them.
 
-**Supervisor** is launched separately (not per-workspace) as an `observer` over all channels —
-a small VK-level service or a manual launch; out of scope for the per-spawn path.
-
-### Gating & cleanup
-- Only wire Claude-Code workspaces (`BaseCodingAgent::ClaudeCode`) and only when telegram
-  config resolves an enabled bot token.
-- On workspace removal, close the topic + drop the map entry (the bridge already does this in
-  `on_workspace_removed`; keep it the single owner of teardown, or move teardown alongside the
-  new shared map).
+**Outcome:** `createForumTopic` leaves `server.ts`. VK can then inject **only**
+`TELEGRAM_TOPIC=<branch>` and drop `TELEGRAM_CHAT_ID` (coordinated VK change — see below).
 
 ---
 
-## Risks / gotchas
+## Phase 4 · Step 2 — Files / react / edit / download → listener
 
-- **Which copy runs.** Multiple checkouts exist (`~/.claude/plugins/cache/.../0.3.1` & `/0.4.0`,
-  `~/VibeCoding/sombrax-telegram-plugin`, and this authoritative dir). The live listener **and**
-  the agents' `server.ts` must be this edited copy or changes silently no-op. The running
-  listener's cwd was confirmed to be this dir.
-- **409 Conflict** — exactly one poller per bot token; stop the old listener before restart.
-- **Single sender for mirror** — once the listener owns the Telegram send (2a), remove the
-  client-side direct send to avoid duplicate messages.
-- **Default chat ambiguity** — `resolveDefaultChat()` is only unambiguous with one group in
-  `access.json`; otherwise require the `TELEGRAM_CHAT_ID` listener override.
-- **Addressing** — cross-agent `to=<channel>` needs the supervisor to know channel ids. Channel
-  = thread_id works immediately; a branch-name registry (VK-populated) is the nicer follow-up.
-```
+Add a small request/response RPC over the existing socket so the remaining calls move to the
+listener and `server.ts` can drop grammy entirely (in client mode).
+
+### Protocol additions (newline-delimited JSON, both directions)
+
+| Direction | Type | Fields |
+|---|---|---|
+| Client → Listener | `tg_request` | `req_id`, `op` (`send_file`\|`react`\|`edit`\|`download`), `args` |
+| Listener → Client | `tg_response` | `req_id`, `ok`, `result?` (e.g. `message_ids`, `path`), `error?` |
+
+`server.ts` keeps a `Map<req_id, {resolve,reject}>` and turns each tool call into a promise that
+settles on the matching `tg_response` (mirror the pattern already used for `publish`/
+`permission_request`). `req_id` = `crypto.randomUUID()`.
+
+### Per-op moves
+
+- **`send_file`** — `args: { topic, files:[paths], caption?, reply_to? }`. Listener reads the
+  local paths (agent + listener share the host) and calls `sendPhoto`/`sendDocument`; returns
+  `message_ids`. Replaces `server.ts` ~703/~706.
+- **`react`** — `args: { message_id, emoji }`. Listener `setMessageReaction`. Replaces ~720.
+- **`edit`** — `args: { message_id, text, format? }`. Listener `editMessageText`; returns the
+  id. Replaces ~747.
+- **`download`** — `args: { file_id }`. Listener `getFile` + downloads into the shared inbox
+  dir; returns `{ path }`. Replaces ~727.
+
+### Then strip the token from `server.ts` (client mode)
+- Remove all remaining `bot.api.*` in the **client-mode** paths; the agent process no longer
+  reads `TELEGRAM_BOT_TOKEN`. The pairing DM (~373) and permission-request keyboard send (~482)
+  also move behind `tg_request` ops (`pair_ack`, `permission_prompt`) or stay listener-resolved.
+
+---
+
+## VK side (coordination)
+
+VK is **done** and forward-compatible: `crates/utils/src/telegram_topics.rs::channel_for_branch`
+returns the branch name + a (non-secret) `chat_id`, and `local-deployment/container.rs` injects
+`TELEGRAM_TOPIC=<branch>` + `TELEGRAM_CHAT_ID=<group>` for Claude Code workspaces (gated on
+`per_worktree_topics` / `VK_TELEGRAM_PER_WORKTREE`). No token, no Bot API.
+
+**After Step 1 lands in the plugin:** drop the `TELEGRAM_CHAT_ID` injection in
+`channel_for_branch`/`container.rs` so VK injects **only** the channel name. (This is the "VK
+part" to do alongside the plugin update.)
+
+---
+
+## Invariants / caveats
+
+- **Eviction is by design — add NO reconnection/eviction handling anywhere.** When a new owner
+  claims a channel the listener disconnects the old agent and it stops receiving notifications;
+  that is intended (one owner per channel).
+- **Standalone mode** (no listener, `server.ts` polls directly) keeps its own `bot.api` path and
+  token — Phase 4 only rewires **client mode**. Don't delete grammy outright; gate the removal
+  on `CLIENT_MODE`.
+- **Which copy runs** — multiple checkouts exist; the live listener and the agents' `server.ts`
+  must be this authoritative copy or edits silently no-op.
+- **409 Conflict** — one poller per token; restart the listener cleanly.
+- **RPC correlation** — `tg_request`/`tg_response` must be matched by `req_id`; time out pending
+  requests so a dropped listener doesn't hang a tool call.
+- **Files are local paths** — listener and agents share the host, so the listener reads the path
+  directly; no bytes over the socket.
