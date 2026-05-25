@@ -137,6 +137,58 @@ TELEGRAM_CHAT_ID="-100XXXXXXXXXX" TELEGRAM_TOPIC=all claude \
 }
 ```
 
+### Live dashboard (`--tui`)
+
+With the listener daemon running, open an interactive terminal dashboard in a
+second shell:
+
+```bash
+bun listener.ts --tui
+```
+
+The TUI is a thin client: it connects to the running daemon over the same
+Unix socket, polls every 2s, and renders a live multi-view dashboard.
+It never binds the socket or polls Telegram, so it is safe to run alongside
+the daemon and auto-reconnects if the listener restarts.
+
+**Views**
+
+- **Main** — sessions table. Columns: folder (cwd) · session id (Claude
+  `sessionId` when available, else the listener's client id) · branch
+  (with `*` for a dirty working tree and `↑N`/`↓N` for upstream
+  ahead/behind) · worktree (the path when running in a linked git
+  worktree, else `-`) · MSG · PEND · UP.
+- **Detail** — full per-session view plus pending permission requests with
+  input preview; approve/deny inline without leaving the TUI.
+- **Resume** — picker over `~/.claude/sessions/*.json` to resume a saved
+  Claude session into a chat/topic.
+- **Logs** — tail of `~/.claude/channels/telegram/server.log`.
+- **Coverage** — sessions grouped by chat and topic, with recent dropped
+  messages and a `⚠ overlap` marker when two sessions claim the same topic.
+
+**Keys**
+
+| Key | Action |
+|-----|--------|
+| `↑` / `↓` | Move selection |
+| `Enter` / `d` | Open detail for selected session; `Esc` / `d` to go back |
+| `k` | Kill selected session (confirm `y/N`) |
+| `r` | Restart selected session (confirm `y/N`) |
+| `l` | Launch a new session — prompts for `chat_id`, `topic`, `cwd` with smart defaults |
+| `R` | Open resume picker; `Enter` picks a saved session, then prompts for `chat_id` + `topic` |
+| `L` | Toggle the log-tail view |
+| `c` | Toggle the topic-coverage view |
+| `/` | Filter (matches cwd / branch / chat / topic / id); `Esc` clears |
+| `s` | Cycle sort field: `cwd` → `branch` → `uptime` → `pending` → `msgs` |
+| `S` | Toggle sort direction |
+| `a` / `D` | (detail view) Approve / deny the highlighted pending permission |
+| `q` / Ctrl-C | Quit |
+
+The TUI's actions (`kill_session`, `restart_session`, `launch_session`,
+`resume_session`, `permission_respond`, `tail_logs`, `list_saved_sessions`)
+are only honored on sockets that have **not** sent `register`, so connected
+Claude clients cannot trigger them — only the TUI client can.
+
 ## Environment Variables
 
 | Variable | Required | Description |

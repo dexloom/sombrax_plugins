@@ -812,6 +812,51 @@ function loadAccess(): Access {
   return BOOT_ACCESS ?? readAccessFile()
 }
 
+/**
+ * Resolve the default chat_id for a registering client that doesn't carry one.
+ * Order of precedence:
+ *   1. `TELEGRAM_CHAT_ID` env (listener-level override; useful in tests).
+ *   2. The sole key of access.groups when there is exactly one. (The common
+ *      case — one supergroup configured for this bot.)
+ *   3. null, with a warning. The client may still publish if it explicitly
+ *      provides chat_id at publish time, but auto-mirror won't work.
+ */
+function resolveDefaultChat(): string | null {
+  const envChat = process.env.TELEGRAM_CHAT_ID
+  if (envChat) return envChat
+  const groups = Object.keys(loadAccess().groups ?? {})
+  if (groups.length === 1) return groups[0]
+  if (groups.length > 1) {
+    process.stderr.write(`telegram listener: resolveDefaultChat: ambiguous (${groups.length} groups in access.json); set TELEGRAM_CHAT_ID to disambiguate\n`)
+  }
+  return null
+}
+
+/**
+ * Split a text into Telegram-safe chunks (4096 char hard cap). Listener
+ * uses this for the bus-side mirror when a publish frame arrives without
+ * pre-chunked text. Mirrors server.ts:chunk(); kept inline so the listener
+ * is self-contained.
+ */
+function chunkText(text: string, limit: number, mode: 'length' | 'newline'): string[] {
+  if (text.length <= limit) return [text]
+  const out: string[] = []
+  let rest = text
+  while (rest.length > limit) {
+    let cut = limit
+    if (mode === 'newline') {
+      const para = rest.lastIndexOf('\n\n', limit)
+      const line = rest.lastIndexOf('\n', limit)
+      const space = rest.lastIndexOf(' ', limit)
+      cut = para > limit / 2 ? para : line > limit / 2 ? line : space > 0 ? space : limit
+    }
+    out.push(rest.slice(0, cut))
+    rest = rest.slice(cut).replace(/^\n+/, '')
+  }
+  if (rest) out.push(rest)
+  return out
+}
+
 function saveAccess(a: Access): void {
   if (STATIC) return
   mkdirSync(STATE_DIR, { recursive: true, mode: 0o700 })
@@ -926,11 +971,20 @@ if (!STATIC) setInterval(checkApprovals, 5000).unref()
 /*  Client connection management                                       */
 /* ------------------------------------------------------------------ */
 
+type ClientRole = 'owner' | 'observer'
+
 interface ClientConn {
   socket: Socket
   id: string
   chatId: string | null
   topics: number[] | 'all'
+  /**
+   * 'owner' is the exclusive consumer of its topic — the dev agent — and
+   * is subject to the 60s cooldown / replacement-on-overlap eviction.
+   * 'observer' is a non-exclusive subscriber — the supervisor — that
+   * coexists with owners and is never evicted (and never evicts).
+   */
+  role: ClientRole
   buffer: string
   pendingPermissions: Set<string>
   connectedAt: number
@@ -981,8 +1035,15 @@ function sendToClient(client: ClientConn, data: Record<string, unknown>): void {
   }
 }
 
-/** Route an inbound message to matching clients. Returns true if at least one client received it. */
-function dispatchToClients(msg: Record<string, string | undefined>): boolean {
+/**
+ * Route an inbound message to matching clients. Returns true if at least
+ * one client received it.
+ *
+ * `excludeClientId` is used by the `publish` relay so an agent's own send
+ * doesn't echo back to itself — a peer on the same topic (rare, but
+ * possible if eviction is mid-flight) still receives it.
+ */
+function dispatchToClients(msg: Record<string, string | undefined>, excludeClientId?: string): boolean {
   const chatId = msg.chat_id
   const threadId = msg.message_thread_id ? Number(msg.message_thread_id) : null
 
@@ -993,6 +1054,7 @@ function dispatchToClients(msg: Record<string, string | undefined>): boolean {
 
   let delivered = false
   for (const client of clients) {
+    if (excludeClientId && client.id === excludeClientId) continue
     if (client.chatId !== chatId) continue
     if (client.topics !== 'all') {
       if (threadId != null && !client.topics.includes(threadId)) continue
@@ -1071,7 +1133,13 @@ function routePermissionResponse(request_id: string, behavior: string): void {
 function handleClientMessage(client: ClientConn, msg: Record<string, unknown>): void {
   switch (msg.type) {
     case 'register': {
-      client.chatId = msg.chat_id as string
+      // chat_id is now optional — the listener owns the channel→chat
+      // mapping. When the client doesn't supply one, fall back to
+      // resolveDefaultChat() (env override > sole configured group).
+      const providedChat = msg.chat_id as string | undefined
+      client.chatId = providedChat && providedChat.length > 0
+        ? providedChat
+        : resolveDefaultChat()
       const rawTopics = msg.topics
       if (rawTopics === 'all') {
         client.topics = 'all'
@@ -1082,39 +1150,46 @@ function handleClientMessage(client: ClientConn, msg: Record<string, unknown>): 
       } else {
         client.topics = 'all'
       }
+      client.role = (msg.role as string) === 'observer' ? 'observer' : 'owner'
       client.cwd = (msg.cwd as string) ?? null
       if (client.cwd && client.chatId) {
         lastKnownCwd.set(client.chatId, client.cwd)
       }
 
-      // Exclusive topic locking: evict older clients with overlapping topics
-      // Cooldown: don't evict clients that connected less than 60s ago
-      // (prevents rapid cycling when Claude Code harness spawns duplicates)
+      // Exclusive topic locking applies only between *owners*.
+      // - Observer ↔ owner: coexist (supervisor watches an owner's topic).
+      // - Observer ↔ observer: coexist (multiple watchers fine).
+      // - Owner ↔ owner: cooldown-protected eviction as before.
+      // dispatchToClients already delivers to every matching client, so
+      // both an owner and an observer on the same topic each get inbound.
       const EVICT_COOLDOWN_MS = 60_000
-      for (const other of [...clients]) {
-        if (other === client) continue
-        if (other.chatId !== client.chatId) continue
-        // Check topic overlap
-        let overlaps = false
-        if (client.topics === 'all' || other.topics === 'all') {
-          overlaps = true
-        } else {
-          for (const t of client.topics) {
-            if (other.topics.includes(t)) { overlaps = true; break }
+      if (client.role === 'owner') {
+        for (const other of [...clients]) {
+          if (other === client) continue
+          if (other.role !== 'owner') continue  // observers don't conflict
+          if (other.chatId !== client.chatId) continue
+          // Check topic overlap
+          let overlaps = false
+          if (client.topics === 'all' || other.topics === 'all') {
+            overlaps = true
+          } else {
+            for (const t of client.topics) {
+              if (other.topics.includes(t)) { overlaps = true; break }
+            }
           }
-        }
-        if (overlaps) {
-          const age = Date.now() - other.connectedAt
-          if (age < EVICT_COOLDOWN_MS) {
-            // Existing client is too fresh — reject the newcomer instead
-            process.stderr.write(`telegram listener: rejecting client ${client.id} — client ${other.id} is ${Math.round(age / 1000)}s old (cooldown ${EVICT_COOLDOWN_MS / 1000}s)\n`)
-            sendToClient(client, { type: 'shutdown', reason: 'topic already served by a recent session' })
-            setTimeout(() => removeClient(client), 1000)
-            return
+          if (overlaps) {
+            const age = Date.now() - other.connectedAt
+            if (age < EVICT_COOLDOWN_MS) {
+              // Existing owner is too fresh — reject the newcomer instead
+              process.stderr.write(`telegram listener: rejecting client ${client.id} — client ${other.id} is ${Math.round(age / 1000)}s old (cooldown ${EVICT_COOLDOWN_MS / 1000}s)\n`)
+              sendToClient(client, { type: 'shutdown', reason: 'topic already served by a recent session' })
+              setTimeout(() => removeClient(client), 1000)
+              return
+            }
+            process.stderr.write(`telegram listener: client ${other.id} evicted — topic conflict with ${client.id}\n`)
+            sendToClient(other, { type: 'shutdown', reason: 'replaced by new session' })
+            setTimeout(() => removeClient(other), 1000)
           }
-          process.stderr.write(`telegram listener: client ${other.id} evicted — topic conflict with ${client.id}\n`)
-          sendToClient(other, { type: 'shutdown', reason: 'replaced by new session' })
-          setTimeout(() => removeClient(other), 1000)
         }
       }
 
@@ -1122,9 +1197,86 @@ function handleClientMessage(client: ClientConn, msg: Record<string, unknown>): 
       process.stderr.write(
         `telegram listener: client ${client.id} registered — ` +
         `chat=${client.chatId} topics=${JSON.stringify(client.topics)} ` +
-        `(${clients.length} total)\n`,
+        `role=${client.role} (${clients.length} total)\n`,
       )
-      sendToClient(client, { type: 'registered', id: client.id })
+      // Echo back the resolved chat so the client can adopt it as
+      // `effectiveChatId` without ever being told the chat by env.
+      sendToClient(client, { type: 'registered', id: client.id, chat_id: client.chatId, role: client.role })
+      break
+    }
+    case 'publish': {
+      // Channel-bus relay. The listener is now the *sole* sender to
+      // Telegram for client-mode agents — it both (a) mirrors text to the
+      // Telegram topic so humans see it once, and (b) fans the inbound
+      // out to any peer registered for the target topic so a sibling
+      // agent (or supervisor observer) sees a normal `inbound`
+      // notification, exactly as if a human had typed it.
+      //
+      // The sender's own client is excluded from fan-out by client.id, and
+      // Telegram never echoes the bot's own messages via getUpdates, so
+      // both sides receive exactly one copy.
+      //
+      // Gated to registered clients (chatId !== null); the TUI/admin
+      // socket gets action_err if it tries to publish.
+      if (client.chatId === null) {
+        sendToClient(client, { type: 'action_err', action: 'publish', error: 'not registered' })
+        break
+      }
+      const text = String(msg.text ?? '')
+      if (!text) break
+
+      // Resolve target. `to` is the channel-centric alias for
+      // message_thread_id; either keeps backwards compat.
+      const chatIdP = (msg.chat_id as string) || client.chatId
+      const rawThread = msg.message_thread_id ?? msg.to
+      let threadIdP: string | undefined
+      if (rawThread != null) {
+        threadIdP = String(rawThread)
+      } else if (client.topics !== 'all' && client.topics.length === 1) {
+        // No explicit target — default to the client's own single channel.
+        threadIdP = String(client.topics[0])
+      }
+
+      const replyTo = msg.reply_to != null ? Number(msg.reply_to) : undefined
+      const parseMode = (msg.parse_mode as string | undefined) === 'MarkdownV2' ? 'MarkdownV2' as const : undefined
+
+      // --- (a) Telegram mirror (listener-owned Bot API send). Best-effort:
+      //     chunk per access settings and fire-and-forget. We don't await
+      //     because fan-out shouldn't be gated by Telegram round-trip latency.
+      if (chatIdP) {
+        const access = loadAccess()
+        const limit = Math.max(1, Math.min(access.textChunkLimit ?? 4096, 4096))
+        const mode = access.chunkMode ?? 'length'
+        const replyMode = access.replyToMode ?? 'first'
+        const chunks = chunkText(text, limit, mode)
+        ;(async () => {
+          for (let i = 0; i < chunks.length; i++) {
+            const shouldReplyTo = replyTo != null && replyMode !== 'off' && (replyMode === 'all' || i === 0)
+            try {
+              await bot.api.sendMessage(chatIdP, chunks[i], {
+                ...(threadIdP != null ? { message_thread_id: Number(threadIdP) } : {}),
+                ...(shouldReplyTo ? { reply_parameters: { message_id: replyTo! } } : {}),
+                ...(parseMode ? { parse_mode: parseMode } : {}),
+              })
+            } catch (err) {
+              process.stderr.write(`telegram listener: publish mirror failed for client ${client.id} (chunk ${i + 1}/${chunks.length}): ${err}\n`)
+              break  // stop on first failure; peer fan-out below still happens
+            }
+          }
+        })()
+      }
+
+      // --- (b) Peer fan-out to other registered clients on this channel.
+      //     Sender is excluded by client.id so no self-echo.
+      const payload: Record<string, string | undefined> = {
+        chat_id: chatIdP,
+        message_thread_id: threadIdP,
+        text,
+        user: (msg.from as string) ?? client.id,
+        user_id: '',
+        ts: String(Date.now()),
+      }
+      dispatchToClients(payload, client.id)
       break
     }
     case 'list_sessions': {
@@ -2110,6 +2262,7 @@ const socketServer = createServer(socket => {
     id: randomBytes(4).toString('hex'),
     chatId: null,
     topics: 'all',
+    role: 'owner',   // overwritten on register; default is the exclusive dev-agent case
     buffer: '',
     pendingPermissions: new Set(),
     connectedAt: Date.now(),
