@@ -1032,6 +1032,7 @@ if (!STATIC) setInterval(checkApprovals, 5000).unref()
 /* ------------------------------------------------------------------ */
 
 type ClientRole = 'owner' | 'observer'
+type ClientKind = 'dev' | 'project_manager' | 'product_manager' | 'unknown'
 
 interface ClientConn {
   socket: Socket
@@ -1045,6 +1046,19 @@ interface ClientConn {
    * coexists with owners and is never evicted (and never evicts).
    */
   role: ClientRole
+  /**
+   * Diagnostic label announced by the client at register time. Doesn't
+   * affect routing or eviction (role does), but lets the TUI / coverage
+   * view show what each session is for.
+   */
+  kind: ClientKind
+  /**
+   * Whether this client wants messages from the supergroup's General
+   * topic (those arrive with no message_thread_id). Set when 'general'
+   * appears in the register payload's topic list. Independent of the
+   * numeric topics array.
+   */
+  monitorGeneral: boolean
   buffer: string
   pendingPermissions: Set<string>
   connectedAt: number
@@ -1117,8 +1131,14 @@ function dispatchToClients(msg: Record<string, string | undefined>, excludeClien
     if (excludeClientId && client.id === excludeClientId) continue
     if (client.chatId !== chatId) continue
     if (client.topics !== 'all') {
-      if (threadId != null && !client.topics.includes(threadId)) continue
-      if (threadId == null) continue
+      if (threadId == null) {
+        // General-topic message: only deliver to clients that asked
+        // for it explicitly (Product Manager pattern). Numeric-topic
+        // subscribers don't see general traffic.
+        if (!client.monitorGeneral) continue
+      } else if (!client.topics.includes(threadId)) {
+        continue
+      }
     }
     if (DEBUG) process.stderr.write(`telegram listener: DISPATCHING to client ${client.id} (chat=${chatId} topic=${threadId})\n`)
     sendToClient(client, { type: 'inbound', ...msg })
@@ -1203,14 +1223,23 @@ async function applyRegister(client: ClientConn, msg: Record<string, unknown>): 
     ? providedChat
     : resolveDefaultChat()
   client.role = (msg.role as string) === 'observer' ? 'observer' : 'owner'
+  client.kind = (() => {
+    const k = msg.kind as string | undefined
+    if (k === 'dev' || k === 'project_manager' || k === 'product_manager') return k
+    return 'unknown'
+  })()
   client.cwd = (msg.cwd as string) ?? null
 
   // Parse raw topic specs into an array of strings (names or numerics)
   // or 'all'. Accept legacy shapes ('all', number[], comma-string) plus
-  // the new 'channel'/'topics' field that may now contain names.
+  // the new 'channel'/'topics' field that may now contain names. The
+  // literal 'general' is a sentinel for the supergroup's General forum
+  // topic (messages with no message_thread_id) — never a forum topic
+  // to create.
   const rawTopics = msg.topics ?? msg.channel
   let topicSpecs: string[] | 'all'
-  if (rawTopics === 'all' || rawTopics == null) {
+  // 'all' (legacy) and '*' (wildcard, PM convention) both mean "every channel".
+  if (rawTopics === 'all' || rawTopics === '*' || rawTopics == null) {
     topicSpecs = 'all'
   } else if (Array.isArray(rawTopics)) {
     topicSpecs = rawTopics.map(String)
@@ -1219,20 +1248,24 @@ async function applyRegister(client: ClientConn, msg: Record<string, unknown>): 
   }
 
   // Resolve names → numeric thread ids. Requires a chat to create new
-  // topics in; if no chat resolves and any topic is non-numeric, fail
-  // the registration explicitly so the client gets a clear error.
+  // topics in; if no chat resolves and any non-numeric/non-'general'
+  // spec is present, fail the registration with a clear error.
+  client.monitorGeneral = false
   if (topicSpecs === 'all') {
     client.topics = 'all'
+    // 'all' implicitly covers the General topic too.
+    client.monitorGeneral = true
   } else {
     const numeric: number[] = []
-    const hasNames = topicSpecs.some(s => !/^\d+$/.test(s))
-    if (hasNames && !client.chatId) {
+    const needsResolution = topicSpecs.filter(s => s !== 'general' && !/^\d+$/.test(s))
+    if (needsResolution.length && !client.chatId) {
       process.stderr.write(`telegram listener: client ${client.id} register failed — topic name resolution needs a chat (none resolved)\n`)
       sendToClient(client, { type: 'shutdown', reason: 'topic name resolution requires a chat' })
       setTimeout(() => removeClient(client), 1000)
       return
     }
     for (const spec of topicSpecs) {
+      if (spec === 'general') { client.monitorGeneral = true; continue }
       const id = /^\d+$/.test(spec)
         ? Number(spec)
         : await resolveTopicForChat(client.chatId!, spec)
@@ -1289,8 +1322,9 @@ async function applyRegister(client: ClientConn, msg: Record<string, unknown>): 
   if (!clients.includes(client)) clients.push(client)
   process.stderr.write(
     `telegram listener: client ${client.id} registered — ` +
-    `chat=${client.chatId} topics=${JSON.stringify(client.topics)} ` +
-    `role=${client.role} (${clients.length} total)\n`,
+    `chat=${client.chatId} topics=${JSON.stringify(client.topics)}` +
+    `${client.monitorGeneral && client.topics !== 'all' ? '+general' : ''} ` +
+    `role=${client.role} kind=${client.kind} (${clients.length} total)\n`,
   )
   // Echo back the resolved chat AND resolved numeric topics so the
   // client can adopt them as effectiveChatId / effectiveTopics without
@@ -1301,6 +1335,8 @@ async function applyRegister(client: ClientConn, msg: Record<string, unknown>): 
     chat_id: client.chatId,
     topics: client.topics,
     role: client.role,
+    kind: client.kind,
+    monitor_general: client.monitorGeneral,
   })
 }
 
@@ -2493,6 +2529,8 @@ const socketServer = createServer(socket => {
     chatId: null,
     topics: 'all',
     role: 'owner',   // overwritten on register; default is the exclusive dev-agent case
+    kind: 'unknown', // overwritten on register
+    monitorGeneral: false,
     buffer: '',
     pendingPermissions: new Set(),
     connectedAt: Date.now(),

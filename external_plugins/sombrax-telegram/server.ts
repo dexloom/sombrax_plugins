@@ -75,17 +75,67 @@ const INBOX_DIR = join(STATE_DIR, 'inbox')
 
 // Client mode: connect to a running listener.ts instead of polling Telegram directly.
 // Enables multiple Claude Code sessions handling different supergroup topics.
-const TOPIC_FILTER = process.env.TELEGRAM_TOPIC
+//
+// A Product Manager always also monitors the supergroup's General topic
+// (messages with no message_thread_id). If the operator didn't include
+// 'general' explicitly in TELEGRAM_TOPIC, we splice it in here so the
+// CLIENT_MODE gate sees a non-empty filter and the listener knows to
+// route general-topic traffic our way.
+const RAW_TOPIC_ENV = process.env.TELEGRAM_TOPIC
+const PRODUCT_MANAGER_FLAG = !!process.env.TELEGRAM_PRODUCT_MANAGER
+let TOPIC_FILTER = RAW_TOPIC_ENV
+if (PRODUCT_MANAGER_FLAG) {
+  const parts = (TOPIC_FILTER ?? '').split(',').map(s => s.trim()).filter(Boolean)
+  const isWildcard = parts.length === 1 && (parts[0] === 'all' || parts[0] === '*')
+  if (!isWildcard && !parts.includes('general')) parts.push('general')
+  TOPIC_FILTER = isWildcard ? parts[0] : parts.join(',')
+}
 // TELEGRAM_CHAT_ID is now optional: the listener owns the channel→chat mapping
 // and will hand the resolved chat back in its `registered` reply. Setting the
 // env still works (and is needed if you want to use *topic-name* resolution
 // from TELEGRAM_TOPIC, since name lookup happens before register).
 const LISTENER_CHAT_ID = process.env.TELEGRAM_CHAT_ID
 const LISTENER_SOCKET_PATH = process.env.TELEGRAM_LISTENER_SOCKET ?? join(STATE_DIR, 'listener.sock')
-// Role announcement on register. Dev agents default to 'owner' (exclusive
-// consumer of their channel); a supervisor sets TELEGRAM_ROLE=observer to
-// coexist with owners without triggering the eviction logic.
-const ROLE = (process.env.TELEGRAM_ROLE === 'observer' ? 'observer' : 'owner') as 'owner' | 'observer'
+// Role + kind announcement on register.
+//
+//   TELEGRAM_DEV=1              → kind=dev, role=owner
+//     Dev agent: the exclusive consumer of its channel. VK injects this
+//     when spawning per-worktree Claude Code sessions (replaces the old
+//     VK_TELEGRAM_PER_WORKTREE gate on the VK side). Subject to the 60s
+//     eviction cooldown.
+//
+//   TELEGRAM_PROJECT_MANAGER=1  → kind=project_manager, role=observer
+//     Monitors channels, keeps dev agents alive, orchestrates pipelines.
+//     Never claims ownership, never evicted. Scope = TELEGRAM_TOPIC:
+//     a single channel id/name, or "*"/"all" to monitor every channel.
+//     TELEGRAM_PM is accepted as a back-compat alias.
+//
+//   TELEGRAM_PRODUCT_MANAGER=1  → kind=product_manager, role=observer
+//     Spawns project_manager agents with specific skills. Monitors its
+//     TELEGRAM_TOPIC *plus* the supergroup's General topic (messages
+//     arriving with no message_thread_id).
+//
+//   TELEGRAM_ROLE=owner|observer → explicit escape hatch, wins over the
+//     kind flags. Lets a PM session demote itself or a dev session
+//     subordinate itself.
+//
+//   no flag set → kind=unknown, role=observer
+//     Safe default. A random session that happens to load the plugin
+//     never claims ownership of a channel — it joins as an observer
+//     until told otherwise.
+const DEV_FLAG             = !!process.env.TELEGRAM_DEV
+const PROJECT_MANAGER_FLAG = !!(process.env.TELEGRAM_PROJECT_MANAGER || process.env.TELEGRAM_PM)
+type AgentKind = 'dev' | 'project_manager' | 'product_manager' | 'unknown'
+const KIND: AgentKind =
+  PRODUCT_MANAGER_FLAG ? 'product_manager' :
+  PROJECT_MANAGER_FLAG ? 'project_manager' :
+  DEV_FLAG             ? 'dev'             :
+  'unknown'
+const ROLE: 'owner' | 'observer' =
+  process.env.TELEGRAM_ROLE === 'observer' ? 'observer' :
+  process.env.TELEGRAM_ROLE === 'owner'    ? 'owner'    :
+  KIND === 'dev'                            ? 'owner'    :
+  'observer'
 const CLIENT_MODE = !!TOPIC_FILTER
 
 // TELEGRAM_BOT_TOKEN is only required in standalone mode (the agent
@@ -650,7 +700,7 @@ function ownChannelId(): number | undefined {
     if (effectiveTopics.length === 1) return effectiveTopics[0]
     return undefined
   }
-  if (!TOPIC_FILTER || TOPIC_FILTER === 'all') return undefined
+  if (!TOPIC_FILTER || TOPIC_FILTER === 'all' || TOPIC_FILTER === '*') return undefined
   const parts = TOPIC_FILTER.split(',').map(s => s.trim())
   if (parts.length !== 1) return undefined
   const n = Number(parts[0])
@@ -932,7 +982,7 @@ if (CLIENT_MODE) {
   let lsBuf = ''
 
   listenerSocket.on('connect', () => {
-    process.stderr.write(`telegram channel: connected to listener (client mode, role=${ROLE})\n`)
+    process.stderr.write(`telegram channel: connected to listener (client mode, kind=${KIND} role=${ROLE})\n`)
     listenerSocket!.write(JSON.stringify({
       type: 'register',
       // Send chat_id when we have one (back-compat / disambiguation hint);
@@ -940,6 +990,7 @@ if (CLIENT_MODE) {
       ...(LISTENER_CHAT_ID ? { chat_id: LISTENER_CHAT_ID } : {}),
       topics: rawTopics,   // names OK — listener creates/resolves
       role: ROLE,
+      kind: KIND,
       cwd: process.cwd(),
     }) + '\n')
   })

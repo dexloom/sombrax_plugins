@@ -2,140 +2,219 @@
 
 > **Principle:** the **listener is the sole Telegram client**. It holds the bot token and
 > makes *every* Bot API call (poll, send, files, react, edit, download, topic creation). An
-> agent's `server.ts` is a pure Unix-socket client that holds **no token** and speaks only in
-> opaque **channels**. vibe-kanban just names the channel (the git branch). Telegram is one
-> human-facing façade on a multi-agent message bus.
+> agent's `server.ts` is a pure Unix-socket client that holds **no token** (in CLIENT_MODE)
+> and speaks only in opaque **channels**. vibe-kanban just names the channel (the git
+> branch). Telegram is one human-facing façade on a multi-agent message bus.
 
 ## Status
 
 | Phase | What | State |
 |---|---|---|
-| 1 | `publish` relay (client→listener fan-out + mirror) | ✅ done & live |
-| 2 | Channel abstraction + roles (owner/observer) + chat-optional | ✅ done & live |
+| 1 | `publish` relay (client→listener fan-out + mirror) | ✅ done |
+| 2 | Channel abstraction + roles (owner/observer) + chat-optional | ✅ done |
 | 3 | VK spawn integration — inject channel name, tokenless | ✅ done (VK side) |
-| **4** | **Listener owns ALL Telegram I/O (this doc)** | ⬜ **plugin work** |
+| 4 · Step 1 | Topic creation → listener (register-by-name) | ✅ done (plugin + VK) |
+| **4 · Step 2** | **Files / react / edit / download → listener RPC; strip token** | ✅ **done** |
+| **5** | **Three-kind role model (dev / project_manager / product_manager)** | ✅ **done** |
 
-Phase 4 is the remaining gap: text sends already route through the listener, but topic
-creation, files, reactions, edits and downloads still call `bot.api.*` from the agent's
-`server.ts` — which is the only reason the agent process still needs the token.
+All phases listed here have landed. The principle holds end-to-end: in CLIENT_MODE,
+`server.ts` makes **zero** `bot.api.*` calls. Every Telegram-side operation — including
+new topic creation, file uploads, reactions, edits, downloads, and the polling itself —
+runs in `listener.ts`.
 
 ---
 
 ## Current split (audit)
 
-**Already through the listener:** outbound text. `channel_send`/`reply` in client mode
-publishes to the listener, which does the chunked Bot API send (`server.ts` ~640: *"the
-listener is the sole sender to Telegram"*).
+**Through the listener** (CLIENT_MODE):
 
-**Still calling `bot.api.*` directly from `server.ts` (client side):**
+| Concern | Listener entry point |
+|---|---|
+| Inbound polling | `listener.ts` `bot.start()` |
+| Outbound text + chunking + reply-to + parse_mode | `listener.ts` `case 'publish'` |
+| Forum topic creation / cached name → thread id | `listener.ts` `resolveTopicForChat` (`:875`), `loadTopicNames` (`:849`) |
+| File upload (photo / document) | `listener.ts` `handleTgRequest` `send_file` (`:1356`) |
+| Reactions | same — `op:'react'` |
+| Edit message text | same — `op:'edit'` |
+| Attachment download | same — `op:'download'` (writes into `INBOX_DIR`) |
+| Permission keyboard / approvals | `listener.ts` permission relay |
+| Pairing / DM approvals | `listener.ts` (the agent doesn't poll, so it can't see DMs) |
 
-| Call | server.ts | Tool / purpose |
-|---|---|---|
-| `createForumTopic` | ~851 (`resolveTopicId`) | topic creation by branch name |
-| `sendPhoto` / `sendDocument` | ~703 / ~706 | file attachments on `channel_send` |
-| `setMessageReaction` | ~720 | `react` tool |
-| `editMessageText` | ~747 | `edit_message` tool |
-| `getFile` (+ fetch) | ~727 | `download_attachment` tool |
-
-These stayed client-side because `publish` is **fire-and-forget**, but each of these needs a
-**reply** (the created thread id, the new `message_id`, the downloaded file path). The
-request/response plumbing over the socket wasn't built — that's all Phase 4 adds.
-
-(Standalone/no-listener mode keeps its own `bot.api` path — see the caveat at the end. Phase 4
-only changes **client mode**, which is the multi-agent / VK setup.)
+**Still `bot.api.*` from `server.ts`** — only in **standalone mode** (no listener). The
+agent process there constructs `bot = new Bot(TOKEN)`; in CLIENT_MODE `bot = null`. The
+`if (!CLIENT_MODE && !TOKEN)` guard at `server.ts:135` keeps the token requirement scoped
+to standalone runs.
 
 ---
 
-## Phase 4 · Step 1 — Topic creation → listener  *(do first; unblocks VK)*
+## Phase 4 · Step 1 — Topic creation → listener  *(done)*
 
-Move branch-name → topic resolution from `server.ts` into the listener, which owns the token
-and the chat.
+### Code landings
 
-### `server.ts`
-- In `register` (~820), send the channel **name** instead of resolving it locally. Replace the
-  pre-register `resolveTopicId` loop with: pass `topics` through as-is (names allowed), e.g.
-  `{ type: 'register', channel: TOPIC_FILTER, role: ROLE, cwd }`.
-- **Delete** `resolveTopicId` (~837), its `createForumTopic` call (~851), the `topic-names.json`
-  read/write, and the "TELEGRAM_CHAT_ID required for topic-name resolution" guard (~820). The
-  agent no longer needs `TELEGRAM_CHAT_ID` at all for naming.
-- On the `registered` reply, adopt the listener-resolved numeric thread(s) (extend the handler
-  at ~838 where `myClientId`/`effectiveChatId` are captured) and use the resolved thread as
-  `ownChannelId()`'s value (so `channel_send` defaults to the right topic).
+**`listener.ts`**
+- `TOPIC_NAMES_FILE = join(STATE_DIR, 'topic-names.json')` — listener owns the map
+  `{ "<chat_id>": { "<name>": <thread_id> } }`.
+- `loadTopicNames()` / `saveTopicNames()` (`:849`).
+- `resolveTopicForChat(chatId, spec)` (`:875`) — returns cached numeric id, else calls
+  `bot.api.createForumTopic(chat, name)` and persists. Returns `null` on failure.
+- `applyRegister()` (`:1219`) — async; non-numeric specs go through `resolveTopicForChat`;
+  numeric specs pass through; literal `'general'` is a sentinel (see Phase 5). Numeric
+  thread ids land in `client.topics`. The `registered` reply (`:1339`) echoes the
+  resolved `chat_id` AND numeric `topics`.
 
-### `listener.ts`
-- Own the name registry: move `topic-names.json` here (`{ "<chat_id>": { "<name>": <thread> } }`),
-  loaded/saved by the listener.
-- In the `register` handler (~1081): for each requested topic that is **non-numeric**, resolve
-  it via the registry; if absent, `bot.api.createForumTopic(chat, name)` (the listener has
-  `bot` at ~740 and `resolveDefaultChat()` at ~824), persist the mapping, and use the resulting
-  thread. Set `client.topics` to the resolved numeric ids. Keep `role`/eviction exactly as is.
-- Include the resolved `topics` (and `chat_id`) in the `registered` reply so the client adopts
-  them.
+**`server.ts`**
+- `resolveTopicId`, `TOPIC_NAMES_FILE`, the local `createForumTopic` call, and the
+  *"TELEGRAM_CHAT_ID required for topic-name resolution"* guard are all **gone**.
+- `register` sends the raw `TOPIC_FILTER` verbatim. Names allowed.
+- The `'registered'` handler adopts `msg.topics` into `effectiveTopics`, used by
+  `ownChannelId()` so `channel_send` defaults to the resolved thread.
 
-**Outcome:** `createForumTopic` leaves `server.ts`. VK can then inject **only**
-`TELEGRAM_TOPIC=<branch>` and drop `TELEGRAM_CHAT_ID` (coordinated VK change — see below).
+### VK coordination
+
+`crates/utils/src/telegram_topics.rs` is just `per_worktree_enabled()` and
+`local-deployment/container.rs` injects **only**:
+
+```
+TELEGRAM_TOPIC=<branch>
+TELEGRAM_DEV=1
+```
+
+…for Claude Code workspaces. `TELEGRAM_DEV=1` is the explicit signal that this
+session is a dev agent (replaces the old "implicit dev by default" semantics —
+see Phase 5). The branch name is what the listener resolves to a forum topic
+thread; no token, no chat id, no Bot API call from VK's side.
+
+The VK-side gate used to be `VK_TELEGRAM_PER_WORKTREE` / `per_worktree_topics`.
+That feature flag still controls *whether* VK injects the env vars at all; it
+just now injects `TELEGRAM_DEV=1` alongside `TELEGRAM_TOPIC` when it does.
 
 ---
 
-## Phase 4 · Step 2 — Files / react / edit / download → listener
+## Phase 4 · Step 2 — Files / react / edit / download → listener  *(done)*
 
-Add a small request/response RPC over the existing socket so the remaining calls move to the
-listener and `server.ts` can drop grammy entirely (in client mode).
-
-### Protocol additions (newline-delimited JSON, both directions)
+A small RPC over the existing socket. Both directions newline-delimited JSON:
 
 | Direction | Type | Fields |
 |---|---|---|
 | Client → Listener | `tg_request` | `req_id`, `op` (`send_file`\|`react`\|`edit`\|`download`), `args` |
-| Listener → Client | `tg_response` | `req_id`, `ok`, `result?` (e.g. `message_ids`, `path`), `error?` |
+| Listener → Client | `tg_response` | `req_id`, `ok`, `result?` (e.g. `message_ids`, `path`, `message_id`), `error?` |
 
-`server.ts` keeps a `Map<req_id, {resolve,reject}>` and turns each tool call into a promise that
-settles on the matching `tg_response` (mirror the pattern already used for `publish`/
-`permission_request`). `req_id` = `crypto.randomUUID()`.
+### Code landings
 
-### Per-op moves
+**`listener.ts`**
+- `handleTgRequest(client, reqId, op, args)` (`:1356`) — async dispatcher.
+- `case 'tg_request'` in `handleClientMessage` (`:1525`) — gated to registered clients
+  (admins get `ok:false, error:'not registered'`).
+- Per-op:
+  - `send_file` → `sendPhoto` or `sendDocument` by extension; returns `message_ids[]`.
+  - `react` → `setMessageReaction`; returns `ok:true`.
+  - `edit` → `editMessageText` (optional `format:'markdownv2'`); returns `message_id`.
+  - `download` → `getFile` + `fetch` + write into `INBOX_DIR`; returns `{ path }`.
 
-- **`send_file`** — `args: { topic, files:[paths], caption?, reply_to? }`. Listener reads the
-  local paths (agent + listener share the host) and calls `sendPhoto`/`sendDocument`; returns
-  `message_ids`. Replaces `server.ts` ~703/~706.
-- **`react`** — `args: { message_id, emoji }`. Listener `setMessageReaction`. Replaces ~720.
-- **`edit`** — `args: { message_id, text, format? }`. Listener `editMessageText`; returns the
-  id. Replaces ~747.
-- **`download`** — `args: { file_id }`. Listener `getFile` + downloads into the shared inbox
-  dir; returns `{ path }`. Replaces ~727.
+**`server.ts`**
+- `pendingRpc: Map<req_id, {resolve, reject, timer}>` (`:170`).
+- `tgRequest(op, args, timeoutMs = 30_000)` (`:172`) — registers an entry,
+  writes the frame, settles on the matching `tg_response`. Times out cleanly.
+- `case 'tg_response'` handler (`:1060`) — looks up entry, clears timer, resolves
+  or rejects.
+- Each tool routes via `tgRequest` in CLIENT_MODE:
+  - `channel_send` / `reply` files (the chunked text already routed via `publish`)
+  - `react` (`:827`)
+  - `edit_message` (`:868`)
+  - `download_attachment` (`:844`)
 
-### Then strip the token from `server.ts` (client mode)
-- Remove all remaining `bot.api.*` in the **client-mode** paths; the agent process no longer
-  reads `TELEGRAM_BOT_TOKEN`. The pairing DM (~373) and permission-request keyboard send (~482)
-  also move behind `tg_request` ops (`pair_ack`, `permission_prompt`) or stay listener-resolved.
+### Tokenless CLIENT_MODE
+
+- `if (!CLIENT_MODE && !TOKEN)` (`:135`) — token required only in standalone.
+- `const bot: Bot | null = TOKEN_AVAILABLE ? new Bot(TOKEN!) : null` (`:214`).
+- All remaining `bot.api.*` sites are inside `if (!listenerSocket || !myClientId)`
+  branches (standalone fallback) or in the standalone polling block. `bot.stop()`
+  in shutdown is null-safe.
+- `checkApprovals`'s `setInterval` is gated on `!CLIENT_MODE` so its `bot.api.sendMessage`
+  call site can't fire tokenless.
 
 ---
 
-## VK side (coordination)
+## Phase 5 — Three-kind role model  *(done)*
 
-VK is **done** and forward-compatible: `crates/utils/src/telegram_topics.rs::channel_for_branch`
-returns the branch name + a (non-secret) `chat_id`, and `local-deployment/container.rs` injects
-`TELEGRAM_TOPIC=<branch>` + `TELEGRAM_CHAT_ID=<group>` for Claude Code workspaces (gated on
-`per_worktree_topics` / `VK_TELEGRAM_PER_WORKTREE`). No token, no Bot API.
+Loading the plugin in any session that happened to set `TELEGRAM_TOPIC` was claiming
+`owner` status, which would have evicted the legitimate dev agent after the 60s cooldown.
+The fix splits **role** (eviction semantics) from **kind** (what this session is *for*).
 
-**After Step 1 lands in the plugin:** drop the `TELEGRAM_CHAT_ID` injection in
-`channel_for_branch`/`container.rs` so VK injects **only** the channel name. (This is the "VK
-part" to do alongside the plugin update.)
+### Env-var surface
+
+| Env | `kind` | `role` | Topic scope | Sees General? |
+|---|---|---|---|---|
+| `TELEGRAM_DEV=1` | `dev` | **owner** | `TELEGRAM_TOPIC` | only if `*`/`all` |
+| `TELEGRAM_PROJECT_MANAGER=1` *(alias: `TELEGRAM_PM=1`)* | `project_manager` | observer | `TELEGRAM_TOPIC` (single, `*`, `all`) | only if `*`/`all` |
+| `TELEGRAM_PRODUCT_MANAGER=1` | `product_manager` | observer | `TELEGRAM_TOPIC` **+ `general`** auto-spliced | **always** |
+| (no kind flag) | `unknown` | observer | `TELEGRAM_TOPIC` | only if `*`/`all` |
+| `TELEGRAM_ROLE=owner\|observer` | (kind unchanged) | overrides | — | — |
+
+- **Dev agent**: the exclusive consumer of its channel; subject to the 60s
+  eviction cooldown. `TELEGRAM_DEV=1` is the explicit, intentional signal — VK
+  injects this when spawning per-worktree Claude Code sessions.
+- **Project Manager**: monitors channels and orchestrates pipelines; never owns,
+  never evicted. Scope = whatever `TELEGRAM_TOPIC` says.
+- **Product Manager**: spawns project_manager agents with specific skills. Always
+  watches the supergroup's General topic in addition to its scoped topic. Server.ts
+  splices `'general'` into `TOPIC_FILTER` automatically.
+- **No flag**: a session that happens to load the plugin but didn't ask to play
+  any specific role. It joins as an observer with `kind=unknown` — listens to
+  whatever `TELEGRAM_TOPIC` says, never claims ownership of anything. Safe default
+  for ad-hoc shells.
+- `TELEGRAM_ROLE` is the explicit escape hatch — wins over the kind flags, lets a
+  PM demote itself or a dev session subordinate itself.
+
+### Code landings
+
+**`server.ts`**
+- `DEV_FLAG`, `PROJECT_MANAGER_FLAG`, `PRODUCT_MANAGER_FLAG`, derived `KIND` (one of
+  `'dev' | 'project_manager' | 'product_manager' | 'unknown'`).
+- `ROLE` derived from explicit override → fallback to `KIND === 'dev' ? 'owner' : 'observer'`.
+  No flag set → observer (`'unknown'` kind) — safest default for ad-hoc sessions.
+- `PRODUCT_MANAGER_FLAG` splices `'general'` into `TOPIC_FILTER`.
+- `register` payload sends both `role` and `kind`.
+- `ownChannelId()` treats `'*'` identically to `'all'` — returns `undefined` under
+  either wildcard, so PMs have no implicit home channel and must pass `to` explicitly
+  on `channel_send`.
+
+**`listener.ts`**
+- `ClientConn.kind: ClientKind` (`'dev' | 'project_manager' | 'product_manager' | 'unknown'`).
+- `ClientConn.monitorGeneral: boolean`.
+- `applyRegister` (`:1219`):
+  - Parses `'*'` identically to `'all'`.
+  - Treats literal `'general'` in the topic list as a sentinel — never tries to
+    `createForumTopic` for it; sets `monitorGeneral=true` instead. `'all'`/`'*'`
+    implicitly covers general.
+  - Parses `msg.kind`, validating against the union; unknown values land as
+    `'unknown'`.
+- `dispatchToClients` (`:1138`) delivers messages with no `message_thread_id` only to
+  clients with `monitorGeneral===true`; existing numeric-topic matching is unchanged.
+- `registered` reply echoes `kind` and `monitor_general` so the client can log them.
+
+### Eviction guarantee
+
+Only `owner`-vs-`owner` overlap triggers the 60s cooldown / replacement. Both PMs
+are observers; both coexist with owners and with each other indefinitely.
 
 ---
 
 ## Invariants / caveats
 
-- **Eviction is by design — add NO reconnection/eviction handling anywhere.** When a new owner
-  claims a channel the listener disconnects the old agent and it stops receiving notifications;
-  that is intended (one owner per channel).
-- **Standalone mode** (no listener, `server.ts` polls directly) keeps its own `bot.api` path and
-  token — Phase 4 only rewires **client mode**. Don't delete grammy outright; gate the removal
-  on `CLIENT_MODE`.
-- **Which copy runs** — multiple checkouts exist; the live listener and the agents' `server.ts`
-  must be this authoritative copy or edits silently no-op.
+- **Eviction is by design — add NO reconnection/eviction handling anywhere.** When a new
+  owner claims a channel the listener disconnects the old agent and it stops receiving
+  notifications; that is intended (one owner per channel).
+- **Standalone mode** (no listener, `server.ts` polls directly) keeps its own `bot.api`
+  path and token. Phase 4 only rewires **client mode**. `bot: Bot | null` is `null` in
+  CLIENT_MODE and constructed only when standalone has a token.
+- **Which copy runs** — multiple checkouts exist; the live listener and the agents'
+  `server.ts` must be the authoritative copy or edits silently no-op.
 - **409 Conflict** — one poller per token; restart the listener cleanly.
-- **RPC correlation** — `tg_request`/`tg_response` must be matched by `req_id`; time out pending
-  requests so a dropped listener doesn't hang a tool call.
-- **Files are local paths** — listener and agents share the host, so the listener reads the path
-  directly; no bytes over the socket.
+- **RPC correlation** — `tg_request`/`tg_response` are matched by `req_id`; the client
+  table times out pending requests so a dropped listener doesn't hang a tool call.
+- **Files are local paths** — listener and agents share the host, so the listener reads
+  the path directly; no bytes over the socket.
+- **General topic addressing** — messages in the supergroup's General topic arrive with
+  no `message_thread_id`. Only clients that asked for `'general'` (or registered with
+  `'all'`/`'*'`) receive them.
