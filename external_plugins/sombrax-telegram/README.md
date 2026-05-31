@@ -87,12 +87,23 @@ Once all users are paired:
 
 ## Usage
 
+### Channel-reference forms
+
+Claude Code accepts two forms for `--dangerously-load-development-channels`:
+
+| Form | Use when |
+|---|---|
+| `plugin:sombrax-telegram@sombrax-plugins` | The plugin is installed via `/plugin install` (production). Claude reads the MCP server from the plugin's manifest. |
+| `server:sombrax-telegram` | The MCP server is provided inline via a project `.mcp.json` (dev sandbox without installing the plugin). |
+
+All the examples below show the `plugin:` form. Swap in `server:sombrax-telegram` if you're running from a local checkout with a project-level `.mcp.json`.
+
 ### Single session (standalone mode)
 
 No listener needed. The MCP server polls Telegram directly:
 
 ```bash
-claude --dangerously-load-development-channels server:sombrax-telegram
+claude --dangerously-load-development-channels plugin:sombrax-telegram@sombrax-plugins
 ```
 
 ### Multi-session with topic routing
@@ -107,20 +118,22 @@ bun listener.ts
 #### Step 2: Launch Claude sessions with topic routing
 
 ```bash
-# Session for topic 2
-TELEGRAM_CHAT_ID="-100XXXXXXXXXX" TELEGRAM_TOPIC=2 claude \
-  --dangerously-load-development-channels server:sombrax-telegram
+# Session for topic 2 (dev agent)
+TELEGRAM_DEV=1 TELEGRAM_TOPIC=2 claude \
+  --dangerously-load-development-channels plugin:sombrax-telegram@sombrax-plugins
 
-# Session for topic 22
-TELEGRAM_CHAT_ID="-100XXXXXXXXXX" TELEGRAM_TOPIC=22 claude \
-  --dangerously-load-development-channels server:sombrax-telegram
+# Session for topic 22 (dev agent)
+TELEGRAM_DEV=1 TELEGRAM_TOPIC=22 claude \
+  --dangerously-load-development-channels plugin:sombrax-telegram@sombrax-plugins
 
-# Session for all topics
-TELEGRAM_CHAT_ID="-100XXXXXXXXXX" TELEGRAM_TOPIC=all claude \
-  --dangerously-load-development-channels server:sombrax-telegram
+# Supervisor monitoring all topics (observer)
+TELEGRAM_PROJECT_MANAGER=1 TELEGRAM_TOPIC=* claude \
+  --dangerously-load-development-channels plugin:sombrax-telegram@sombrax-plugins
 ```
 
-**Note:** When using development mode, your project `.mcp.json` must pass through the env vars:
+The listener resolves `TELEGRAM_CHAT_ID` from `access.json` (or its own env), so the agent process doesn't need it. See *Three-kind role model* in `REFACTORING_PLAN.md` for `TELEGRAM_DEV` / `TELEGRAM_PROJECT_MANAGER` / `TELEGRAM_PRODUCT_MANAGER`.
+
+**Note:** When using the `server:` form, your project `.mcp.json` must pass through the env vars:
 
 ```json
 {

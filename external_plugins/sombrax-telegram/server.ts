@@ -26,16 +26,43 @@ import { connect as netConnect, type Socket } from 'net'
 
 const DEBUG = !!process.env.TELEGRAM_DEBUG
 const LOG_FILE = join(homedir(), '.claude', 'channels', 'telegram', 'server.log')
+
+/**
+ * Write to stderr without ever throwing. When Claude Code's MCP transport
+ * disconnects, stderr can also be closed; a raw process.stderr.write()
+ * then throws EPIPE. If that EPIPE escapes and lands in
+ * uncaughtException — which itself calls logCritical → stderr.write →
+ * EPIPE again — the process busy-loops, writing millions of log lines a
+ * second and burning the disk (we saw a 2.4 GB log file).
+ *
+ * The fix is to make stderr writes terminal-safe: catch EPIPE
+ * specifically and switch to file-only logging for the rest of the
+ * process's life. Anything other than EPIPE is left to bubble.
+ */
+let stderrAlive = true
+function safeStderrWrite(line: string): void {
+  if (!stderrAlive) return
+  try {
+    process.stderr.write(line)
+  } catch (err: any) {
+    if (err && err.code === 'EPIPE') {
+      stderrAlive = false   // stop writing to a broken pipe forever
+      return
+    }
+    // Don't rethrow — logging must never crash the process.
+  }
+}
+
 function log(msg: string): void {
   if (!DEBUG) return
   const line = `[${new Date().toISOString()}] ${msg}\n`
-  process.stderr.write(line)
+  safeStderrWrite(line)
   try { appendFileSync(LOG_FILE, line) } catch {}
 }
 /** Always log to file regardless of DEBUG — for critical events */
 function logCritical(msg: string): void {
   const line = `[${new Date().toISOString()}] ${msg}\n`
-  process.stderr.write(line)
+  safeStderrWrite(line)
   try { appendFileSync(LOG_FILE, line) } catch {}
 }
 /** Safe MCP notification — catches broken pipe errors instead of crashing */
@@ -203,10 +230,28 @@ function tgRequest(op: string, args: Record<string, unknown>, timeoutMs = 30_000
 
 // Last-resort safety net — without these the process dies silently on any
 // unhandled promise rejection. With them it logs and keeps serving tools.
+//
+// EPIPE gets special handling: a broken pipe on stdout/stderr means the
+// MCP transport (Claude Code) has gone away and we can never recover.
+// If we *don't* exit on EPIPE the process loops forever — logCritical
+// itself writes to stderr, hits EPIPE again, fires uncaughtException
+// again, and so on. We've watched a single dead session produce 30M log
+// lines / 2.4 GB on disk that way.
+function isEpipe(err: unknown): boolean {
+  return !!(err && typeof err === 'object' && (err as { code?: string }).code === 'EPIPE')
+}
 process.on('unhandledRejection', err => {
+  if (isEpipe(err)) {
+    safeStderrWrite('telegram channel: stdio EPIPE — MCP transport gone, exiting\n')
+    process.exit(0)
+  }
   logCritical(`UNHANDLED REJECTION: ${err}`)
 })
 process.on('uncaughtException', err => {
+  if (isEpipe(err)) {
+    safeStderrWrite('telegram channel: stdio EPIPE — MCP transport gone, exiting\n')
+    process.exit(0)
+  }
   logCritical(`UNCAUGHT EXCEPTION: ${err}`)
 })
 

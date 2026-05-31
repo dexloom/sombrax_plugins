@@ -1846,8 +1846,19 @@ function spawnClaudeSession(chatId: string, topics: string, cwd: string, resumeI
   // Uses expect to auto-accept the development channel confirmation prompt,
   // then hands control back to the user via interact.
   const channelPrompt = `You are connected to a Telegram channel. chat_id=${chatId} message_thread_id=${topics}. When replying to Telegram messages, always pass chat_id="${chatId}" and message_thread_id="${topics}" to the reply tool. You do not need to ask for these values — they are fixed for this session.`
+  // Channel reference form depends on how the plugin reaches Claude:
+  //   plugin:<name>@<marketplace>  — when installed via /plugin install
+  //                                  (the production case — looks up the MCP
+  //                                  server inside the plugin manifest)
+  //   server:<mcp-name>            — when the MCP server is passed inline
+  //                                  via --mcp-config (dev sandbox without
+  //                                  installing the plugin)
+  // sombrax-telegram is published through the `sombrax-plugins` marketplace,
+  // so the plugin form is what works once it's installed. CLAUDE_CHANNEL_REF
+  // is an override for ad-hoc testing of a different copy.
+  const channelRef = process.env.CLAUDE_CHANNEL_REF ?? 'plugin:sombrax-telegram@sombrax-plugins'
   const claudeArgs = [
-    '--dangerously-load-development-channels', 'server:sombrax-telegram',
+    '--dangerously-load-development-channels', channelRef,
     '--dangerously-skip-permissions',
     '--permission-mode', 'bypassPermissions',
     '--append-system-prompt', JSON.stringify(channelPrompt),
