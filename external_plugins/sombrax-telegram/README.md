@@ -93,7 +93,7 @@ Claude Code accepts two forms for `--dangerously-load-development-channels`:
 
 | Form | Use when |
 |---|---|
-| `plugin:sombrax-telegram@sombrax-plugins` | The plugin is installed via `/plugin install` (production). Claude reads the MCP server from the plugin's manifest. |
+| `plugin:sombrax-telegram:sombrax-telegram` | The plugin is installed via `/plugin install` (production). Claude reads the MCP server from the plugin's manifest. |
 | `server:sombrax-telegram` | The MCP server is provided inline via a project `.mcp.json` (dev sandbox without installing the plugin). |
 
 All the examples below show the `plugin:` form. Swap in `server:sombrax-telegram` if you're running from a local checkout with a project-level `.mcp.json`.
@@ -103,7 +103,7 @@ All the examples below show the `plugin:` form. Swap in `server:sombrax-telegram
 No listener needed. The MCP server polls Telegram directly:
 
 ```bash
-claude --dangerously-load-development-channels plugin:sombrax-telegram@sombrax-plugins
+claude --dangerously-load-development-channels plugin:sombrax-telegram:sombrax-telegram
 ```
 
 ### Multi-session with topic routing
@@ -120,15 +120,15 @@ bun listener.ts
 ```bash
 # Session for topic 2 (dev agent)
 TELEGRAM_DEV=1 TELEGRAM_TOPIC=2 claude \
-  --dangerously-load-development-channels plugin:sombrax-telegram@sombrax-plugins
+  --dangerously-load-development-channels plugin:sombrax-telegram:sombrax-telegram
 
 # Session for topic 22 (dev agent)
 TELEGRAM_DEV=1 TELEGRAM_TOPIC=22 claude \
-  --dangerously-load-development-channels plugin:sombrax-telegram@sombrax-plugins
+  --dangerously-load-development-channels plugin:sombrax-telegram:sombrax-telegram
 
 # Supervisor monitoring all topics (observer)
 TELEGRAM_PROJECT_MANAGER=1 TELEGRAM_TOPIC=* claude \
-  --dangerously-load-development-channels plugin:sombrax-telegram@sombrax-plugins
+  --dangerously-load-development-channels plugin:sombrax-telegram:sombrax-telegram
 ```
 
 The listener resolves `TELEGRAM_CHAT_ID` from `access.json` (or its own env), so the agent process doesn't need it. See *Three-kind role model* in `REFACTORING_PLAN.md` for `TELEGRAM_DEV` / `TELEGRAM_PROJECT_MANAGER` / `TELEGRAM_PRODUCT_MANAGER`.
