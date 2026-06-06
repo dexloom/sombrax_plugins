@@ -238,7 +238,13 @@ function tgRequest(op: string, args: Record<string, unknown>, timeoutMs = 30_000
 // again, and so on. We've watched a single dead session produce 30M log
 // lines / 2.4 GB on disk that way.
 function isEpipe(err: unknown): boolean {
-  return !!(err && typeof err === 'object' && (err as { code?: string }).code === 'EPIPE')
+  // Bun does not always set `.code` on a broken-pipe write error — the only
+  // reliable marker is then the message ("EPIPE: broken pipe, write"). Match
+  // both, otherwise the uncaughtException handler logs instead of exiting and
+  // busy-loops, flooding server.log to many GB (we saw 15 GB).
+  const e = err as { code?: string; message?: string }
+  return !!(e && typeof e === 'object' &&
+    (e.code === 'EPIPE' || /\bEPIPE\b/.test(e.message ?? '')))
 }
 process.on('unhandledRejection', err => {
   if (isEpipe(err)) {
