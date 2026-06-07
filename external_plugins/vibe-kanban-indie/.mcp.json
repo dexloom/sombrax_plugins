@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "vibe-kanban": {
+      "command": "vibe-kanban-mcp",
+      "args": ["--mode", "global"],
+      "env": {
+        "VIBE_HEADED_LOCAL_CONTROL": "true"
+      }
+    }
+  }
+}
