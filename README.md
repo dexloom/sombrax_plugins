@@ -7,6 +7,7 @@ A plugin marketplace for Claude Code by [dexloom](https://github.com/dexloom).
 | Plugin | Description |
 |--------|-------------|
 | [sombrax-telegram](external_plugins/sombrax-telegram/) | Multi-session Telegram channel with topic routing and listener daemon |
+| [sombrax-codex](external_plugins/sombrax-codex/) | Codex CLI code review, plan review, and advisor skills |
 
 ## Installation
 
@@ -16,6 +17,7 @@ A plugin marketplace for Claude Code by [dexloom](https://github.com/dexloom).
 
 # Install a plugin
 /plugin install sombrax-telegram@sombrax-plugins
+/plugin install sombrax-codex@sombrax-plugins
 ```
 
 ## License

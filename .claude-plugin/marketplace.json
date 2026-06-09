@@ -25,6 +25,23 @@
         "topics",
         "sombrax"
       ]
+    },
+    {
+      "name": "sombrax-codex",
+      "source": "./external_plugins/sombrax-codex",
+      "description": "Codex CLI helpers for Claude Code — iterative code review, plan review, and architectural second-opinion advisor",
+      "version": "0.1.0",
+      "author": {
+        "name": "dexloom"
+      },
+      "keywords": [
+        "codex",
+        "code-review",
+        "review",
+        "advisor",
+        "second-opinion",
+        "sombrax"
+      ]
     }
   ]
 }
