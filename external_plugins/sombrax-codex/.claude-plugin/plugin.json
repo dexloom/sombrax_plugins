@@ -1,0 +1,6 @@
+{
+  "name": "sombrax-codex",
+  "description": "Codex CLI helpers for Claude Code — iterative code review, plan review, and a second-opinion advisor. Skills: /sombrax-codex:codex-review, codex-review-plan, codex-advisor.",
+  "version": "0.1.0",
+  "keywords": ["codex", "code-review", "review", "advisor", "second-opinion", "sombrax"]
+}
