@@ -1,8 +1,8 @@
 {
   "mcpServers": {
     "vibe-kanban": {
-      "command": "vibe-kanban-mcp",
-      "args": ["--mode", "global"],
+      "command": "npx",
+      "args": ["-y", "vibe-kanban-indie@latest", "--mcp"],
       "env": {
         "VIBE_HEADED_LOCAL_CONTROL": "true"
       }

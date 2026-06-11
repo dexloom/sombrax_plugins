@@ -36,10 +36,10 @@ sessions, poll executions, and unblock them when they ask for approval.
 
 ## Prerequisites
 
-1. **The `vibe-kanban-mcp` binary must be on your `PATH`.** The bundled
-   `.mcp.json` launches `vibe-kanban-mcp --mode global`. Install it however
-   vibe-kanban-indie ships it (e.g. into `~/.local/bin`) and make sure that
-   directory is on `PATH`. If the binary isn't found, the MCP server won't start.
+1. **Node.js >= 20.19 with `npx` on your `PATH`.** The bundled `.mcp.json`
+   launches the MCP server via `npx -y vibe-kanban-indie@latest --mcp`, which
+   downloads the published `vibe-kanban-indie` npm package and runs its
+   `vibe-kanban-mcp` binary in global mode — no manual binary install needed.
 2. **A vibe-kanban backend must be running.** The MCP is a thin client over the
    vibe-kanban HTTP API. It resolves the backend URL in this order:
    1. `VIBE_BACKEND_URL` (full URL, e.g. `http://127.0.0.1:8080`)

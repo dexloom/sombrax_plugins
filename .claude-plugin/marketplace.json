@@ -30,7 +30,7 @@
       "name": "vibe-kanban-indie",
       "source": "./external_plugins/vibe-kanban-indie",
       "description": "Orchestrate vibe-kanban-indie from Claude Code — drive the kanban board and a crew of coding agents via a bundled MCP server, with vibe-kanban and product-manager skills, orchestrator and product agents, lifecycle prompts, and looped-orchestrator launchers",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "author": {
         "name": "dexloom"
       },
