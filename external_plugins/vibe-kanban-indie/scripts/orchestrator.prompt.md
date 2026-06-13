@@ -138,17 +138,22 @@ On this tick, do one full sweep of state:
 5. Spawn work for IN PROGRESS cards that have no workspace — the ONLY spawn case.
    The operator signals "start this" by moving a card into the IN PROGRESS column;
    that — not a timer — is what greenlights a spawn. NEVER spawn for a TODO card.
-     • Card in IN PROGRESS with NO running workspace → FIRST clear the ARTIFACT
-       GATES, THEN `start_workspace`. Read `get_issue`: if `requires_spec`/
-       `requires_plan` and the matching artifact isn't `ready`, run
-       `generate_issue_artifact(spec)` (then `plan`, which needs the ready spec),
-       polling `get_issue_artifact` until `ready` (escalate on `failed` — don't
-       loop forever). Only once required artifacts are ready do you
-       `start_workspace` (resolve `repo_id` via `list_repos`, set `executor`,
-       `repositories:[{repo_id,branch}]`, pass its `issue_id`). New workspaces get
-       `./SPEC.md` + `./IMPLEMENTATION_PLAN.md` automatically, so the plan phase
-       SKIPS `prompts/plan.md` when a ready plan exists. One agent per card. Leave
-       it In Progress. You OWN this agent's lifecycle (TWO MODES → drive it).
+     • Card in IN PROGRESS with NO running workspace → `start_workspace` (resolve
+       `repo_id` via `list_repos`, set `executor`, `repositories:[{repo_id,branch}]`,
+       pass its `issue_id`), then run the SPEC & PLAN STAGES THE CARD'S PIPELINE
+       LISTS before driving develop. The `## Pipeline` block in the card description
+       (`get_issue`) is the source of truth for which stages run — there are no
+       `requires_spec`/`requires_plan` flags. If it lists a spec stage, spawn the
+       `product` subagent (`Agent(product)`) with the card + the workspace root path
+       to write `SPEC.md` there; if it lists a plan stage, spawn the `planner`
+       subagent (`Agent(planner)`) the same way to write `IMPLEMENTATION_PLAN.md`
+       (spec first — the plan grounds in it). Resolve the workspace root path with a
+       shell (`git worktree list`, or the headed session's cwd); it's the dir holding
+       `CLAUDE.md`, one level above the repo worktrees. Confirm each file exists
+       (`Read` it) before moving on; escalate to me if a subagent can't produce it.
+       With the files in place the coding agent reads them and SKIPS `prompts/plan.md`.
+       One agent per card. Leave it In Progress. You OWN this agent's lifecycle
+       (TWO MODES → drive it).
      • Card in IN PROGRESS that already has a workspace → adopt/steer it, never
        spawn (handled by steps 2 & 4).
      • Card in TODO with no workspace → do NOTHING (no spawn). It waits for the

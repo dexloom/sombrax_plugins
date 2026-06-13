@@ -1,19 +1,16 @@
 <!--
 plan.md — the canonical planning method. Planning is owned by the dedicated
-`planner` agent (it produces the card's Plan artifact, which materialises as
-`IMPLEMENTATION_PLAN.md` at the workspace root); this prompt is that agent's
-shape/method. It is also kept self-contained so a self-driving coding agent can be
-handed the same prompt directly when no separate planner step is run. Fill
-{{TASK}} with the card's title + spec before sending.
+`planner` agent (it writes `IMPLEMENTATION_PLAN.md` at the workspace root); this
+prompt is that agent's shape/method. It is also kept self-contained so a
+self-driving coding agent can be handed the same prompt directly when no separate
+planner step is run. Fill {{TASK}} with the card's title + spec before sending.
 -->
 You are planning the task below for this repository. **Before any code is
 written**, produce an implementation plan and save it as `IMPLEMENTATION_PLAN.md`
 at the **workspace root** (next to `CLAUDE.md`, one level above the git repos —
 that location is outside every repo worktree, so the file is never committed and
 needs no gitignore entry). It guides this job and is left behind when the branch
-merges. (As the `planner` agent you instead persist it as the card's Plan artifact
-via the vibe-kanban MCP; the board materialises it as that same file in new
-workspaces.)
+merges.
 
 If `SPEC.md` exists at the workspace root, it is the authoritative spec for this
 task — read it first and ground the plan in it.

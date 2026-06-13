@@ -5,17 +5,18 @@ Reusable prompts the **`orchestrator`** agent sends to the **one** Claude Code
 
 This matches vibe-kanban's grain: it runs **one coding agent per session**, and
 you interact with it by sending **prompts**. The **spec** and **plan** stages,
-though, are owned by *separate* agents — the **`product`** agent writes the spec
-and the **`planner`** agent writes the plan (each persisting a board artifact) —
-so the coding agent starts from a ready `SPEC.md` + `IMPLEMENTATION_PLAN.md` and
-these prompts drive only what *it* does: review, and step-by-step development.
+though, are owned by *separate* agents the orchestrator spawns — the **`product`**
+agent writes `SPEC.md` and the **`planner`** agent writes `IMPLEMENTATION_PLAN.md`,
+each at the workspace root — so the coding agent starts from a ready `SPEC.md` +
+`IMPLEMENTATION_PLAN.md` and these prompts drive only what *it* does: review, and
+step-by-step development.
 Review uses **codex**, delivered as a prompt the agent runs locally (it's already
 in the worktree with the code).
 
 ## The set
 | file | purpose | placeholders |
 |------|---------|--------------|
-| `plan.md` | The canonical planning method — the **`planner`** agent's shape (it persists the card's Plan artifact, materialised as `IMPLEMENTATION_PLAN.md` at the workspace root). Self-contained so it can also be handed directly to a self-driving coding agent when no separate planner step runs. | `{{TASK}}` |
+| `plan.md` | The canonical planning method — the **`planner`** agent's shape (it writes `IMPLEMENTATION_PLAN.md` at the workspace root). Self-contained so it can also be handed directly to a self-driving coding agent when no separate planner step runs. | `{{TASK}}` |
 | `codex-review.md` | Gate with codex: `codex exec --sandbox read-only` for the plan, `codex review --base <base>` for the diff. Reports `PASS`/`CHANGES REQUESTED`. | `{{BASE_BRANCH}}` |
 | `step.md` | Implement one plan step, then stop. | `{{N}}`, `{{STEP}}` |
 

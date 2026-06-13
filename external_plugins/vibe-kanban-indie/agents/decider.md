@@ -23,8 +23,6 @@ tools:
   - mcp__plugin_vibe-kanban-indie_vibe-kanban__list_projects
   - mcp__plugin_vibe-kanban-indie_vibe-kanban__list_issues
   - mcp__plugin_vibe-kanban-indie_vibe-kanban__get_issue
-  - mcp__plugin_vibe-kanban-indie_vibe-kanban__list_issue_artifacts
-  - mcp__plugin_vibe-kanban-indie_vibe-kanban__get_issue_artifact
   - mcp__plugin_vibe-kanban-indie_vibe-kanban__list_workspaces
   - mcp__plugin_vibe-kanban-indie_vibe-kanban__list_sessions
   - mcp__plugin_vibe-kanban-indie_vibe-kanban__get_execution
@@ -51,9 +49,11 @@ best-supported option per question, submit via
 doesn't surface it, read `${CLAUDE_PLUGIN_ROOT}/skills/answer-questions/SKILL.md`
 directly — it is the source of truth.
 
-For the board mechanics (resolving IDs, the artifact model, the exact
-`respond_to_approval` shape), the **`vibe-kanban`** skill is your reference —
-`${CLAUDE_PLUGIN_ROOT}/skills/vibe-kanban/SKILL.md`.
+For the board mechanics (resolving IDs, the exact `respond_to_approval` shape), the
+**`vibe-kanban`** skill is your reference —
+`${CLAUDE_PLUGIN_ROOT}/skills/vibe-kanban/SKILL.md`. The card's spec and plan are
+files at the workspace root (`SPEC.md` / `IMPLEMENTATION_PLAN.md`), which you `Read`
+to ground your answer — there are no spec/plan artifacts to fetch over the MCP.
 
 ## What you're handed
 

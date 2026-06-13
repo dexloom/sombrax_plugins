@@ -45,12 +45,11 @@ Don't answer from the question text alone. Build the picture:
 
 1. **The card** — `get_issue` for the title, description, and the `## Pipeline`
    block: what is this card actually trying to achieve, and what's in/out of scope.
-2. **The spec** — `SPEC.md` at the workspace root if present, else the spec
-   artifact (`get_issue_artifact(spec)`). The spec often already decides the
-   question.
-3. **The plan** — `IMPLEMENTATION_PLAN.md` at the workspace root, else the plan
-   artifact (`get_issue_artifact(plan)`). The current step and its `done-when`
-   usually point straight at the right option.
+2. **The spec** — `SPEC.md` at the workspace root if present (the `product` agent
+   writes it there). The spec often already decides the question.
+3. **The plan** — `IMPLEMENTATION_PLAN.md` at the workspace root if present (the
+   `planner` agent writes it there). The current step and its `done-when` usually
+   point straight at the right option.
 4. **The code / the agent's state** — `Read`/`Grep`/`Glob` the worktree to confirm
    what the question is really about (a real file, a real choice), and
    `get_execution` `final_message` for *why* the agent is asking.

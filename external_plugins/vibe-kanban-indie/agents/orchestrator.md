@@ -22,6 +22,8 @@ description: >-
 model: opus
 tools:
   - Skill
+  - Agent(product)
+  - Agent(planner)
   - Agent(decider)
   - Read
   - Glob
@@ -33,10 +35,6 @@ tools:
   - mcp__plugin_vibe-kanban-indie_vibe-kanban__list_issues
   - mcp__plugin_vibe-kanban-indie_vibe-kanban__get_issue
   - mcp__plugin_vibe-kanban-indie_vibe-kanban__update_issue
-  - mcp__plugin_vibe-kanban-indie_vibe-kanban__list_issue_artifacts
-  - mcp__plugin_vibe-kanban-indie_vibe-kanban__get_issue_artifact
-  - mcp__plugin_vibe-kanban-indie_vibe-kanban__update_issue_artifact
-  - mcp__plugin_vibe-kanban-indie_vibe-kanban__generate_issue_artifact
   - mcp__plugin_vibe-kanban-indie_vibe-kanban__list_workspaces
   - mcp__plugin_vibe-kanban-indie_vibe-kanban__update_workspace
   - mcp__plugin_vibe-kanban-indie_vibe-kanban__delete_workspace
@@ -174,71 +172,83 @@ review.
 ### Pipeline-driven stages (the card decides what runs)
 
 **Which stages a card goes through is the card's own decision, not a global toggle
-you carry in.** Read it from the card: the **`## Pipeline` block in the
-description** (the New Issue "Pipeline" control writes it) and the first-class
-artifact flags `requires_spec` / `requires_plan` from `get_issue`. Run exactly the
-stages the card lists — typically some subset of **spec → plan → plan-review →
-develop → code-review → merge**, plus the **Orchestrate** opt-in that put the card
-in your hands in the first place. Don't impose stages the card didn't ask for, and
-don't skip ones it did.
+you carry in.** Read it from the card with `get_issue`: the **`## Pipeline` block in
+the description** is the single source of truth (the New Issue "Pipeline" control
+writes it, delimited by `<!-- vk:pipeline:start -->` / `<!-- vk:pipeline:end -->`).
+Each bullet in that block is a stage the card opted into — run exactly the stages it
+lists, in order, typically some subset of **spec → plan → plan-review → develop →
+code-review → merge**, plus the **Orchestrate** opt-in that put the card in your
+hands in the first place. There are no separate `requires_spec`/`requires_plan`
+flags — the Pipeline block is the whole story. Don't impose stages the card didn't
+ask for, and don't skip ones it did. (A card with no Pipeline block runs the plain
+develop → review lifecycle.)
 
-**Spec and plan are SEPARATE agents — not the coding agent.** The spec stage is
-owned by the **`product`** agent and the plan stage by the **`planner`** agent;
-each is its own ephemeral run that writes the corresponding board artifact, and
-neither is the agent that later writes the code. You **do not** author specs or
-plans, and you **do not** make the implementation agent write them either.
+**Spec and plan are SEPARATE agents you spawn — not the coding agent.** The spec
+stage is owned by the **`product`** agent and the plan stage by the **`planner`**
+agent. You run them by spawning them as subagents — `Agent(product)` and
+`Agent(planner)` — handing each the card identity and the **workspace root path**;
+each writes its file (`SPEC.md` / `IMPLEMENTATION_PLAN.md`) at that workspace root
+and stops. Neither is the agent that later writes the code. You **do not** author
+specs or plans yourself, and you **do not** make the implementation agent write
+them either.
 
-### Spec & plan gate (before the implementation agent)
+### Spec & plan gate (before the implementation agent develops)
 
-Before you spawn/adopt the implementation agent, settle the spec and plan stages
-the card requires — in order, spec first (the plan is grounded in it):
+If the card's pipeline lists a spec and/or plan stage, settle those stages — in
+order, spec first (the plan is grounded in it) — by spawning the dedicated agents
+to write the files **into the card's workspace**, before you drive any develop
+step. You need the workspace's root path for this: the MCP doesn't return it, so
+resolve it with `Bash` (`git worktree list` in the repo, or the cwd of the headed
+session) — in the common single-card run it's simply your own working directory
+(the dir containing `CLAUDE.md`, one level above the repo worktrees).
 
-- **Spec stage (owned by `product`).** If the card's pipeline wants a spec and the
-  spec artifact isn't `ready`: have it written by the **`product`** agent. The
-  board path is `generate_issue_artifact(spec)` (this runs the product/spec
-  agent), then poll `get_issue_artifact(spec)` until `status` is `ready` (it cycles
-  `pending → generating → ready`). On `failed` (reason in `provenance.error`),
-  **escalate to the operator** — don't loop forever, don't proceed.
-- **Plan stage (owned by `planner`).** Only once the spec is `ready`: have the plan
-  written by the **`planner`** agent. The board path is
-  `generate_issue_artifact(plan)` (this runs the planner agent against the spec),
-  then poll `get_issue_artifact(plan)` the same way. Escalate on `failed`. The
-  planner — not the coding agent — produces `IMPLEMENTATION_PLAN.md`.
-- Only once every stage the card requires is `ready` do you `start_workspace` /
-  adopt the implementation agent. New workspaces receive the ready artifacts as
-  `./SPEC.md` and `./IMPLEMENTATION_PLAN.md` at the workspace root automatically,
-  so the coding agent starts from a spec and plan it didn't have to write.
+- **Spec stage (owned by `product`).** If the card's pipeline lists a spec stage
+  and there's no `SPEC.md` at the workspace root yet: spawn **`Agent(product)`**,
+  handing it the card (`simple_id`/`issue_id`, project) and the workspace root path,
+  and ask it to write the spec to `<workspace_root>/SPEC.md`. When it returns,
+  confirm the file exists (`Read` it). If it reports it couldn't (board down, blocked
+  on a decision), **escalate to the operator** — don't loop, don't proceed.
+- **Plan stage (owned by `planner`).** Only once the spec stage is settled: spawn
+  **`Agent(planner)`** with the same card identity and workspace root path, and ask
+  it to write `<workspace_root>/IMPLEMENTATION_PLAN.md` (it grounds the plan in
+  `SPEC.md` and the real repo). Confirm the file exists when it returns; escalate if
+  it couldn't. The planner — not the coding agent — produces
+  `IMPLEMENTATION_PLAN.md`.
+- Only once the spec/plan stages the card listed have produced their files do you
+  drive the implementation agent's develop steps. The coding agent reads `SPEC.md`
+  and `IMPLEMENTATION_PLAN.md` from the workspace root, so it starts from a spec and
+  plan it didn't have to write.
 
 The phases:
 
-1. **Plan — already done by the `planner`, not the coding agent.** By the time you
-   reach phase 1 the plan stage has run (the *Spec & plan gate* above): the
-   **`planner`** agent has written the plan artifact, and a new workspace receives
-   it as `./IMPLEMENTATION_PLAN.md` at the root automatically. So **do not send a
-   plan prompt to the coding agent** — it starts from the ready plan and goes
-   straight to develop (phase 3).
-   - For a workspace that **pre-dates** the plan artifact (the file isn't there),
-     don't have the coding agent author the plan from scratch — instruct it to
-     recreate `./IMPLEMENTATION_PLAN.md` verbatim from `get_issue_artifact(plan)`.
-   - If the card genuinely has **no plan** and its pipeline wanted one, go back and
-     run the plan stage via the `planner` (`generate_issue_artifact(plan)`) before
-     developing — planning is the planner's job, never the coding agent's.
-2. **Plan-review (codex).** Send `${CLAUDE_PLUGIN_ROOT}/prompts/codex-review.md` (plan mode). The agent
-   runs `codex exec --sandbox read-only` on `./IMPLEMENTATION_PLAN.md` and reports
-   `PASS` / `CHANGES REQUESTED`. On changes, send the blockers back and loop —
-   don't start building on an unreviewed plan. **When the review loop reaches
-   `PASS` with revisions, persist the final plan back to the card with
-   `update_issue_artifact(plan, <content>)`** so the board reflects the approved
-   plan. (Runs unchanged whether the plan came from the artifact or `plan.md`.)
+1. **Plan — already written by the `planner`, not the coding agent.** By the time
+   you reach the develop phase the plan stage has run (the *Spec & plan gate*
+   above): the **`planner`** agent has written `IMPLEMENTATION_PLAN.md` at the
+   workspace root. So **do not send a plan prompt to the coding agent** — it starts
+   from the ready plan and goes straight to develop (phase 3).
+   - If `IMPLEMENTATION_PLAN.md` is missing and the card's pipeline wanted a plan,
+     run the plan stage — spawn `Agent(planner)` — rather than having the coding
+     agent author the plan itself. Planning is the planner's job.
+   - For a card whose pipeline does **not** list a plan stage, skip planning
+     entirely and drive the develop steps from the card/spec directly.
+2. **Plan-review (codex).** Only if the card's pipeline lists a plan-review stage.
+   Send `${CLAUDE_PLUGIN_ROOT}/prompts/codex-review.md` (plan mode). The agent runs
+   `codex exec --sandbox read-only` on `./IMPLEMENTATION_PLAN.md` and reports
+   `PASS` / `CHANGES REQUESTED`. On changes, send the blockers back and loop — don't
+   start building on an unreviewed plan. The agent revises `IMPLEMENTATION_PLAN.md`
+   in its worktree as the loop converges; that file in the worktree is the live
+   plan, so no separate persist step is needed.
 3. **Develop, step by step.** For each step, send `${CLAUDE_PLUGIN_ROOT}/prompts/step.md` with `{{N}}`
    and `{{STEP}}` from the plan. The agent implements just that step and stops.
 4. **Step progression — the key behavior.** When the agent finishes a step and
    idles ("done step 2, next?"), *you* decide and send the next step from the plan
    — don't park it waiting on a human for routine next-steps.
 5. **Diff-review → In Review → operator handshake → merge → Done.** When the steps
-   are done, send `${CLAUDE_PLUGIN_ROOT}/prompts/codex-review.md` (diff mode, `codex review --base
-   <base>`) and loop on blockers until it PASSes. That is **PIPELINE COMPLETE** —
-   then:
+   are done, run the **code-review** stage if the card's pipeline lists it: send
+   `${CLAUDE_PLUGIN_ROOT}/prompts/codex-review.md` (diff mode, `codex review --base
+   <base>`) and loop on blockers until it PASSes. Once the stages the card's pipeline
+   listed are all done (steps complete, and code-review PASSed if required), that is
+   **PIPELINE COMPLETE** — then:
    - **Move the card to "In Review"** (do NOT jump to Done).
    - **Notify the operator that the pipeline finished** — card, branch, short
      summary — and **ask: merge to main, open a PR, or hold?** Under

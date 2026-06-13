@@ -15,7 +15,7 @@ sessions, poll executions, and unblock them when they ask for approval.
 | **`answer-questions` skill** | The method for answering an agent's stale question prompt (questionnaire) on the operator's behalf — ground it in the card/spec/plan, pick, submit. |
 | **`orchestrator` agent** | Progress-aware supervisor: cards → running agents → driven to done. Sequences the separate spec (`product`) and plan (`planner`) agents, then drives the coding agent (steps → codex review). |
 | **`product` agent** | Product-intake agent: rough requirements → a well-formed card (spec) a planner can pick up. |
-| **`planner` agent** | Planning agent: a specced card → a grounded, step-by-step `IMPLEMENTATION_PLAN` (persisted as the card's Plan artifact). Separate from `product` and from the coding agent. |
+| **`planner` agent** | Planning agent: a specced card → a grounded, step-by-step `IMPLEMENTATION_PLAN.md` written at the workspace root. Separate from `product` and from the coding agent. |
 | **`decider` agent** | Answers an agent's stale question prompt on the operator's behalf (runs `answer-questions`). The orchestrator spawns it after a two-tick grace when `auto-answer-questions` is on. |
 | **`prompts/`** | Reusable lifecycle prompts (`plan.md` = the planner's method; `step.md`, `codex-review.md` drive the coding agent). |
 | **`scripts/`** | Launchers for a looped orchestrator (with optional Telegram), plus backend auto-resolution. |
