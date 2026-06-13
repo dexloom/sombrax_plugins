@@ -1,13 +1,16 @@
 #!/usr/bin/env bash
 #
-# orchestrator.sh — launch a Claude Code session that drives the vibe-kanban
-# board and re-checks the state of every running agent on a fixed interval,
-# using the `/loop` skill.
+# orchestrator.sh — launch the orchestrator AGENT as the session agent
+# (`claude --agent vibe-kanban-indie:orchestrator`) and re-run its board sweep on a
+# fixed interval via the `/loop` skill.
 #
-# `/loop <interval> <prompt>` re-runs <prompt> every <interval>. Here the looped
-# prompt is the orchestrator sweep in scripts/orchestrator.prompt.md: survey the
-# board, poll executions, surface approvals, send the next lifecycle step to any
-# idle agent, and report. Default interval is 5m.
+# The orchestrator's full behavior lives in its agent definition; launching it with
+# --agent (rather than as a Task subagent) makes it the session itself. `/loop
+# <interval> <prompt>` re-runs the per-tick sweep in scripts/orchestrator.prompt.md
+# every <interval>: monitor running agents via the MCP, reflect board status,
+# deliver completed pipelines (operator merge handshake), spawn the decider for
+# stale questions, start agents for In-Progress/Orchestrate cards with none, and
+# report. Default interval is 5m.
 #
 # Usage:
 #   scripts/orchestrator.sh            # check every 5 minutes
@@ -38,5 +41,27 @@ fi
 
 LOOP_BODY="$(cat "${PROMPT_FILE}")"
 
+# Launch the orchestrator AGENT directly (not as a Task subagent). Its full behavior
+# lives in the agent definition; the looped prompt is just the per-tick sweep brief.
+#
+# In this standalone/dev mode the plugin is NOT installed via the marketplace, so
+# `--plugin-dir` loads it from this checkout for the session — that's what makes the
+# `vibe-kanban-indie:orchestrator` agent name resolve (merely cd-ing here does not
+# load it). It also loads the bundled `.mcp.json`, so don't ALSO have the plugin
+# installed via the marketplace at the same time (double MCP registration — see
+# ../README.md "pick one mode"). PLUGIN_DIR defaults to this checkout (the dir we
+# cd'd into above); override ORCH_AGENT to use a different agent name.
+# Resolve to an ABSOLUTE path now (default = this checkout) — must happen before the
+# cd below, or a relative PLUGIN_DIR override would resolve against the temp dir.
+PLUGIN_DIR="$(cd "${PLUGIN_DIR:-$(pwd)}" && pwd)"
+ORCH_AGENT="${ORCH_AGENT:-vibe-kanban-indie:orchestrator}"
+
+# Run from a neutral working directory so Claude does NOT also auto-discover this
+# plugin dir's project-level `.mcp.json` — `--plugin-dir` already registers the
+# bundled MCP, and discovering the same `.mcp.json` from cwd would start a duplicate
+# vibe-kanban server. (LOOP_BODY is already read and the backend env already
+# exported, so cwd no longer matters here.)
+cd "$(mktemp -d)"
+
 # Kick off an interactive session that immediately arms the /loop timer.
-exec claude "/loop ${INTERVAL} ${LOOP_BODY}"
+exec claude --plugin-dir "${PLUGIN_DIR}" --agent "${ORCH_AGENT}" "/loop ${INTERVAL} ${LOOP_BODY}"

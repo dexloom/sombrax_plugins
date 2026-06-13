@@ -13,11 +13,11 @@ sessions, poll executions, and unblock them when they ask for approval.
 | **`vibe-kanban` skill** | The orchestration playbook — board/workspace/session/execution control. |
 | **`product-manager` skill** | Turns a rough brief into a dev-ready vibe-kanban card (spec → issue). |
 | **`answer-questions` skill** | The method for answering an agent's stale question prompt (questionnaire) on the operator's behalf — ground it in the card/spec/plan, pick, submit. |
-| **`orchestrator` agent** | Progress-aware supervisor: cards → running agents → driven to done. Sequences the separate spec (`product`) and plan (`planner`) agents, then drives the coding agent (steps → codex review). |
-| **`product` agent** | Product-intake agent: rough requirements → a well-formed card (spec) a planner can pick up. |
-| **`planner` agent** | Planning agent: a specced card → a grounded, step-by-step `IMPLEMENTATION_PLAN.md` written at the workspace root. Separate from `product` and from the coding agent. |
+| **`orchestrator` agent** | Lean supervisor (launched as the session agent via `claude --agent`): starts a coding agent for a card that should run, **monitors** it via the MCP, reflects board status, **delivers** the result (operator merge handshake → Done), and spawns `decider` for stale questions. It does **not** drive coding step-by-step — each coding agent runs its own pipeline. |
+| **`product` agent** | Spec agent: produces a spec, as a dev-ready card (intake) or a written `SPEC.md` (when a coding agent spawns it for the spec stage). |
+| **`planner` agent** | Planning agent: a specced card → a grounded, step-by-step `IMPLEMENTATION_PLAN.md` written at the workspace root. A coding agent spawns it for the plan stage. |
 | **`decider` agent** | Answers an agent's stale question prompt on the operator's behalf (runs `answer-questions`). The orchestrator spawns it after a two-tick grace when `auto-answer-questions` is on. |
-| **`prompts/`** | Reusable lifecycle prompts (`plan.md` = the planner's method; `step.md`, `codex-review.md` drive the coding agent). |
+| **`prompts/`** | Prompts for the self-driving coding agent: `pipeline.md` (the kickoff — work your pipeline to completion, delegating spec→`product`, plan→`planner`, reviews→`codex`), `plan.md` (the plan shape), `codex-review.md` (the codex review method). |
 | **`scripts/`** | Launchers for a looped orchestrator (with optional Telegram), plus backend auto-resolution. |
 | **bundled MCP server** | Registers the `vibe-kanban` MCP server (tools appear as `mcp__plugin_vibe-kanban-indie_vibe-kanban__*`). |
 
@@ -34,7 +34,7 @@ sessions, poll executions, and unblock them when they ask for approval.
 ### Skill / agent names once installed
 
 - Skills: `vibe-kanban-indie:vibe-kanban`, `vibe-kanban-indie:product-manager`, `vibe-kanban-indie:answer-questions`
-- Agents: `orchestrator`, `product`, `planner`, `decider` (delegate to them via the Task/Agent tool)
+- Agents: `orchestrator`, `product`, `planner`, `decider`. The `orchestrator` is meant to be launched as the session agent (`claude --agent vibe-kanban-indie:orchestrator`, as the `scripts/` do); `product`/`planner` are spawned by the coding agent (and usable directly via the Task/Agent tool); `decider` is spawned by the orchestrator.
 - MCP tools: `mcp__plugin_vibe-kanban-indie_vibe-kanban__<tool>`
 
 ## Prerequisites
@@ -73,7 +73,8 @@ assignees (`list_issue_assignees`, `assign_issue`, `unassign_issue`);
 relationships (`create_issue_relationship`, `delete_issue_relationship`).
 
 **Workspaces & sessions:** `start_workspace` (the main entrypoint — creates a
-workspace and starts its first coding-agent session), `link_workspace_issue`,
+workspace and starts its first coding-agent session; returns `workspace_id`,
+`session_id`, and the kickoff `execution_id` to monitor), `link_workspace_issue`,
 `update_workspace` / `delete_workspace`, `create_session`, `run_session_prompt`
 (async; returns an `execution_id` immediately), `get_execution`, `list_sessions`
 / `update_session`.

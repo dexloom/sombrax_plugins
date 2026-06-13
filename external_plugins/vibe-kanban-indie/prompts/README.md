@@ -1,43 +1,42 @@
 # Orchestration prompts
 
-Reusable prompts the **`orchestrator`** agent sends to the **one** Claude Code
-(Headed) agent it spawns per card, to drive it through the development lifecycle.
+Reusable prompts for the **one** Claude Code agent that vibe-kanban runs per card.
+In this model the coding agent **drives its own pipeline** — it gets the card (whose
+description carries a `## Pipeline` block) and runs it end to end without handing
+control back between steps. It is the *integrator*: it writes the code in the
+**develop** stage and **delegates** the specialist stages — the **spec** to the
+`product` subagent, the **plan** to the `planner` subagent, and both **reviews** to
+**codex**. The orchestrator does **not** feed it steps; it monitors, reflects the
+board, and delivers the result.
 
-This matches vibe-kanban's grain: it runs **one coding agent per session**, and
-you interact with it by sending **prompts**. The **spec** and **plan** stages,
-though, are owned by *separate* agents the orchestrator spawns — the **`product`**
-agent writes `SPEC.md` and the **`planner`** agent writes `IMPLEMENTATION_PLAN.md`,
-each at the workspace root — so the coding agent starts from a ready `SPEC.md` +
-`IMPLEMENTATION_PLAN.md` and these prompts drive only what *it* does: review, and
-step-by-step development.
-Review uses **codex**, delivered as a prompt the agent runs locally (it's already
-in the worktree with the code).
+So the prompt set is small: a **kickoff** that tells the agent to self-drive its
+pipeline (delegating as above), plus two **methods** for stages that benefit from a
+fixed shape (the plan's shape, the codex review). Review uses **codex**, run by the
+agent locally — it's already in the worktree with the code.
 
 ## The set
 | file | purpose | placeholders |
 |------|---------|--------------|
-| `plan.md` | The canonical planning method — the **`planner`** agent's shape (it writes `IMPLEMENTATION_PLAN.md` at the workspace root). Self-contained so it can also be handed directly to a self-driving coding agent when no separate planner step runs. | `{{TASK}}` |
+| `pipeline.md` | The **kickoff** the orchestrator sends once after starting the agent: work your card's `## Pipeline` to completion on your own; stop only for a genuine question or when complete and awaiting the merge decision. | `{{TASK}}`, `{{BASE_BRANCH}}` |
+| `plan.md` | The canonical planning method — the shape for `IMPLEMENTATION_PLAN.md` (written at the workspace root). Self-contained; used by the coding agent for its plan stage (or by the standalone `planner` agent if a human invokes it). | `{{TASK}}` |
 | `codex-review.md` | Gate with codex: `codex exec --sandbox read-only` for the plan, `codex review --base <base>` for the diff. Reports `PASS`/`CHANGES REQUESTED`. | `{{BASE_BRANCH}}` |
-| `step.md` | Implement one plan step, then stop. | `{{N}}`, `{{STEP}}` |
 
-## How the orchestrator uses them
+## How it fits together
 ```
-spec (product) → plan (planner) → codex-review (plan) ──loop until PASS──▶ step 1 → step 2 → … → codex-review (diff) → done
-                                   └─ spec & plan land as ./SPEC.md + ./IMPLEMENTATION_PLAN.md before the coding agent starts ─┘
+orchestrator: start_workspace (kickoff = filled pipeline.md as its prompt) ─▶ MONITOR (get_execution / final_message)
+coding agent (self-driven):  spec [→product] → plan [→planner] → plan-review [→codex] ──loop──▶ develop (its own code) → code-review [→codex] → STOP "complete, awaiting merge"
+orchestrator: pipeline complete ─▶ In Review ─▶ operator handshake ─▶ (on go) instruct agent to merge ─▶ Done
 ```
-The orchestrator owns progress (which stage/step we're on, what's next). It
-sequences the **`product`** (spec) and **`planner`** (plan) agents first, then
-fills the `{{placeholders}}` and sends the review/step prompts to the spawned
-coding agent via `run_session_prompt` or the agent's Telegram topic. The coding
-agent does the build and codex; the orchestrator **decides and sequences**, and
-never lets it idle waiting on a human for a routine next step.
+The orchestrator owns *progress visibility and delivery* (which step it's on, board
+status, the merge handshake); the coding agent owns *execution* — it writes the code
+and delegates spec→`product`, plan→`planner`, reviews→`codex`. The orchestrator never
+sends a per-step prompt.
 
 ## Placeholders
-- `{{TASK}}` — the card's title + spec.
-- `{{N}}`, `{{STEP}}` — the step number and text from `IMPLEMENTATION_PLAN.md`.
-- `{{BASE_BRANCH}}` — review base branch (default `main`).
+- `{{TASK}}` — the card's title + id (and spec, if you have it).
+- `{{BASE_BRANCH}}` — review/merge base branch (default `main`).
 
 ## Note
-These are prompts for the *spawned* agent, written to be self-contained (they
-don't assume a skill is installed in that agent's environment). The `codex-review`
-prompt falls back to an inline review if the `codex` CLI isn't available.
+These are prompts for the *coding* agent, written to be self-contained (they don't
+assume a skill is installed in that agent's environment). The `codex-review` prompt
+falls back to an inline review if the `codex` CLI isn't available.

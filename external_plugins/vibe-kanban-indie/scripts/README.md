@@ -15,8 +15,8 @@ running** (see [`../README.md`](../README.md) for prerequisites).
 | script | role | what it does |
 |--------|------|--------------|
 | `product-manager.sh` | **intake** | Runs the `product-manager` skill: a rough brief → a dev-ready vibe-kanban card. Interactive (it asks you to confirm the spec before filing). |
-| `orchestrator.sh` | **drive** | Runs the `vibe-kanban` skill on a `/loop` timer: every N minutes it sweeps the board, polls running agents, surfaces approvals, sends the next lifecycle step to idle agents, and reports. |
-| `orchestrate_tg.sh` | **drive + Telegram** | Same as `orchestrator.sh`, but also loads the sombrax-telegram channel in the **project-manager** role over all topics, so it can message the per-branch dev agents on Telegram. |
+| `orchestrator.sh` | **supervise** | Launches the **orchestrator agent** (`claude --agent vibe-kanban-indie:orchestrator`) on a `/loop` timer: every N minutes it monitors running agents via the MCP, reflects board status, delivers completed pipelines (the operator merge handshake), spawns the `decider` for stale questions, and starts an agent for an In-Progress/Orchestrate card that has none. It does **not** drive coding step-by-step — each coding agent runs its own pipeline. |
+| `orchestrate_tg.sh` | **supervise + Telegram** | Same as `orchestrator.sh`, but also loads the sombrax-telegram channel in the **project-manager** role over all topics, so it can message the per-branch dev agents on Telegram. |
 
 ## Usage
 
@@ -74,11 +74,27 @@ with the per-branch dev agents:
 
 ## How the 5-minute check works
 
-`orchestrator.sh` launches `claude "/loop <interval> <sweep>"`. The `/loop` skill
-re-runs the sweep prompt every interval. The sweep itself lives in
+`orchestrator.sh` launches `claude --plugin-dir <checkout> --agent
+vibe-kanban-indie:orchestrator "/loop <interval> <sweep>"` — so the orchestrator
+agent IS the session (not a Task subagent), and its full behavior comes from the
+agent definition. `--plugin-dir` loads the plugin from this checkout for the session
+(this is the standalone/dev mode), which is what makes the agent name resolve and
+registers the bundled MCP; don't ALSO install the plugin via the marketplace at the
+same time (double MCP registration — pick one mode, as noted above). The `/loop`
+skill re-runs the per-tick sweep every interval. The sweep brief lives in
 `orchestrator.prompt.md` — edit that file to change what each tick does (it's read
-fresh on launch). Stop the loop by typing "stop the loop" in the session, or
+fresh on launch). Override the agent name with `ORCH_AGENT` and the loaded plugin
+dir with `PLUGIN_DIR`. Stop the loop by typing "stop the loop" in the session, or
 Ctrl-C.
+
+> **Checkout-only mode delegates less.** `--plugin-dir` loads the plugin into *this
+> orchestrator* process only. The coding agents that `start_workspace` launches are
+> separate Claude processes started by the backend, and in checkout-only mode they
+> don't get the plugin — so the `product`/`planner` subagents aren't available to
+> them and their spec/plan stages **self-author** instead of delegating (the kickoff
+> prompt's documented fallback). For the full delegated pipeline, **install the
+> plugin** (marketplace) so it's available to every spawned agent; then run the
+> orchestrator from your project rather than these checkout launchers (one mode).
 
 ## Backend connection (why MCP tools sometimes don't load)
 

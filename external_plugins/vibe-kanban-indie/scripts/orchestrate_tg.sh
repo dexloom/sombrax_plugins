@@ -169,7 +169,27 @@ ${TG_ADDENDUM}"
 # CLAUDE_CHANNEL_REF for ad-hoc testing.
 CHANNEL_REF="${CLAUDE_CHANNEL_REF:-plugin:sombrax-telegram:sombrax-telegram}"
 
+# Launch the orchestrator AGENT directly (not as a Task subagent) — its full
+# behavior lives in the agent definition. `--plugin-dir` loads this checkout for the
+# session so the `vibe-kanban-indie:orchestrator` agent name resolves (cd-ing here
+# does not load it); it also loads the bundled `.mcp.json`, so don't ALSO have the
+# plugin installed via the marketplace (double MCP — see ../README.md "pick one
+# mode"). PLUGIN_DIR defaults to this checkout; override ORCH_AGENT to change agent.
+# Resolve to an ABSOLUTE path now (default = this checkout) — must happen before the
+# cd below, or a relative PLUGIN_DIR override would resolve against the temp dir.
+PLUGIN_DIR="$(cd "${PLUGIN_DIR:-$(pwd)}" && pwd)"
+ORCH_AGENT="${ORCH_AGENT:-vibe-kanban-indie:orchestrator}"
+
+# Run from a neutral working directory so Claude does NOT also auto-discover this
+# plugin dir's project-level `.mcp.json` — `--plugin-dir` already registers the
+# bundled MCP, and discovering the same `.mcp.json` from cwd would start a duplicate
+# vibe-kanban server. (LOOP_BODY/TG_ADDENDUM are already built and the backend env
+# already exported, so cwd no longer matters here.)
+cd "$(mktemp -d)"
+
 exec claude \
   --dangerously-load-development-channels="${CHANNEL_REF}" \
   --dangerously-skip-permissions \
+  --plugin-dir "${PLUGIN_DIR}" \
+  --agent "${ORCH_AGENT}" \
   "/loop ${INTERVAL} ${LOOP_BODY}"

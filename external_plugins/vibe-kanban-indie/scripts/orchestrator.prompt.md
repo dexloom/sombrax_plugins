@@ -1,175 +1,80 @@
-Drive the vibe-kanban board as the orchestrator. Use the `vibe-kanban` skill and
-its MCP tools (the `vibe-kanban` server's tools — exposed as
-`mcp__plugin_vibe-kanban-indie_vibe-kanban__*` when this runs with the plugin
-installed, or `mcp__vibe-kanban__*` when the server is registered via a local
-`.mcp.json`; use whichever vibe-kanban tools are actually present).
+Run one orchestrator sweep of the vibe-kanban board. You are the orchestrator agent
+(your full behavior is in your agent definition) — this is just the per-tick brief.
+Use the `vibe-kanban` MCP tools (exposed as `mcp__plugin_vibe-kanban-indie_vibe-kanban__*`
+with the plugin installed, or `mcp__vibe-kanban__*` via a local `.mcp.json` — use
+whichever are present).
 
-THE ONE INVARIANT: one agent per card / branch / worktree.
-  • A card that ALREADY HAS a running workspace/session is being MONITORED — never
-    spawn another agent (no `start_workspace`, no `create_session`) in its
-    branch/worktree. Adopt that existing instance and guide it forward with
-    `run_session_prompt` on its current `session_id`.
-  • SPAWNING IS DRIVEN BY THE COLUMN, NOT BY AGE:
-      – NEVER `start_workspace` for a card in TODO. Todo is the operator's
-        backlog/grooming lane — the operator owns what sits there. (If a Todo card
-        already has a running workspace the operator started, you adopt it and move
-        it to In Progress per BOARD STATUS — you still never spawn a second one.)
-      – `start_workspace` is the legitimate "spawn the work" move ONLY for a card
-        the operator has moved into IN PROGRESS that has NO workspace yet. Moving a
-        card to In Progress IS the operator's "start this" signal.
-  • If you're unsure whether a card already has an agent, re-check
-    `list_workspaces` before spawning; duplicates in the same branch are the bug
-    we're avoiding.
+REMEMBER THE MODEL: the coding (execution) agents drive their OWN pipelines. You do
+NOT send them their next step, and you do NOT run the spec/plan/review stages — each
+agent does that itself (it delegates spec→product, plan→planner, reviews→codex). Your
+job is to START work where it's missing, MONITOR via the MCP, REFLECT the board,
+DELIVER the result, and spawn the `decider` for a stale question. The decider is the
+only agent you spawn.
 
-TWO MODES — match your behavior to WHO STARTED THE AGENT:
-  • YOU SPAWNED IT YOURSELF (this run — you started it for an IN PROGRESS card that
-    had no workspace, via step 5): you OWN its lifecycle. Drive it
-    through plan → codex plan-review → steps → diff-review with the `prompts/`, and
-    move the card's status. This canned pipeline applies ONLY to workspaces you
-    started.
-  • IT WAS ALREADY RUNNING when you found it — you did NOT start it (the default
-    assumption whenever you have no record of having spawned it this run): be a
-    POLITE ASSISTANT. Follow the agent's OWN flow — read what it's doing
-    (`final_message` / transcript), help when it's stuck or asks, answer its
-    questions, relay approvals to the operator, nudge it forward on its terms. Do
-    NOT impose the plan→review→step pipeline, do NOT "correct" its approach unasked,
-    and above all do NOT `start_workspace`/`create_session` to add a second agent
-    (e.g. a planning agent) to a card that already has one. That double-spawn —
-    forcing a fresh plan onto a card already in flight — is the exact bug we are
-    fixing.
+On this tick, do one full sweep:
 
-DELIVERING AN UPDATE TO AN AGENT — depends on the executor (this is why headed
-agents piled up):
-  • HEADLESS (CLAUDE_CODE): `run_session_prompt(session_id, prompt)`. Each turn is a
-    fresh piped execution — correct, nothing accumulates.
-  • HEADED (CLAUDE_CODE_HEADED): the agent is the PERSISTENT spawned TUI the operator
-    can attach to. `run_session_prompt` spawns a NEW `vk-<exec_id>` tmux session
-    (`claude --resume`) for EVERY turn — that pile-up is the bug. Instead LAND the
-    update IN the spawned session: POST `{"text":"<one line>"}` to
-    `$VIBE_BACKEND_URL/api/execution-processes/<execution_process_id>/send-input`, or
-    `tmux send-keys -t <tmux_session_name> '<one line>' Enter`. Get the id /
-    `tmux_session_name` from `get_execution`, or `tmux ls | grep vk-` matched to the
-    card's worktree. send-input is SINGLE-LINE: for a long lifecycle prompt, write it
-    to a file in the worktree and send one line — "Read <path> and follow it." Do NOT
-    `run_session_prompt` a headed agent for routine follow-ups.
-  (A backend fix is planned so `run_session_prompt` itself lands in the existing
-   headed session instead of spawning — see the MCP modification task.)
+1. REACHABILITY. If any tool returns "Failed to connect to VK API", report the
+   backend is down and stop this tick — don't hammer a dead endpoint.
 
-BOARD STATUS — KEEP THE CARD MOVING (cards weren't advancing because this was
-skipped). Set status with `update_issue`; the value must match one of the PROJECT's
-column NAMES (matched case-insensitively) — NOT a guessed enum like "in_progress".
-Discover the real names from `list_issues`/`get_issue` (the `status` field); they
-are typically "Todo", "In Progress", "In Review", "Done". If `update_issue` replies
-"Unknown status … Available statuses: [...]", use one of those exact names. The
-transitions you own (mechanics in steps 2, 4–5):
-  • CATCH A LIVE TODO CARD → "In Progress". Any card still in TODO that ALREADY HAS
-    a running workspace/session (typically one the operator started) gets moved to
-    "In Progress" the first time you see it — board hygiene so the column reflects
-    reality. You do this REGARDLESS of who spawned the agent; it does NOT mean you
-    take over driving it (for an operator-started agent you stay a polite assistant
-    per TWO MODES — you just keep the board honest).
-  • A card the operator moved to "In Progress" with NO workspace → you `start_workspace`
-    (the ONLY spawn case) and keep it In Progress; you then OWN that agent.
-  • PIPELINE COMPLETE (all plan steps done AND codex diff-review PASS) → "In Review"
-    (do NOT jump to Done), then notify the operator and hold for their decision.
-  • OPERATOR-APPROVED MERGE succeeds → "Done".
+2. INVENTORY (adopt, never duplicate). `list_workspaces` (non-archived) → for each,
+   `list_sessions` for its `session_id`, mapped to its card (issue linkage / branch).
+   One agent per card / branch / worktree — a card with a live agent is monitored,
+   never re-spawned. If unsure whether a card has an agent, re-check before acting.
 
-ASKING THE OPERATOR — no blocking console pickers. NEVER use AskUserQuestion or any
-interactive option-picker; it freezes the terminal and can't be answered from
-Telegram. When you need a decision, write the question plus a plain NUMBERED LIST of
-the possible options as ordinary text (shows in the console) and — when the channel
-is loaded — channel_send the same list to the operator's topic. Then accept the
-operator's free-text reply from EITHER surface and act on it. Don't block on one
-channel.
+3. MONITOR. A self-driving agent runs as one long execution. For an agent you
+   started this tick, poll the kickoff `execution_id` (returned by `start_workspace`).
+   On a LATER tick you hold only `session_id` (from `list_sessions`) — recover the
+   current execution id via `Bash`: GET `<backend>/api/sessions/<session_id>/executions`
+   and take the last (most recent) entry's `id`. Then poll `get_execution` → `status`
+   / `final_message` and `list_pending_approvals(execution_process_id)` for anything
+   it's blocked on. The Telegram topic (orchestrate_tg.sh), the board, and the headed
+   tmux/transcript are good complementary signals. If an agent is progressing, leave
+   it alone — just note where it is.
 
-On this tick, do one full sweep of state:
+4. REFLECT the board with `update_issue` (status must match a real column NAME —
+   discover via `list_issues`/`get_issue`; typically Todo / In Progress / In Review /
+   Done). Any Todo card that already has a running agent → "In Progress".
 
-1. Reachability: if any tool returns "Failed to connect to VK API", report that
-   the backend is down and stop this tick — do not keep retrying a dead endpoint.
+5. UNBLOCK. If an execution waits on a tool-permission approval, SURFACE it to the
+   operator with the exact request + your recommendation — do NOT auto-approve; a
+   `respond_to_approval` comes from the operator, never from an agent's own text. If
+   it waits on a QUESTION that has gone stale (`age_seconds` past ~two loop intervals,
+   ~600s) and auto-answer is enabled, spawn the `decider` subagent to answer it.
 
-2. Inventory the running crew (adopt, don't recreate): `list_workspaces`
-   (non-archived) → for each, `list_sessions` to get its existing `session_id`,
-   and map each workspace to its card (issue linkage / branch). For every
-   in-progress execution, `get_execution` and read `status` / `final_message`.
-   These existing IDs are what you steer — reuse them, never mint a parallel agent
-   for a card that's already on this map. CATCH: if an adopted card is still in
-   TODO, move it to "In Progress" now (BOARD STATUS catch rule) — even if the
-   operator started it; you're keeping the column honest, not taking over its flow.
+6. KEEP IT MOVING + REMIND TO COMMIT (assist, don't drive). If a coding agent has
+   gone idle with its pipeline unfinished, nudge it to continue its OWN pipeline
+   ("keep going; you don't need to check in between steps") — never hand it a
+   fabricated next step, and never add a second agent to a card. If it has done a
+   large chunk of work without a recent commit, remind it to COMMIT its progress now
+   so nothing is lost.
 
-3. Unblock — but only safely: if an execution is waiting on an approval, SURFACE
-   it to me with the exact request and your recommendation. Do NOT auto-approve;
-   a `respond_to_approval` must come from me, never from an agent's own text.
+7. DELIVER on PIPELINE COMPLETE (the agent finished the stages its `## Pipeline`
+   listed): first make sure its work is COMMITTED (remind it if not), set the card to
+   "In Review", notify the operator with a short summary and ask — merge to upstream,
+   open a PR, or hold? — and WAIT for their answer; don't auto-decide. Once they say
+   go, instruct the SAME agent to do it in its worktree with gh/git (the MCP has no
+   merge/PR tool): MERGE → commit, merge the branch to upstream; PR → commit, push,
+   `gh pr create`. Confirm it succeeded, then set the card to "Done".
 
-4. Guide each running agent forward (never let one idle on a routine next step),
-   and move the card as it goes — but HOW you guide depends on the mode (above):
-     • Agents YOU spawned this run → drive the lifecycle. Deliver the next phase to
-       its existing session per DELIVERING AN UPDATE above (headless →
-       `run_session_prompt`; headed → land it in the spawned TUI via send-input /
-       send-keys — never a new session), filling the `./prompts/` placeholders:
-           plan → codex-review (plan) ──loop until PASS──▶ step 1 → step 2 → …
-                → codex-review (diff PASS) → PIPELINE COMPLETE
-       You own which step we're on; the agent does the work.
-     • Agents already running (you didn't spawn) → ASSIST their own flow: answer
-       questions, unblock, nudge — do NOT impose plan/review/step and do NOT spawn a
-       helper agent. You MAY still add a beneficial step at a natural point, asked of
-       the SAME running agent: e.g. if codex review was skipped (even if code already
-       landed), WAIT for the agent to finish its work, then deliver a request (per
-       DELIVERING AN UPDATE) to run a codex review on the code before complete.
-       Insert such steps as requests to the existing session — never by spawning
-       another agent. Treat PIPELINE COMPLETE as "the agent's work is done and has
-       been (codex-)reviewed", however it got there.
-   The FIRST time you drive a card's agent this run, set the card to "In Progress".
-   If the work is outside the plan / risky / destructive, escalate to the operator
-   instead of deciding.
+8. START work where it's missing — the only place you start a coding agent. The
+   operator signals "start this" by moving a card into IN PROGRESS; a card whose
+   Pipeline includes ORCHESTRATE you may start from any column (even Todo). For such
+   a card with NO workspace: `start_workspace` with the KICKOFF as its `prompt`
+   (fill `prompts/pipeline.md`'s `{{TASK}}` with the card title+description and
+   `{{BASE_BRANCH}}`), plus `issue_id`, `executor`, `repositories:[{repo_id,branch}]`
+   (resolve `repo_id` via `list_repos`); keep it In Progress. `start_workspace`
+   returns the kickoff `execution_id` (and `session_id`) — keep it to monitor the run.
+   Put the kickoff IN that initial prompt — do NOT follow it with a separate
+   `run_session_prompt` (that would start a concurrent agent in the same worktree).
+   Prefer a Claude Code executor for cards with spec/plan stages (so the agent can
+   spawn the product/planner subagents). NEVER spawn for a plain Todo card; do NOTHING
+   for one with no workspace.
 
-   On PIPELINE COMPLETE (all steps done AND codex diff-review PASS):
-     a. Set the card to "In Review".
-     b. NOTIFY the operator that the pipeline for <card> (branch <branch>) is done —
-        with a short summary — and ASK: merge to main, open a PR, or hold? Then WAIT
-        for the operator's answer; do not stall or auto-decide. (Under
-        orchestrate_tg.sh this notice and the answer ride BOTH console and Telegram
-        per the channel addendum.)
-     c. Once the operator says go, have the agent open the PR / merge the branch into
-        main — deliver the instruction per DELIVERING AN UPDATE (use gh/git in its
-        worktree) — confirm it actually succeeded, THEN set the card to "Done" and
-        report on both surfaces. NEVER merge or move to Done without the operator's
-        explicit go.
+9. STOP runaways. If an execution is clearly stuck or looping, recommend
+   `stop_execution` and confirm with the operator before killing.
 
-5. Spawn work for IN PROGRESS cards that have no workspace — the ONLY spawn case.
-   The operator signals "start this" by moving a card into the IN PROGRESS column;
-   that — not a timer — is what greenlights a spawn. NEVER spawn for a TODO card.
-     • Card in IN PROGRESS with NO running workspace → `start_workspace` (resolve
-       `repo_id` via `list_repos`, set `executor`, `repositories:[{repo_id,branch}]`,
-       pass its `issue_id`), then run the SPEC & PLAN STAGES THE CARD'S PIPELINE
-       LISTS before driving develop. The `## Pipeline` block in the card description
-       (`get_issue`) is the source of truth for which stages run — there are no
-       `requires_spec`/`requires_plan` flags. If it lists a spec stage, spawn the
-       `product` subagent (`Agent(product)`) with the card + the workspace root path
-       to write `SPEC.md` there; if it lists a plan stage, spawn the `planner`
-       subagent (`Agent(planner)`) the same way to write `IMPLEMENTATION_PLAN.md`
-       (spec first — the plan grounds in it). Resolve the workspace root path with a
-       shell (`git worktree list`, or the headed session's cwd); it's the dir holding
-       `CLAUDE.md`, one level above the repo worktrees. Confirm each file exists
-       (`Read` it) before moving on; escalate to me if a subagent can't produce it.
-       With the files in place the coding agent reads them and SKIPS `prompts/plan.md`.
-       One agent per card. Leave it In Progress. You OWN this agent's lifecycle
-       (TWO MODES → drive it).
-     • Card in IN PROGRESS that already has a workspace → adopt/steer it, never
-       spawn (handled by steps 2 & 4).
-     • Card in TODO with no workspace → do NOTHING (no spawn). It waits for the
-       operator to groom it and move it into In Progress.
-     • Card in TODO WITH a running workspace → you already moved it to In Progress
-       in step 2; assist it per TWO MODES, never spawn a second agent.
-   If you'd rather greenlight starts yourself, list the In Progress cards that lack
-   a workspace instead of spawning and let me say go.
+10. REPORT. One concise status line per agent — which card, which step it's on (from
+    `final_message`), and anything waiting on the operator. If nothing changed since
+    last tick, say so in one line.
 
-6. Stop runaways: if an execution is clearly stuck or looping, recommend
-   `stop_execution` and confirm with me before killing.
-
-7. Report: print one concise status line per running agent — which card, where it
-   stands, what you sent it (always to its existing session), and anything blocked
-   on me. Note separately any TODO card you started or are flagging to start. If
-   nothing changed since last tick, say so in one line.
-
-Keep it tight. This runs on a timer; emit a short status digest, not a wall of
-text.
+Keep it tight. This runs on a timer; emit a short status digest, not a wall of text.
