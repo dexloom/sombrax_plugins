@@ -1,13 +1,22 @@
 <!--
-plan.md — sent by the orchestrator to the spawned coding agent to produce the plan.
-Fill {{TASK}} with the card's title + spec before sending. The agent writes the
-plan as a file in its own worktree; nothing is stored on the board card.
+plan.md — the canonical planning method. Planning is owned by the dedicated
+`planner` agent (it produces the card's Plan artifact, which materialises as
+`IMPLEMENTATION_PLAN.md` at the workspace root); this prompt is that agent's
+shape/method. It is also kept self-contained so a self-driving coding agent can be
+handed the same prompt directly when no separate planner step is run. Fill
+{{TASK}} with the card's title + spec before sending.
 -->
-You are working the task below in this repository. **Before writing any code**,
-produce an implementation plan and save it as `IMPLEMENTATION_PLAN.md` at the repo
-root. Add `IMPLEMENTATION_PLAN.md` to `.gitignore` (create or append) so it stays
-a local working artifact and is never committed to the mainline — it guides this
-job and is left behind when the branch merges.
+You are planning the task below for this repository. **Before any code is
+written**, produce an implementation plan and save it as `IMPLEMENTATION_PLAN.md`
+at the **workspace root** (next to `CLAUDE.md`, one level above the git repos —
+that location is outside every repo worktree, so the file is never committed and
+needs no gitignore entry). It guides this job and is left behind when the branch
+merges. (As the `planner` agent you instead persist it as the card's Plan artifact
+via the vibe-kanban MCP; the board materialises it as that same file in new
+workspaces.)
+
+If `SPEC.md` exists at the workspace root, it is the authoritative spec for this
+task — read it first and ground the plan in it.
 
 ## Task
 {{TASK}}
@@ -40,6 +49,6 @@ Keep steps small enough that each is one focused turn, and ordered so a later st
 only depends on earlier ones.
 
 ## Then stop
-Save the file, confirm in one line that it's written (and gitignored), and **stop
+Save the file at the workspace root, confirm in one line that it's written, and **stop
 — do not start implementing**. The next instruction will be a codex review of the
 plan, then step-by-step development.

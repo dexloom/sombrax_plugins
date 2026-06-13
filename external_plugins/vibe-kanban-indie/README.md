@@ -12,9 +12,12 @@ sessions, poll executions, and unblock them when they ask for approval.
 |---|---|
 | **`vibe-kanban` skill** | The orchestration playbook — board/workspace/session/execution control. |
 | **`product-manager` skill** | Turns a rough brief into a dev-ready vibe-kanban card (spec → issue). |
-| **`orchestrator` agent** | Progress-aware supervisor: cards → running agents → driven to done (plan → codex review → steps → diff review). |
-| **`product` agent** | Product-intake agent: rough requirements → a well-formed card a planner can pick up. |
-| **`prompts/`** | Reusable lifecycle prompts the orchestrator sends to each spawned agent (`plan.md`, `step.md`, `codex-review.md`). |
+| **`answer-questions` skill** | The method for answering an agent's stale question prompt (questionnaire) on the operator's behalf — ground it in the card/spec/plan, pick, submit. |
+| **`orchestrator` agent** | Progress-aware supervisor: cards → running agents → driven to done. Sequences the separate spec (`product`) and plan (`planner`) agents, then drives the coding agent (steps → codex review). |
+| **`product` agent** | Product-intake agent: rough requirements → a well-formed card (spec) a planner can pick up. |
+| **`planner` agent** | Planning agent: a specced card → a grounded, step-by-step `IMPLEMENTATION_PLAN` (persisted as the card's Plan artifact). Separate from `product` and from the coding agent. |
+| **`decider` agent** | Answers an agent's stale question prompt on the operator's behalf (runs `answer-questions`). The orchestrator spawns it after a two-tick grace when `auto-answer-questions` is on. |
+| **`prompts/`** | Reusable lifecycle prompts (`plan.md` = the planner's method; `step.md`, `codex-review.md` drive the coding agent). |
 | **`scripts/`** | Launchers for a looped orchestrator (with optional Telegram), plus backend auto-resolution. |
 | **bundled MCP server** | Registers the `vibe-kanban` MCP server (tools appear as `mcp__plugin_vibe-kanban-indie_vibe-kanban__*`). |
 
@@ -30,8 +33,8 @@ sessions, poll executions, and unblock them when they ask for approval.
 
 ### Skill / agent names once installed
 
-- Skills: `vibe-kanban-indie:vibe-kanban`, `vibe-kanban-indie:product-manager`
-- Agents: `orchestrator`, `product` (delegate to them via the Task/Agent tool)
+- Skills: `vibe-kanban-indie:vibe-kanban`, `vibe-kanban-indie:product-manager`, `vibe-kanban-indie:answer-questions`
+- Agents: `orchestrator`, `product`, `planner`, `decider` (delegate to them via the Task/Agent tool)
 - MCP tools: `mcp__plugin_vibe-kanban-indie_vibe-kanban__<tool>`
 
 ## Prerequisites
