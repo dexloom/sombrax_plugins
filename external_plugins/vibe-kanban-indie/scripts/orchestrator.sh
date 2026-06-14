@@ -6,11 +6,12 @@
 #
 # The orchestrator's full behavior lives in its agent definition; launching it with
 # --agent (rather than as a Task subagent) makes it the session itself. `/loop
-# <interval> <prompt>` re-runs the per-tick sweep in scripts/orchestrator.prompt.md
-# every <interval>: monitor running agents via the MCP, reflect board status,
-# deliver completed pipelines (operator merge handshake), spawn the decider for
-# stale questions, start agents for In-Progress/Orchestrate cards with none, and
-# report. Default interval is 5m.
+# <interval> <prompt>` re-runs the per-tick dispatch sweep in
+# scripts/orchestrator.prompt.md every <interval>: find READY cards with no
+# workspace (In-Progress or Orchestrate-opt-in), resolve the executor (the card's
+# pinned agent, else the operator's last-used/default config), start ONE coding
+# agent per card via the MCP, mark it In Progress, and report. It does nothing else
+# — no monitoring, delivery, merge, or question-answering. Default interval is 5m.
 #
 # Usage:
 #   scripts/orchestrator.sh            # check every 5 minutes
