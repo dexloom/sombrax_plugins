@@ -13,10 +13,10 @@ sessions, poll executions, and unblock them when they ask for approval.
 | **`vibe-kanban` skill** | The orchestration playbook — board/workspace/session/execution control. |
 | **`product-manager` skill** | Turns a rough brief into a dev-ready vibe-kanban card (spec → issue). |
 | **`answer-questions` skill** | The method for answering an agent's stale question prompt (questionnaire) on the operator's behalf — ground it in the card/spec/plan, pick, submit. |
-| **`orchestrator` agent** | Minimal card **dispatcher** (launched as the session agent via `claude --agent`, on a `/loop 5m` timer): each tick it finds READY cards with no workspace, resolves the executor (the card's pinned agent, else the operator's last-used/default config via `/api/config`), and starts **one** coding agent per card via the MCP `start_workspace`, then marks it In Progress. It does **nothing else** — no monitoring, delivery, merge, approvals, or question-answering; the coding agent owns its pipeline and the operator handles delivery. |
+| **`orchestrator` agent** | Card **dispatcher** (launched as the session agent via `claude --agent`, on a `/loop 5m` timer): each tick it finds READY cards with no workspace, resolves the executor (the card's pinned agent, else the operator's last-used/default config via `/api/config`), starts **one** coding agent per card via the MCP `start_workspace`, and marks it In Progress. Beyond that it does nothing **unless** the operator opted into a directive at spawn time (`auto-unblock`, `auto-answer-questions`, `telegram-fanout`) — those flags arrive in the spawn prompt and their logic is defined in the agent instructions. The coding agent always owns its pipeline. |
 | **`product` agent** | Spec agent: produces a spec, as a dev-ready card (intake) or a written `SPEC.md` (when a coding agent spawns it for the spec stage). |
 | **`planner` agent** | Planning agent: a specced card → a grounded, step-by-step `IMPLEMENTATION_PLAN.md` written at the workspace root. A coding agent spawns it for the plan stage. |
-| **`decider` agent** | Answers an agent's stale question prompt on the operator's behalf (runs `answer-questions`). Run it directly when a coding agent is blocked on a questionnaire you want cleared without a human (the dispatch-only orchestrator does not spawn it). |
+| **`decider` agent** | Answers an agent's stale question prompt on the operator's behalf (runs `answer-questions`). The orchestrator spawns it after a grace window when the `auto-answer-questions` directive is enabled; you can also run it directly to clear a stuck questionnaire. |
 | **`prompts/`** | Prompts for the self-driving coding agent: `pipeline.md` (the kickoff — work your pipeline to completion, delegating spec→`product`, plan→`planner`, reviews→`codex`), `plan.md` (the plan shape), `codex-review.md` (the codex review method). |
 | **`scripts/`** | Launchers for a looped orchestrator (with optional Telegram), plus backend auto-resolution. |
 | **bundled MCP server** | Registers the `vibe-kanban` MCP server (tools appear as `mcp__plugin_vibe-kanban-indie_vibe-kanban__*`). |
@@ -34,7 +34,7 @@ sessions, poll executions, and unblock them when they ask for approval.
 ### Skill / agent names once installed
 
 - Skills: `vibe-kanban-indie:vibe-kanban`, `vibe-kanban-indie:product-manager`, `vibe-kanban-indie:answer-questions`
-- Agents: `orchestrator`, `product`, `planner`, `decider`. The `orchestrator` is meant to be launched as the session agent (`claude --agent vibe-kanban-indie:orchestrator`, as the `scripts/` do); `product`/`planner` are spawned by the coding agent (and usable directly via the Task/Agent tool); `decider` is run directly by the operator to clear a stale questionnaire (the dispatch-only orchestrator does not spawn it).
+- Agents: `orchestrator`, `product`, `planner`, `decider`. The `orchestrator` is meant to be launched as the session agent (`claude --agent vibe-kanban-indie:orchestrator`, as the `scripts/` do); `product`/`planner` are spawned by the coding agent (and usable directly via the Task/Agent tool); `decider` is spawned by the orchestrator under the `auto-answer-questions` directive (and usable directly to clear a stale questionnaire).
 - MCP tools: `mcp__plugin_vibe-kanban-indie_vibe-kanban__<tool>`
 
 ## Prerequisites

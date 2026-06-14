@@ -10,8 +10,10 @@
 # scripts/orchestrator.prompt.md every <interval>: find READY cards with no
 # workspace (In-Progress or Orchestrate-opt-in), resolve the executor (the card's
 # pinned agent, else the operator's last-used/default config), start ONE coding
-# agent per card via the MCP, mark it In Progress, and report. It does nothing else
-# — no monitoring, delivery, merge, or question-answering. Default interval is 5m.
+# agent per card via the MCP, mark it In Progress, and report. Beyond that core it
+# acts only on the opt-in directives named in its spawn prompt (auto-unblock /
+# auto-answer-questions / telegram-fanout), whose logic lives in the agent
+# definition. Default interval is 5m.
 #
 # Usage:
 #   scripts/orchestrator.sh            # check every 5 minutes

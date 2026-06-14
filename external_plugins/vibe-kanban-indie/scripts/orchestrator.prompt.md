@@ -2,9 +2,11 @@ Run one dispatch sweep of the vibe-kanban board. You are the orchestrator agent 
 your full behavior is in your agent definition; this is just the per-tick brief. Use
 the `vibe-kanban` MCP tools (`mcp__plugin_vibe-kanban-indie_vibe-kanban__*`).
 
-YOUR ONLY JOB: hand a READY card to a coding (execution) agent. You do NOT monitor,
-drive, review, merge, unblock, answer questions, or spawn subagents. Once you start a
-coding agent for a card, that agent owns it end to end.
+YOUR CORE JOB: hand a READY card to a coding (execution) agent. By default you do NOT
+monitor, drive, review, merge, unblock, answer questions, or spawn subagents — once
+you start a coding agent for a card, that agent owns it end to end. The ONLY
+exceptions are the opt-in directives named in this run's prompt (see step 6); apply a
+directive only when its flag is present.
 
 On this tick, do one full sweep:
 
@@ -42,7 +44,16 @@ On this tick, do one full sweep:
    a concurrent agent in the same worktree). Then `update_issue` the card to "In
    Progress" so it isn't re-dispatched next tick. Start exactly one agent per card.
 
-6. REPORT. One short line per dispatched card — its id/title and the executor you used.
-   If nothing was ready, say so in one line.
+6. DIRECTIVES (only if enabled). If this run's prompt lists directive flags
+   (`auto-unblock`, `auto-answer-questions`, `telegram-fanout`), apply each per your
+   agent definition's *Directives* section — poll running agents' pending approvals
+   (recover each execution id via `Bash` GET
+   `$VIBE_BACKEND_URL/api/sessions/<session_id>/executions`, last entry), auto-approve
+   routine tool requests / spawn `decider` for stale questions (age > ~600s) / narrate
+   over Telegram. If no flags are listed, skip this step entirely — that's the default.
+
+7. REPORT. One short line per dispatched card (id/title + executor) and one per
+   directive action taken. If nothing was ready and no directive fired, say so in one
+   line.
 
 Keep it tight. This runs on a timer; emit a short status digest, not a wall of text.
