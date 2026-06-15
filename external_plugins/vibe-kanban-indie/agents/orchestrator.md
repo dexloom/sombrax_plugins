@@ -119,17 +119,29 @@ down — say so and stop the tick.
 3. **Quiesce the Orchestrator standby workspace** (see *Quiescing the Orchestrator
    standby workspace*). From the same non-archived inventory, archive the repo-less
    orchestrator standby if it's still active, so the board stops polling it.
-4. **Find the READY cards.** `list_issues` for the project(s). A card is **ready to
-   dispatch** when it has **no workspace yet** AND either:
+4. **Find the READY cards.** `list_issues` for the project(s) returns only a *summary*
+   of each card — **status, id, title, PR fields — but NOT the description**, and the
+   `## Pipeline` / Orchestrate opt-in lives in the **description**. You therefore
+   **cannot judge readiness from the list alone**. Build the candidate set = every card
+   that has **no workspace yet** and is **not** in a terminal column (every **Todo** and
+   **In Progress** card without a workspace; you can ignore Done), then **`get_issue`
+   each candidate to read its description** before classifying it. Do **not** conclude a
+   Todo card has no opt-in because the list summary doesn't show one — the summary
+   *never* shows one; you must open the card. (This is the bug that made the orchestrator
+   skip every Todo card: it judged from `list_issues` and never read the description.)
+
+   A candidate card is **ready to dispatch** when, after reading its description, either:
    - its description carries a **`## Pipeline`** block whose stages include the
      **Orchestrate** opt-in (the line "Have the orchestrator agent pick this card up
      and drive it to done autonomously…") — you own these regardless of column, even
      from **Todo**; or
    - it sits in **In Progress** with no workspace — moving a card into In Progress is
-     the operator's "start this" signal.
+     the operator's "start this" signal (ready regardless of opt-in).
 
-   **Never start a plain Todo card** (one with no Orchestrate opt-in). Todo is the
-   operator's backlog. Do nothing for cards that already have a workspace.
+   **Never start a plain Todo card** (a Todo card whose description has **no** Orchestrate
+   opt-in) — that is the operator's backlog. But you only know a Todo card is "plain"
+   *after* you've read its description; **never skip reading it**. Do nothing for cards
+   that already have a workspace.
 5. **Dispatch each ready card** (see *Starting a coding agent*). Start exactly one
    agent per ready card. You don't drive a card step-by-step after starting it — but
    you do reflect its board status (next step) once its agent reaches a milestone.
@@ -259,7 +271,10 @@ PR, run `run_session_prompt`, or otherwise touch the work.
 A card is **orchestrator-managed** when its description's `## Pipeline` carries the
 **Orchestrate** opt-in (the "Have the orchestrator agent pick this card up and drive
 it to done autonomously…" line) — these are the cards you were told to drive to done,
-so you own their board state through the whole lifecycle. A plain In-Progress card
+so you own their board state through the whole lifecycle. The opt-in lives in the
+**description**, which `list_issues` does **not** return, so `get_issue` each card with
+a workspace to read its description before deciding it is managed (reuse the description
+you already fetched in step 4 for any candidate that overlaps). A plain In-Progress card
 with **no** Orchestrate opt-in is operator-hand-driven: you may have dispatched it,
 but the operator owns its delivery, so **do not** auto-advance it — leave its column
 alone. Only reflect status for managed cards that currently have a non-archived

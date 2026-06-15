@@ -30,12 +30,20 @@ On this tick, do one full sweep:
    workspace — only the name/branch-matched standby. Report a line only if you archived
    something.
 
-4. FIND READY CARDS. `list_issues`. A card is ready to dispatch when it has NO
-   workspace yet AND either (a) its `## Pipeline` includes the Orchestrate opt-in
-   ("Have the orchestrator agent pick this card up and drive it to done
-   autonomously…") — startable from ANY column, even Todo; or (b) it sits in In
-   Progress with no workspace. NEVER start a plain Todo card with no Orchestrate
-   opt-in. Do nothing for cards that already have a workspace.
+4. FIND READY CARDS. `list_issues` returns only a SUMMARY (status/id/title/PR fields) —
+   NOT the description, and the `## Pipeline` / Orchestrate opt-in lives in the
+   description. So you CANNOT judge readiness from the list. Take every card with NO
+   workspace that isn't in a terminal column (every Todo and In Progress card without a
+   workspace; ignore Done) and `get_issue` EACH ONE to read its description before
+   classifying. Never assume a Todo card lacks the opt-in because the summary doesn't
+   show it — the summary never does; open the card. (This was the bug: judging Todo cards
+   from `list_issues` without reading their descriptions, so they were always skipped.)
+   A card is ready to dispatch when, after reading its description, either (a) its
+   `## Pipeline` includes the Orchestrate opt-in ("Have the orchestrator agent pick this
+   card up and drive it to done autonomously…") — startable from ANY column, even Todo;
+   or (b) it sits in In Progress with no workspace (ready regardless of opt-in). NEVER
+   start a plain Todo card (a Todo whose description has no opt-in) — but you only know
+   it's plain AFTER reading it. Do nothing for cards that already have a workspace.
 
 5. RESOLVE THE EXECUTOR for each ready card, in order:
    - PINNED IN THE CARD: if the `## Pipeline` has a "Run this card with the `AGENT`
@@ -59,7 +67,9 @@ On this tick, do one full sweep:
 
 7. REFLECT MANAGED-CARD STATUS (core, read-and-reflect only). For every
    ORCHESTRATOR-MANAGED card that already has a workspace — managed = its `## Pipeline`
-   carries the Orchestrate opt-in; leave plain operator-driven In-Progress cards alone
+   carries the Orchestrate opt-in (the opt-in is in the DESCRIPTION, which `list_issues`
+   omits, so `get_issue` each workspace-backed card to check); leave plain
+   operator-driven In-Progress cards alone
    — mirror its board column to the coding agent's progress. Per card: `list_sessions`
    → the coding `session_id` (skip `is_orchestrator_session`); `Bash` GET
    `$VIBE_BACKEND_URL/api/sessions/<session_id>/executions`, take the last
