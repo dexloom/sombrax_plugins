@@ -25,12 +25,15 @@ agent locally — it's already in the worktree with the code.
 ```
 orchestrator: start_workspace (kickoff = filled pipeline.md as its prompt) ─▶ MONITOR (get_execution / final_message)
 coding agent (self-driven):  spec [→product] → plan [→planner] → plan-review [→codex] ──loop──▶ develop (its own code) → code-review [→codex] → STOP "complete, awaiting merge"
-orchestrator: pipeline complete ─▶ In Review ─▶ operator handshake ─▶ (on go) instruct agent to merge ─▶ Done
+orchestrator: dev finished + reviewed ─▶ In Review ; merge/PR actually landed ─▶ Done
 ```
-The orchestrator owns *progress visibility and delivery* (which step it's on, board
-status, the merge handshake); the coding agent owns *execution* — it writes the code
-and delegates spec→`product`, plan→`planner`, reviews→`codex`. The orchestrator never
-sends a per-step prompt.
+The orchestrator owns *board state* for managed cards — it **reflects** status by
+reading the agent's `final_message` / the card's PR fields and moving the card forward
+(In Review when dev is finished + reviewed, Done once the merge/PR has landed). It is
+**read-and-reflect only**: the merge decision stays with the operator, and the
+orchestrator never performs or instructs the merge/PR itself. The coding agent owns
+*execution* — it writes the code and delegates spec→`product`, plan→`planner`,
+reviews→`codex`. The orchestrator never sends a per-step prompt.
 
 ## Placeholders
 - `{{TASK}}` — the card's title + id (and spec, if you have it).

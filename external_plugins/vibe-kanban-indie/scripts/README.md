@@ -15,7 +15,7 @@ running** (see [`../README.md`](../README.md) for prerequisites).
 | script | role | what it does |
 |--------|------|--------------|
 | `product-manager.sh` | **intake** | Runs the `product-manager` skill: a rough brief → a dev-ready vibe-kanban card. Interactive (it asks you to confirm the spec before filing). |
-| `orchestrator.sh` | **supervise** | Launches the **orchestrator agent** (`claude --agent vibe-kanban-indie:orchestrator`) on a `/loop` timer: every N minutes it monitors running agents via the MCP, reflects board status, delivers completed pipelines (the operator merge handshake), spawns the `decider` for stale questions, and starts an agent for an In-Progress/Orchestrate card that has none. It does **not** drive coding step-by-step — each coding agent runs its own pipeline. |
+| `orchestrator.sh` | **supervise** | Launches the **orchestrator agent** (`claude --agent vibe-kanban-indie:orchestrator`) on a `/loop` timer: each tick it starts an agent for an In-Progress/Orchestrate card that has none, and **reflects** managed-card board status by reading each agent's state (→ In Review when dev is finished + reviewed, → Done once the merge/PR has landed — read-only, it never merges itself). With a directive it can also spawn the `decider` for stale questions / auto-approve. It does **not** drive coding step-by-step — each coding agent runs its own pipeline, and the operator owns the merge decision. |
 | `orchestrate_tg.sh` | **supervise + Telegram** | Same as `orchestrator.sh`, but also loads the sombrax-telegram channel in the **project-manager** role over all topics, so it can message the per-branch dev agents on Telegram. |
 
 ## Usage

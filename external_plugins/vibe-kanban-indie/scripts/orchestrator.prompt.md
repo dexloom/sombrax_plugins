@@ -2,11 +2,14 @@ Run one dispatch sweep of the vibe-kanban board. You are the orchestrator agent 
 your full behavior is in your agent definition; this is just the per-tick brief. Use
 the `vibe-kanban` MCP tools (`mcp__plugin_vibe-kanban-indie_vibe-kanban__*`).
 
-YOUR CORE JOB: hand a READY card to a coding (execution) agent. By default you do NOT
-monitor, drive, review, merge, unblock, answer questions, or spawn subagents — once
-you start a coding agent for a card, that agent owns it end to end. The ONLY
-exceptions are the opt-in directives named in this run's prompt (see step 7); apply a
-directive only when its flag is present.
+YOUR CORE JOB has two halves: (a) hand a READY card to a coding (execution) agent, and
+(b) reflect each managed card's board status to mirror its agent's progress (→ In
+Review when dev is finished + reviewed, → Done once merge/PR has landed) — read-only,
+you only `update_issue`. The coding agent owns the work's EXECUTION end to end; you
+own managed cards' BOARD STATE. Beyond those two you do NOT drive, review, merge,
+unblock, answer questions, or spawn subagents. The ONLY other exceptions are the
+opt-in directives named in this run's prompt (see step 8); apply a directive only when
+its flag is present.
 
 On this tick, do one full sweep:
 
@@ -54,7 +57,26 @@ On this tick, do one full sweep:
    a concurrent agent in the same worktree). Then `update_issue` the card to "In
    Progress" so it isn't re-dispatched next tick. Start exactly one agent per card.
 
-7. DIRECTIVES (only if enabled). If this run's prompt lists directive flags
+7. REFLECT MANAGED-CARD STATUS (core, read-and-reflect only). For every
+   ORCHESTRATOR-MANAGED card that already has a workspace — managed = its `## Pipeline`
+   carries the Orchestrate opt-in; leave plain operator-driven In-Progress cards alone
+   — mirror its board column to the coding agent's progress. Per card: `list_sessions`
+   → the coding `session_id` (skip `is_orchestrator_session`); `Bash` GET
+   `$VIBE_BACKEND_URL/api/sessions/<session_id>/executions`, take the last
+   `run_reason == "codingagent"` entry; `get_execution(execution_id)` → read
+   `final_message`, `pending_approvals`, `status`. Do NOT trust `status` alone — headed
+   agents stay `running` after finishing; the real "turn done" signal is
+   `pending_approvals` empty AND `final_message` describing a milestone. Then, taking
+   the FURTHEST state positively confirmed (corroborate with the card's
+   `pull_request_count`/`latest_pr_url`/`latest_pr_status`): merge/PR actually landed
+   (branch merged & pushed, or a PR exists) → `update_issue` to DONE; development
+   finished + reviewed, awaiting the merge decision (or a card with no merge/PR stage)
+   → IN REVIEW; otherwise (still working / blocked on an approval / no clear completion
+   report) leave it. NEVER mark Done without a confirmed merge/PR, NEVER move a card
+   backward, and do nothing if it's already in the target column (idempotent). You only
+   `update_issue` — you never merge, push, open a PR, or instruct the agent.
+
+8. DIRECTIVES (only if enabled). If this run's prompt lists directive flags
    (`auto-unblock`, `auto-answer-questions`, `telegram-fanout`), apply each per your
    agent definition's *Directives* section — poll running agents' pending approvals
    (recover each execution id via `Bash` GET
@@ -62,8 +84,9 @@ On this tick, do one full sweep:
    routine tool requests / spawn `decider` for stale questions (age > ~600s) / narrate
    over Telegram. If no flags are listed, skip this step entirely — that's the default.
 
-8. REPORT. One short line per dispatched card (id/title + executor) and one per
-   directive action taken. If nothing was ready and no directive fired, say so in one
+9. REPORT. One short line per dispatched card (id/title + executor), one per card
+   whose status you advanced (card + old→new column), and one per directive action
+   taken. If nothing was ready, nothing advanced, and no directive fired, say so in one
    line.
 
 Keep it tight. This runs on a timer; emit a short status digest, not a wall of text.
