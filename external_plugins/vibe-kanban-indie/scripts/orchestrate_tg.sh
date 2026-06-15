@@ -62,6 +62,15 @@
 #                                                          # over 300k tokens
 #   ORCH_AUTO_COMPACT=1 ORCH_COMPACT_THRESHOLD=250000 scripts/orchestrate_tg.sh
 #
+# Spawn = connect: this launches `claude` inside the stable, SHARED tmux session
+# `vk-orchestrator` (override with ORCH_TMUX_SESSION) — the SAME name orchestrator.sh
+# uses. If an orchestrator is already running, a second launch ATTACHES to it instead of
+# spawning a duplicate (without a TTY it reports "already running" rather than failing).
+# Because the name is shared, a console launch and this Telegram launch are mutually
+# exclusive: whichever ran FIRST owns the session and its config wins — so launching this
+# against an already-running PLAIN console orchestrator just attaches and does NOT
+# retro-add the Telegram channel. tmux is REQUIRED. See orchestrator-attach.sh.
+#
 # Stop the loop: type "stop the loop" in the session, or Ctrl-C.
 set -euo pipefail
 
@@ -189,14 +198,19 @@ CHANNEL_REF="${CLAUDE_CHANNEL_REF:-plugin:sombrax-telegram:sombrax-telegram}"
 PLUGIN_DIR="$(cd "${PLUGIN_DIR:-$(pwd)}" && pwd)"
 ORCH_AGENT="${ORCH_AGENT:-vibe-kanban-indie:orchestrator}"
 
-# Run from a neutral working directory so Claude does NOT also auto-discover this
-# plugin dir's project-level `.mcp.json` — `--plugin-dir` already registers the
-# bundled MCP, and discovering the same `.mcp.json` from cwd would start a duplicate
-# vibe-kanban server. (LOOP_BODY/TG_ADDENDUM are already built and the backend env
-# already exported, so cwd no longer matters here.)
-cd "$(mktemp -d)"
+# "Spawn = connect": launch claude inside the stable, shared `vk-orchestrator` tmux
+# session (the SAME name orchestrator.sh uses), OR attach if an orchestrator is already
+# running — so a console launch and this Telegram launch are mutually exclusive (the
+# second attaches to the first; the FIRST launcher's config wins, so attaching a Telegram
+# launch to a running plain console orchestrator does NOT retro-add the Telegram channel).
+# The helper also sets the neutral working dir for the wrapped session
+# (`tmux new-session … -c "$(mktemp -d)"`), so Claude does NOT auto-discover this plugin
+# dir's project-level `.mcp.json` — `--plugin-dir` already registers the bundled MCP, and
+# discovering the same `.mcp.json` from cwd would start a duplicate vibe-kanban server.
+# (tmux is required; see orchestrator-attach.sh.)
+. "$(dirname "$0")/orchestrator-attach.sh"
 
-exec claude \
+orchestrator_launch \
   --dangerously-load-development-channels="${CHANNEL_REF}" \
   --dangerously-skip-permissions \
   --plugin-dir "${PLUGIN_DIR}" \

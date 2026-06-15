@@ -2,8 +2,13 @@
 
 Thin shell wrappers that open a Claude Code session pre-armed for one of the two
 jobs. Both `cd` to the plugin root first so the bundled `.mcp.json`, `skills/`,
-and `prompts/` resolve, then `exec claude`. Both need the **vibe-kanban backend
-running** (see [`../README.md`](../README.md) for prerequisites).
+and `prompts/` resolve. The supervise launchers (`orchestrator.sh` /
+`orchestrate_tg.sh`) then hand off to **`orchestrator-attach.sh`**, which runs
+`claude` inside a stable, shared tmux session (`vk-orchestrator`) — **"spawn =
+connect"**: a second launch ATTACHES to the already-running orchestrator instead of
+spawning a duplicate (tmux is required for these two; `product-manager.sh` still
+`exec`s `claude` directly). Both need the **vibe-kanban backend running** (see
+[`../README.md`](../README.md) for prerequisites).
 
 > These launchers are the **standalone / dev** way to run the system from a
 > checkout — they add a `/loop`-timed orchestrator, backend URL auto-resolution,
@@ -118,6 +123,20 @@ fresh on launch). Override the agent name with `ORCH_AGENT` and the loaded plugi
 dir with `PLUGIN_DIR`. Stop the loop by typing "stop the loop" in the session, or
 Ctrl-C.
 
+That `claude` invocation does not run bare: both supervise launchers source
+**`orchestrator-attach.sh`** (alongside `resolve-backend.sh` and
+`directives-block.sh`) and call `orchestrator_launch …` in place of `exec claude`.
+It wraps `claude` in the stable, **shared** tmux session `vk-orchestrator` (override
+with `ORCH_TMUX_SESSION`): if that session already exists it **attaches** (or, with
+no TTY, reports "already running" and exits 0) instead of starting a second
+orchestrator; otherwise it creates the session — with a neutral `mktemp -d` cwd so
+the plugin's own `.mcp.json` isn't auto-discovered from cwd — and launches `claude`
+inside it, forwarding the runtime env (`VIBE_BACKEND_URL`, the Telegram vars) into
+the session explicitly. Because the name is shared, `orchestrator.sh` and
+`orchestrate_tg.sh` are **mutually exclusive** — whichever runs first owns the
+session and its config wins. **tmux is required**; the launcher fails clearly if it
+is missing (it will not silently fall back to a duplicate-prone foreground launch).
+
 > **Checkout-only mode delegates less.** `--plugin-dir` loads the plugin into *this
 > orchestrator* process only. The coding agents that `start_workspace` launches are
 > separate Claude processes started by the backend, and in checkout-only mode they
@@ -139,8 +158,11 @@ reports "MCP tools not connected."
 `resolve-backend.sh` (sourced by both launchers) fixes this: it finds the port
 file across the candidate temp dirs — including `$(getconf DARWIN_USER_TEMP_DIR)`,
 which returns the true macOS temp dir even inside the sandbox — exports
-`VIBE_BACKEND_URL`, and health-checks it. `exec claude` then inherits that env so
-the MCP connects. Override anytime with `VIBE_BACKEND_URL=http://127.0.0.1:PORT`.
+`VIBE_BACKEND_URL`, and health-checks it. The launched `claude` then gets that env so
+the MCP connects (for the supervise launchers `orchestrator-attach.sh` forwards it
+explicitly into the tmux session, since a pre-existing tmux server would otherwise
+keep its own stale environment). Override anytime with
+`VIBE_BACKEND_URL=http://127.0.0.1:PORT`.
 
 If you already launched a session before this fix, **exit and re-run** the script.
 

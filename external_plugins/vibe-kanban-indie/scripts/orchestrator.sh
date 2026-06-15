@@ -21,6 +21,14 @@
 #   scripts/orchestrator.sh 300s       # check every 300 seconds
 #   ORCH_INTERVAL=2m scripts/orchestrator.sh
 #
+# Spawn = connect: this launches `claude` inside a stable, shared tmux session
+# (`vk-orchestrator`, override with ORCH_TMUX_SESSION). If an orchestrator is ALREADY
+# running, a second launch ATTACHES to it instead of spawning a duplicate (and without a
+# TTY it just reports "already running" rather than failing). The shared session name is
+# also used by orchestrate_tg.sh, so a console launch and a Telegram launch are mutually
+# exclusive — whichever ran FIRST owns the session and its config wins. tmux is REQUIRED
+# (the launcher fails clearly if it is missing). See orchestrator-attach.sh.
+#
 # Opt-in directives (default-off; injected into the spawn prompt — see
 # directives-block.sh):
 #   ORCH_AUTO_COMPACT=1 scripts/orchestrator.sh                     # /compact headed
@@ -71,12 +79,14 @@ LOOP_BODY="${LOOP_BODY}${DIRECTIVES_BLOCK}"
 PLUGIN_DIR="$(cd "${PLUGIN_DIR:-$(pwd)}" && pwd)"
 ORCH_AGENT="${ORCH_AGENT:-vibe-kanban-indie:orchestrator}"
 
-# Run from a neutral working directory so Claude does NOT also auto-discover this
-# plugin dir's project-level `.mcp.json` — `--plugin-dir` already registers the
-# bundled MCP, and discovering the same `.mcp.json` from cwd would start a duplicate
-# vibe-kanban server. (LOOP_BODY is already read and the backend env already
-# exported, so cwd no longer matters here.)
-cd "$(mktemp -d)"
+# "Spawn = connect": launch claude inside the stable, shared `vk-orchestrator` tmux
+# session, OR attach to it if an orchestrator is already running — so a second launch
+# never spawns a duplicate orchestrator. The helper also sets the neutral working
+# directory for the wrapped session (`tmux new-session … -c "$(mktemp -d)"`), so Claude
+# does NOT also auto-discover this plugin dir's project-level `.mcp.json` — `--plugin-dir`
+# already registers the bundled MCP, and discovering the same `.mcp.json` from cwd would
+# start a duplicate vibe-kanban server. (tmux is required; see orchestrator-attach.sh.)
+. "$(dirname "$0")/orchestrator-attach.sh"
 
-# Kick off an interactive session that immediately arms the /loop timer.
-exec claude --plugin-dir "${PLUGIN_DIR}" --agent "${ORCH_AGENT}" "/loop ${INTERVAL} ${LOOP_BODY}"
+# Kick off (or attach to) the session that arms the /loop timer.
+orchestrator_launch --plugin-dir "${PLUGIN_DIR}" --agent "${ORCH_AGENT}" "/loop ${INTERVAL} ${LOOP_BODY}"

@@ -103,15 +103,21 @@ doing anything else.
 
 All board/workspace control goes through the **vibe-kanban MCP**
 (`mcp__plugin_vibe-kanban-indie_vibe-kanban__*`). Never drive the board with raw HTTP
-or `tmux` — with a single narrow exception: the `auto-compact` directive (when enabled)
-may, *only as a documented fallback*, send `/compact` to a headed agent via
-`tmux send-keys` (see *Directives*); that is the sole sanctioned raw-`tmux` action and
-it touches nothing but the agent's own context. You use `Bash` only against the
-backend's read APIs (and that one fallback) — to resolve the
+or `tmux` — with two narrow, sanctioned exceptions:
+1. **Read-only `tmux has-session`** — the standby-quiesce liveness check (see *Quiescing
+   the Orchestrator standby workspace*) runs `tmux has-session -t =vk-<execution_id>` to
+   learn whether an orchestrator session's tmux session is still alive. This is strictly
+   *read-only* (it queries; it never sends keys or mutates anything).
+2. **`tmux send-keys` for `auto-compact`** — the `auto-compact` directive (when enabled)
+   may, *only as a documented fallback*, send `/compact` to a headed agent via
+   `tmux send-keys` (see *Directives*); it touches nothing but that agent's own context.
+
+Those are the only sanctioned raw-`tmux` uses. You use `Bash` only against the
+backend's read APIs (and those tmux exceptions) — to resolve the
 backend URL, read the operator's last-used executor from `/api/config` (below), and
 recover a session's latest execution id from `/api/sessions/<id>/executions` (status
-reflection). If any MCP tool returns "Failed to connect to VK API", the backend is
-down — say so and stop the tick.
+reflection and standby liveness). If any MCP tool returns "Failed to connect to VK API",
+the backend is down — say so and stop the tick.
 
 ## The sweep (each loop tick)
 
@@ -123,8 +129,10 @@ down — say so and stop the tick.
    linked card (issue linkage / branch) so you can tell which cards are already
    taken. If unsure whether a card already has a workspace, re-check before starting.
 3. **Quiesce the Orchestrator standby workspace** (see *Quiescing the Orchestrator
-   standby workspace*). From the same non-archived inventory, archive the repo-less
-   orchestrator standby if it's still active, so the board stops polling it.
+   standby workspace*). From the same non-archived inventory, archive a repo-less
+   orchestrator standby **only once its orchestrator session is over** (never while a
+   live session — including your own — backs it), so the board stops polling a *dead*
+   standby without ever killing the active orchestrator.
 4. **Find the READY cards.** `list_issues` for the project(s) returns only a *summary*
    of each card — **status, id, title, PR fields — but NOT the description**, and the
    `## Pipeline` / Orchestrate opt-in lives in the **description**. You therefore
@@ -174,8 +182,18 @@ The orchestrator runs against a **standby workspace** named **"Orchestrator"** (
 session, not a card. Because it has no repo but stays non-archived, the board UI keeps
 polling its `GET /api/workspaces/{id}/git/status` and opening its diff WebSocket, and
 every one of those calls fails with *"Workspace has no repositories configured"* — a
-500 + WARN flood that never stops on its own. Treat this workspace as a recognized
-special case and **archive it** so it leaves the board's polled active set.
+500 + WARN flood that never stops on its own. So a *dead* standby should be archived to
+leave the board's polled active set — **but only once its orchestrator session is over.**
+
+The earlier version of this step archived the standby **unconditionally** on every
+tick, which archived it *out from under the live orchestrator that the workspace
+backs* — the bug this rule now fixes. The rule is therefore: **archive a matched
+standby only when its orchestrator session is OVER (its tmux session is gone / its
+execution has finished); never while a live session backs it.** There is **no separate
+"is this me?" self-identification step** — *"never archive a standby with a live
+orchestrator session"* inherently protects your own backing workspace, because if you
+are that standby's session then it is live (your execution isn't finished and/or your
+tmux session exists), so the liveness check below leaves it alone.
 
 From the non-archived `list_workspaces` inventory you already fetched (step 2):
 
@@ -183,25 +201,50 @@ From the non-archived `list_workspaces` inventory you already fetched (step 2):
   (exact match — this is the standby's stable identity). The concrete one seen in the
   field is `9d17594f-…`, but **key off name/branch, never a hardcoded UUID**, so the
   fix survives the workspace being re-created with a fresh id.
-- For each such match that is **not already archived**, call
-  `update_workspace(workspace_id, archived: true)`.
+- **Liveness / "over" detection** (decide per matched standby; archive **only** if its
+  orchestrator session is over). Each `/loop` tick is memory-less, so derive state from
+  the API every time:
+  1. `list_sessions(workspace_id)` → every session flagged `is_orchestrator_session:
+     true`. **If there is no such session at all ⇒ the standby is orphaned ⇒ OVER ⇒
+     archive.**
+  2. For **each** orchestrator session, recover its latest execution: `Bash` GET
+     `$VIBE_BACKEND_URL/api/sessions/<session_id>/executions`, take the last entry;
+     `get_execution(execution_id)` → `is_finished`/`status` and `tmux_session_name`
+     (`= vk-<execution_id>`, present for headed runs).
+  3. A session is **LIVE** (⇒ do **not** archive) if **either** its execution is **not
+     finished** (still running — covers a non-headed live orchestrator) **or** its tmux
+     session **exists**: `Bash` `tmux has-session -t =vk-<execution_id>` (note the `=`
+     exact-match target). It is **OVER** only when it is **finished AND** its tmux
+     session is **absent** (or it never had a tmux session and is finished).
+  4. **Do not trust `status` alone** — a headed execution reads `running` after finishing
+     a turn; `tmux has-session` is the decider for headed runs, `is_finished` for
+     non-headed runs.
+  5. **Archive iff EVERY orchestrator session of the standby is provably OVER** (or there
+     are none). If **any** session is live — **or** its state is **indeterminate** (the
+     executions API errored, the execution is missing/unreadable, or the `tmux` query
+     errored) — **leave the workspace alone** and let a later tick re-check. Indeterminate
+     counts as live, never as over, so a momentary API hiccup can never archive a live
+     orchestrator.
+- Archive an over standby via `update_workspace(workspace_id, archived: true)`.
 - This is **idempotent**: once archived, it no longer appears in the non-archived
-  inventory, so later ticks find nothing and do nothing. If the app or operator
-  re-creates/un-archives it, the next sweep re-archives it.
+  inventory, so later ticks find nothing and do nothing; a live standby is simply never
+  touched. If the app or operator re-creates/un-archives it, the next sweep re-archives
+  it once liveness shows its session is over.
 - **Guard:** only ever archive the name/branch-matched standby. **Never** archive a
   card-linked or repo-backed workspace — a real card workspace is named after the
   card's `simple_id`/title and branched off the card's branch, so it can't match
   `"Orchestrator"`/`"orchestrator"`. If a matched workspace looks like a real
   repo-backed/card workspace, leave it alone.
-- **Report** one line only when you actually archive something (e.g. "Quiesced standby
-  workspace Orchestrator (archived)"). When there's nothing to do, stay silent — no
-  noise every tick.
+- **Report** one line only when you actually archive something (e.g. "Quiesced stale
+  standby workspace Orchestrator (session ended, archived)"). When there's nothing to do
+  (live session, indeterminate, or already archived), stay silent — no noise every tick.
 
 Archiving the standby's *record* does not stop the running orchestrator session: it
-runs from a neutral temp dir (`scripts/orchestrator.sh` does `cd "$(mktemp -d)"`), not
-from inside that workspace's worktree. This is a plugin-level workaround; the upstream
-cure is server-side (don't poll git/status or open a diff WS for a repo-less
-workspace).
+runs in its own tmux session from a neutral temp dir (`scripts/orchestrator-attach.sh`
+launches `claude` with `tmux new-session … -c "$(mktemp -d)"`), not from inside that
+workspace's worktree — and, per the liveness rule above, you only ever archive a standby
+whose session is already over. This is a plugin-level workaround; the upstream cure is
+server-side (don't poll git/status or open a diff WS for a repo-less workspace).
 
 ## Resolving which execution agent to start
 

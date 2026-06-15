@@ -23,12 +23,22 @@ On this tick, do one full sweep:
 3. QUIESCE THE ORCHESTRATOR STANDBY. From that same non-archived inventory, find any
    workspace with `name == "Orchestrator"` or `branch == "orchestrator"` (the repo-less
    standby that hosts the orchestrator — key off name/branch, NOT a hardcoded UUID).
-   For each match not already archived, `update_workspace(workspace_id, archived:
-   true)`. This stops the board from polling its git/status + diff and ending the
-   "Workspace has no repositories configured" 500/WARN flood. Idempotent (archived ⇒
-   gone from the inventory next tick). NEVER archive a card-linked / repo-backed
-   workspace — only the name/branch-matched standby. Report a line only if you archived
-   something.
+   Archive a match ONLY WHEN ITS ORCHESTRATOR SESSION IS OVER — never while a live
+   session (including your own) backs it. There is NO separate "is this me?" step:
+   "never archive a standby with a live orchestrator session" inherently spares your own
+   workspace. Liveness per match: `list_sessions(workspace_id)` → every
+   `is_orchestrator_session: true` session; NONE ⇒ orphaned ⇒ OVER. Else for each, take
+   its latest execution (`Bash` GET `$VIBE_BACKEND_URL/api/sessions/<id>/executions`,
+   last entry) + `get_execution` — a session is LIVE if `is_finished` is false OR
+   `tmux has-session -t =vk-<execution_id>` exists; OVER only if finished AND tmux
+   absent. Do NOT trust `status` alone (headed reads `running` after finishing).
+   ARCHIVE iff EVERY orchestrator session is over (or there are none):
+   `update_workspace(workspace_id, archived: true)` — this ends the "Workspace has no
+   repositories configured" 500/WARN flood for the dead standby. Any live OR
+   indeterminate (API/tmux error) session ⇒ LEAVE it, retry next tick. Idempotent
+   (archived ⇒ gone from the inventory next tick; live standby never touched). NEVER
+   archive a card-linked / repo-backed workspace — only the name/branch-matched standby.
+   Report a line only if you archived something.
 
 4. FIND READY CARDS. `list_issues` returns only a SUMMARY (status/id/title/PR fields) —
    NOT the description, and the `## Pipeline` / Orchestrate opt-in lives in the
