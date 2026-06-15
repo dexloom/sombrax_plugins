@@ -87,12 +87,15 @@ On this tick, do one full sweep:
    `update_issue` — you never merge, push, open a PR, or instruct the agent.
 
 8. DIRECTIVES (only if enabled). If this run's prompt lists directive flags
-   (`auto-unblock`, `auto-answer-questions`, `telegram-fanout`), apply each per your
-   agent definition's *Directives* section — poll running agents' pending approvals
-   (recover each execution id via `Bash` GET
-   `$VIBE_BACKEND_URL/api/sessions/<session_id>/executions`, last entry), auto-approve
-   routine tool requests / spawn `decider` for stale questions (age > ~600s) / narrate
-   over Telegram. If no flags are listed, skip this step entirely — that's the default.
+   (`auto-unblock`, `auto-answer-questions`, `telegram-fanout`, `auto-compact`), apply
+   each per your agent definition's *Directives* section — recover each running agent's
+   execution id via `Bash` GET `$VIBE_BACKEND_URL/api/sessions/<session_id>/executions`
+   (last entry), then auto-approve routine tool requests / spawn `decider` for stale
+   questions (age > ~600s) / narrate over Telegram / for `auto-compact` measure each
+   running `CLAUDE_CODE_HEADED` agent's context usage from its transcript and send
+   `/compact` to any over the threshold (default 300000; a flag may carry
+   `auto-compact (threshold: N)`). If no flags are listed, skip this step entirely —
+   that's the default.
 
 9. REPORT. One short line per dispatched card (id/title + executor), one per card
    whose status you advanced (card + old→new column), and one per directive action

@@ -15,7 +15,7 @@ running** (see [`../README.md`](../README.md) for prerequisites).
 | script | role | what it does |
 |--------|------|--------------|
 | `product-manager.sh` | **intake** | Runs the `product-manager` skill: a rough brief → a dev-ready vibe-kanban card. Interactive (it asks you to confirm the spec before filing). |
-| `orchestrator.sh` | **supervise** | Launches the **orchestrator agent** (`claude --agent vibe-kanban-indie:orchestrator`) on a `/loop` timer: each tick it starts an agent for an In-Progress/Orchestrate card that has none, and **reflects** managed-card board status by reading each agent's state (→ In Review when dev is finished + reviewed, → Done once the merge/PR has landed — read-only, it never merges itself). With a directive it can also spawn the `decider` for stale questions / auto-approve. It does **not** drive coding step-by-step — each coding agent runs its own pipeline, and the operator owns the merge decision. |
+| `orchestrator.sh` | **supervise** | Launches the **orchestrator agent** (`claude --agent vibe-kanban-indie:orchestrator`) on a `/loop` timer: each tick it starts an agent for an In-Progress/Orchestrate card that has none, and **reflects** managed-card board status by reading each agent's state (→ In Review when dev is finished + reviewed, → Done once the merge/PR has landed — read-only, it never merges itself). With a directive it can also spawn the `decider` for stale questions / auto-approve / `/compact` overloaded headed agents (`ORCH_AUTO_COMPACT=1`, see *Opt-in directives*). It does **not** drive coding step-by-step — each coding agent runs its own pipeline, and the operator owns the merge decision. |
 | `orchestrate_tg.sh` | **supervise + Telegram** | Same as `orchestrator.sh`, but also loads the sombrax-telegram channel in the **project-manager** role over all topics, so it can message the per-branch dev agents on Telegram. |
 
 ## Usage
@@ -34,6 +34,11 @@ ORCH_INTERVAL=2m scripts/orchestrator.sh
 scripts/orchestrate_tg.sh            # all topics, 5m loop
 scripts/orchestrate_tg.sh 10m
 TELEGRAM_TOPIC="vk/0123-x" scripts/orchestrate_tg.sh   # scope to one branch
+
+# Opt into the auto-compact directive (works on either launcher)
+ORCH_AUTO_COMPACT=1 scripts/orchestrator.sh                      # /compact headed
+                                                                 # agents over 300k
+ORCH_AUTO_COMPACT=1 ORCH_COMPACT_THRESHOLD=250000 scripts/orchestrate_tg.sh
 ```
 
 ## Telegram orchestration (`orchestrate_tg.sh`)
@@ -71,6 +76,32 @@ with the per-branch dev agents:
   the bot token lives at `~/.claude/channels/telegram/.env` (the listener holds
   it; the session stays tokenless). The script warns if the listener socket or the
   `Orchestrate` topic is missing.
+
+## Opt-in directives (`directives-block.sh`)
+
+By default the orchestrator only dispatches and reflects status. Directives turn on
+extra opt-in behaviors; both launchers source **`directives-block.sh`**, which reads
+directive env toggles and appends a `Directives enabled for this run:` block to the
+`/loop` spawn prompt (empty when no toggle is set, so the default prompt is unchanged).
+The flag's *logic* lives in the `orchestrator` agent definition; this block just names
+which flags are on.
+
+- **`auto-compact`** — `ORCH_AUTO_COMPACT=1` (truthy: `1`/`true`/`yes`/`on`). Each tick,
+  the orchestrator measures every running **`CLAUDE_CODE_HEADED`** agent's context-window
+  usage from its Claude Code transcript and sends `/compact` (via `run_session_prompt`)
+  to any agent whose usage exceeds the threshold. **Threshold** defaults to **300000**
+  tokens, overridable with `ORCH_COMPACT_THRESHOLD=<tokens>`. Headed-only,
+  all-running-headed scope (not just managed cards), no board side effects, idempotent
+  (a compacted agent reads back under the threshold). Example:
+  `ORCH_AUTO_COMPACT=1 ORCH_COMPACT_THRESHOLD=250000 scripts/orchestrator.sh`.
+
+To wire a new directive toggle, add a `case` to `directives-block.sh` and document the
+behavior in `agents/orchestrator.md` — both launchers pick it up automatically.
+
+> **GUI is future work, not in this repo.** The vibe-kanban GUI is a separate upstream
+> app; a future toggle there would enable `auto-compact` by injecting the same flag +
+> `ORCH_COMPACT_THRESHOLD` into the spawn prompt — the directive mechanism is the single
+> integration point.
 
 ## How the 5-minute check works
 

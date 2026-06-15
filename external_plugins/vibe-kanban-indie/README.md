@@ -13,7 +13,7 @@ sessions, poll executions, and unblock them when they ask for approval.
 | **`vibe-kanban` skill** | The orchestration playbook — board/workspace/session/execution control. |
 | **`product-manager` skill** | Turns a rough brief into a dev-ready vibe-kanban card (spec → issue). |
 | **`answer-questions` skill** | The method for answering an agent's stale question prompt (questionnaire) on the operator's behalf — ground it in the card/spec/plan, pick, submit. |
-| **`orchestrator` agent** | Card **dispatcher + status reflector** (launched as the session agent via `claude --agent`, on a `/loop 5m` timer — the agent arms `/loop` itself, so its tool allowlist includes `Skill` + `CronCreate`). Each tick it (1) finds READY cards with no workspace, resolves the executor (the card's pinned agent, else the operator's last-used/default config via `/api/config`), starts **one** coding agent per card via `start_workspace`, and marks it In Progress; and (2) **reflects** managed-card status — for cards it owns (the `## Pipeline` Orchestrate opt-in) it reads the coding agent's state (`get_execution` → `final_message`/`pending_approvals`) and advances the card to **In Review** when dev is finished + reviewed, **Done** once the merge/PR has landed (read-only — it never merges). Beyond those two it does nothing **unless** the operator opted into a directive at spawn time (`auto-unblock`, `auto-answer-questions`, `telegram-fanout`). The coding agent always owns its pipeline execution. |
+| **`orchestrator` agent** | Card **dispatcher + status reflector** (launched as the session agent via `claude --agent`, on a `/loop 5m` timer — the agent arms `/loop` itself, so its tool allowlist includes `Skill` + `CronCreate`). Each tick it (1) finds READY cards with no workspace, resolves the executor (the card's pinned agent, else the operator's last-used/default config via `/api/config`), starts **one** coding agent per card via `start_workspace`, and marks it In Progress; and (2) **reflects** managed-card status — for cards it owns (the `## Pipeline` Orchestrate opt-in) it reads the coding agent's state (`get_execution` → `final_message`/`pending_approvals`) and advances the card to **In Review** when dev is finished + reviewed, **Done** once the merge/PR has landed (read-only — it never merges). Beyond those two it does nothing **unless** the operator opted into a directive at spawn time (`auto-unblock`, `auto-answer-questions`, `telegram-fanout`, `auto-compact`). The coding agent always owns its pipeline execution. |
 | **`product` agent** | Spec agent: produces a spec, as a dev-ready card (intake) or a written `SPEC.md` (when a coding agent spawns it for the spec stage). |
 | **`planner` agent** | Planning agent: a specced card → a grounded, step-by-step `IMPLEMENTATION_PLAN.md` written at the workspace root. A coding agent spawns it for the plan stage. |
 | **`decider` agent** | Answers an agent's stale question prompt on the operator's behalf (runs `answer-questions`). The orchestrator spawns it after a grace window when the `auto-answer-questions` directive is enabled; you can also run it directly to clear a stuck questionnaire. |
@@ -101,6 +101,35 @@ workspace and starts its first coding-agent session; returns `workspace_id`,
   > plugin is *also* installed via the marketplace, the `vibe-kanban` server can
   > be registered twice. Pick one mode, or set `VIBE_BACKEND_URL` and run the
   > orchestrator sweep from your project instead.
+
+## Orchestrator directives (opt-in)
+
+The looped orchestrator does **nothing beyond dispatch + status reflection** unless a
+directive is turned on at spawn time. Directives are named as flags in the spawn
+prompt's `Directives enabled for this run:` block (the `scripts/` launchers inject it
+from env toggles — see [`scripts/README.md`](scripts/README.md)); their logic lives in
+the `orchestrator` agent definition. Available: `auto-unblock`,
+`auto-answer-questions`, `telegram-fanout`, and:
+
+- **`auto-compact`** — keeps long-running **headed** Claude Code agents
+  (`CLAUDE_CODE_HEADED`) healthy. Each sweep tick it measures every running headed
+  agent's context-window usage from its Claude Code transcript (`get_execution` →
+  `claude_transcript_path`; usage ≈ the last assistant message's
+  `input + cache_creation + cache_read` tokens) and, when it exceeds a configurable
+  threshold (**default 300000 tokens**), sends `/compact` to that agent via
+  `run_session_prompt`. It is **default-off**, headed-only, evaluates all running
+  headed agents across non-archived workspaces (not just managed cards), and has **no
+  board side effects** — it only triggers the agent's native compaction. Idempotent
+  by construction: a just-compacted agent reads back under the threshold, so it won't
+  re-fire. Enable it with `ORCH_AUTO_COMPACT=1` (and optionally
+  `ORCH_COMPACT_THRESHOLD=250000`) on either launcher.
+
+  > **GUI (future work, not in this repo).** The vibe-kanban **GUI** is a separate
+  > upstream app. A future "Auto-compact headed agents" toggle + threshold field there
+  > would surface this directive simply by injecting the same `auto-compact` flag and
+  > `ORCH_COMPACT_THRESHOLD` into the orchestrator's spawn prompt — the directive
+  > mechanism is the single integration point and is unchanged. No GUI change ships
+  > with this plugin.
 
 ## Safety
 

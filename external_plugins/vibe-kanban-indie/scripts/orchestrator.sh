@@ -21,6 +21,12 @@
 #   scripts/orchestrator.sh 300s       # check every 300 seconds
 #   ORCH_INTERVAL=2m scripts/orchestrator.sh
 #
+# Opt-in directives (default-off; injected into the spawn prompt — see
+# directives-block.sh):
+#   ORCH_AUTO_COMPACT=1 scripts/orchestrator.sh                     # /compact headed
+#                                                                    # agents over 300k
+#   ORCH_AUTO_COMPACT=1 ORCH_COMPACT_THRESHOLD=250000 scripts/orchestrator.sh
+#
 # To stop the loop: type "stop the loop" in the session, or Ctrl-C / exit it.
 #
 # Prerequisite: the vibe-kanban backend must be running (see ../README.md), or every
@@ -43,6 +49,12 @@ if [[ ! -f "${PROMPT_FILE}" ]]; then
 fi
 
 LOOP_BODY="$(cat "${PROMPT_FILE}")"
+
+# Append the opt-in "Directives enabled for this run" block (empty unless a directive
+# env toggle like ORCH_AUTO_COMPACT=1 is set). Sourced so it can't drift from the
+# Telegram launcher. The block must END the spawn prompt, so append it last.
+. "$(dirname "$0")/directives-block.sh"
+LOOP_BODY="${LOOP_BODY}${DIRECTIVES_BLOCK}"
 
 # Launch the orchestrator AGENT directly (not as a Task subagent). Its full behavior
 # lives in the agent definition; the looped prompt is just the per-tick sweep brief.

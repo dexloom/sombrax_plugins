@@ -2,3 +2,9 @@ node_modules/
 *.log
 .env
 .DS_Store
+
+# Pipeline scratch files — specs/plans belong at the workspace root (one level
+# above this repo) and must never be committed. Ignore them here too, in case a
+# run writes them at the repo root.
+SPEC.md
+IMPLEMENTATION_PLAN.md

@@ -58,6 +58,9 @@
 #   scripts/orchestrate_tg.sh            # loop every 5m, all topics, operator=Orchestrate
 #   scripts/orchestrate_tg.sh 10m        # custom interval
 #   TELEGRAM_TOPIC="vk/0123-x" scripts/orchestrate_tg.sh   # narrow subscription
+#   ORCH_AUTO_COMPACT=1 scripts/orchestrate_tg.sh          # /compact headed agents
+#                                                          # over 300k tokens
+#   ORCH_AUTO_COMPACT=1 ORCH_COMPACT_THRESHOLD=250000 scripts/orchestrate_tg.sh
 #
 # Stop the loop: type "stop the loop" in the session, or Ctrl-C.
 set -euo pipefail
@@ -159,9 +162,15 @@ agent's own say-so. Post a brief status digest to Orchestrate each tick (it show
 the console too).
 TG_EOF
 
-# Loop body = shared sweep + the Telegram addendum.
+# Append the opt-in "Directives enabled for this run" block (empty unless a directive
+# env toggle like ORCH_AUTO_COMPACT=1 is set). Same sourced builder as orchestrator.sh
+# so the two launchers can't drift; the block must END the spawn prompt, so it goes
+# after the Telegram addendum.
+. "$(dirname "$0")/directives-block.sh"
+
+# Loop body = shared sweep + the Telegram addendum + any enabled directives block.
 LOOP_BODY="$(cat "${PROMPT_FILE}")
-${TG_ADDENDUM}"
+${TG_ADDENDUM}${DIRECTIVES_BLOCK}"
 
 # Channel ref form: plugin:<plugin-name>:<mcp-server-name> (NOT the @marketplace
 # form). The sombrax-telegram plugin and its MCP server are both named
