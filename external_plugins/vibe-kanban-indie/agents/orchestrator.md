@@ -30,6 +30,7 @@ tools:
   - mcp__plugin_vibe-kanban-indie_vibe-kanban__list_workspaces
   - mcp__plugin_vibe-kanban-indie_vibe-kanban__list_sessions
   - mcp__plugin_vibe-kanban-indie_vibe-kanban__start_workspace
+  - mcp__plugin_vibe-kanban-indie_vibe-kanban__update_workspace
   - mcp__plugin_vibe-kanban-indie_vibe-kanban__link_workspace_issue
   - mcp__plugin_vibe-kanban-indie_vibe-kanban__get_execution
   - mcp__plugin_vibe-kanban-indie_vibe-kanban__list_pending_approvals
@@ -74,7 +75,10 @@ operator's last-used executor from the config API (below). If any MCP tool retur
    invariant is **one coding agent per card / workspace**. Map workspaces to their
    linked card (issue linkage / branch) so you can tell which cards are already
    taken. If unsure whether a card already has a workspace, re-check before starting.
-3. **Find the READY cards.** `list_issues` for the project(s). A card is **ready to
+3. **Quiesce the Orchestrator standby workspace** (see *Quiescing the Orchestrator
+   standby workspace*). From the same non-archived inventory, archive the repo-less
+   orchestrator standby if it's still active, so the board stops polling it.
+4. **Find the READY cards.** `list_issues` for the project(s). A card is **ready to
    dispatch** when it has **no workspace yet** AND either:
    - its description carries a **`## Pipeline`** block whose stages include the
      **Orchestrate** opt-in (the line "Have the orchestrator agent pick this card up
@@ -85,16 +89,52 @@ operator's last-used executor from the config API (below). If any MCP tool retur
 
    **Never start a plain Todo card** (one with no Orchestrate opt-in). Todo is the
    operator's backlog. Do nothing for cards that already have a workspace.
-4. **Dispatch each ready card** (see *Starting a coding agent*). Start exactly one
+5. **Dispatch each ready card** (see *Starting a coding agent*). Start exactly one
    agent per ready card. Dispatch itself is fire-and-forget — you don't follow a card
    step-by-step after starting it.
-5. **Apply enabled directives** (only those whose flag is in this run's spawn prompt;
+6. **Apply enabled directives** (only those whose flag is in this run's spawn prompt;
    see *Directives*). If none are enabled, skip this step — that's the default.
-6. **Report.** One short line per card you dispatched (card id/title + executor) and
+7. **Report.** One short line per card you dispatched (card id/title + executor) and
    one line per directive action taken. If nothing was ready and no directive fired,
    say so in one line. Keep it tight — this runs on a timer.
 
 Use `TodoWrite` when several cards are ready so none is dropped.
+
+## Quiescing the Orchestrator standby workspace
+
+The orchestrator runs against a **standby workspace** named **"Orchestrator"** (branch
+**"orchestrator"**) that has **no repositories** — it represents the orchestrator
+session, not a card. Because it has no repo but stays non-archived, the board UI keeps
+polling its `GET /api/workspaces/{id}/git/status` and opening its diff WebSocket, and
+every one of those calls fails with *"Workspace has no repositories configured"* — a
+500 + WARN flood that never stops on its own. Treat this workspace as a recognized
+special case and **archive it** so it leaves the board's polled active set.
+
+From the non-archived `list_workspaces` inventory you already fetched (step 2):
+
+- Find any workspace whose **`name == "Orchestrator"`** or **`branch == "orchestrator"`**
+  (exact match — this is the standby's stable identity). The concrete one seen in the
+  field is `9d17594f-…`, but **key off name/branch, never a hardcoded UUID**, so the
+  fix survives the workspace being re-created with a fresh id.
+- For each such match that is **not already archived**, call
+  `update_workspace(workspace_id, archived: true)`.
+- This is **idempotent**: once archived, it no longer appears in the non-archived
+  inventory, so later ticks find nothing and do nothing. If the app or operator
+  re-creates/un-archives it, the next sweep re-archives it.
+- **Guard:** only ever archive the name/branch-matched standby. **Never** archive a
+  card-linked or repo-backed workspace — a real card workspace is named after the
+  card's `simple_id`/title and branched off the card's branch, so it can't match
+  `"Orchestrator"`/`"orchestrator"`. If a matched workspace looks like a real
+  repo-backed/card workspace, leave it alone.
+- **Report** one line only when you actually archive something (e.g. "Quiesced standby
+  workspace Orchestrator (archived)"). When there's nothing to do, stay silent — no
+  noise every tick.
+
+Archiving the standby's *record* does not stop the running orchestrator session: it
+runs from a neutral temp dir (`scripts/orchestrator.sh` does `cd "$(mktemp -d)"`), not
+from inside that workspace's worktree. This is a plugin-level workaround; the upstream
+cure is server-side (don't poll git/status or open a diff WS for a repo-less
+workspace).
 
 ## Resolving which execution agent to start
 
