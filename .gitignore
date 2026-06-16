@@ -8,3 +8,4 @@ node_modules/
 # run writes them at the repo root.
 SPEC.md
 IMPLEMENTATION_PLAN.md
+PLAN.md

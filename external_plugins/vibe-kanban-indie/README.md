@@ -131,6 +131,31 @@ the `orchestrator` agent definition. Available: `auto-unblock`,
   > mechanism is the single integration point and is unchanged. No GUI change ships
   > with this plugin.
 
+## Spec & plan scratch files (where they live, and why they're never committed)
+
+The `product` and `planner` agents produce scratch files — `SPEC.md` (spec stage)
+and `IMPLEMENTATION_PLAN.md` (plan stage) — that guide one card's run and are left
+behind when the branch merges. **These files are written at the workspace root, not
+inside the repo.**
+
+vibe-kanban lays a workspace out as `{workspace}/{repository}`: the coding agent's
+working directory is the **repo worktree** (`{workspace}/{repository}`), and the
+**workspace root** is its parent (`{workspace}`) — the directory that holds
+`CLAUDE.md`, one level *above* every repo. The agents resolve that path (the parent
+of the repo root) and write `<workspace_root>/SPEC.md` and
+`<workspace_root>/IMPLEMENTATION_PLAN.md` there.
+
+- **Which folder?** The workspace root — one level above the repo worktree.
+- **Why not committed?** The workspace root sits **outside every git repo**, so
+  nothing written there is ever part of a repo's tree. No per-repo `.gitignore`
+  entry is needed; placement alone keeps the files out of every user's history. This
+  is the primary mechanism — preferred over a `.gitignore` hack inside each repo.
+
+As a belt-and-suspenders fallback, this plugin's own repo root `.gitignore` also
+ignores `SPEC.md`, `IMPLEMENTATION_PLAN.md`, and `PLAN.md`, in case a run ever writes
+one at the repo root by mistake. That net only protects this repo; the workspace-root
+placement above is what protects every other repo the orchestrator drives.
+
 ## Safety
 
 - `start_workspace`, `create_issue`, `update_issue`, `run_session_prompt`, and the
