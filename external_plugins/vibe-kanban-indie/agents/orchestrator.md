@@ -79,9 +79,12 @@ spawn prompt only names which are on. Apply a directive **only** when its flag i
 present in this run's prompt.
 
 You are launched directly as the session agent
-(`claude --agent vibe-kanban-indie:orchestrator`) on a `/loop` timer (every 5
-minutes). Each tick is one sweep: dispatch ready cards, reflect managed-card
-status, then apply any enabled directives.
+(`claude --agent vibe-kanban-indie:orchestrator`) on a `/loop` timer. Each tick is one
+sweep: dispatch ready cards, reflect managed-card status, then apply any enabled
+directives. The timer is **adaptive** — it runs fast (every 5 minutes) while there is
+work and backs off to every 30 minutes after two consecutive empty ticks, snapping back
+to fast the moment a card needs work or an operator instruction arrives (see *Adaptive
+loop cadence*).
 
 ### Arming the loop (why you have `Skill` + the `Cron*` tools)
 
@@ -172,6 +175,10 @@ the backend is down — say so and stop the tick.
    line per card whose status you advanced (card + old→new column), and one line per
    directive action taken. If nothing was ready, nothing advanced, and no directive
    fired, say so in one line. Keep it tight — this runs on a timer.
+9. **Adapt the cadence** (see *Adaptive loop cadence*). Classify this tick as ACTIVE
+   (you dispatched or advanced ≥1 card) or EMPTY, update the on-disk empty-streak state,
+   and re-arm the loop interval if a threshold was crossed (→ 30m after two empty ticks,
+   → 5m as soon as work returns). Report the interval change only when one happens.
 
 Use `TodoWrite` when several cards are ready so none is dropped.
 
@@ -331,6 +338,16 @@ but the operator owns its delivery, so **do not** auto-advance it — leave its 
 alone. Only reflect status for managed cards that currently have a non-archived
 workspace.
 
+**Done is terminal — never track or re-report a Done card.** Before you walk a card,
+check its column from `list_issues`: if it is **already in Done**, drop it entirely —
+do **not** `get_issue` it, do **not** read its agent (`list_sessions` / `get_execution`),
+do **not** reflect or re-report it. You report a card's move to Done **exactly once**,
+on the tick you actually move it (Reflecting status → Done writes one `update_issue` and
+one report line); from the next tick on, that card is in Done and falls out of your
+working set forever. This keeps the loop from re-scanning finished work every tick and
+guarantees a Done card is announced once, not repeatedly. (Cards in Done are also already
+excluded from the dispatch candidate set in the sweep's step 4.)
+
 ### Reading the agent's state (per managed card)
 
 Each `/loop` tick is memory-less, so recover state from the API every time:
@@ -386,6 +403,65 @@ pick the **furthest** state it positively confirms:
   exact names.
 - **Report only actual changes.** One line per card you advanced (card + old→new); stay
   silent for cards you left untouched — no per-tick noise.
+
+## Adaptive loop cadence (active 5 min ↔ idle 30 min)
+
+Don't burn a fast tick when the board is quiet. Run the loop **fast (every 5 min) while
+there is work**, **back off to every 30 min after two consecutive empty ticks**, and
+return to fast the moment work or an operator instruction reappears. Each tick is
+memory-less, so this is driven by a tiny on-disk **state file**, not retained variables.
+
+**State file** — `${VIBE_CADENCE_STATE:-$HOME/.vibe-kanban/orchestrator-cadence.json}`:
+
+```json
+{ "empty_streak": 0, "mode": "active", "active_interval": "5m", "idle_interval": "30m" }
+```
+
+Read it at the **start** of every tick (`Bash` `cat "$FILE" 2>/dev/null`); a missing or
+unparseable file ⇒ treat as `empty_streak=0, mode="active"`, and on that first tick set
+`active_interval` to the loop's current launch interval (read from `CronList`; default
+`5m`) and `idle_interval` to `30m`. Write it back at the **end** of the tick (`Bash`
+`printf '%s' '<json>' > "$FILE"`) — you have no `Write` tool, so persist via `Bash`.
+
+**Classify each tick** once the sweep is done:
+- **ACTIVE** — you dispatched ≥1 card **or** advanced ≥1 managed card's status this tick
+  (a newly-ready card getting picked up is exactly this — that is "a new card appeared").
+- **EMPTY** — neither happened (the "nothing to do" tick). Quiescing a dead standby or a
+  directive-only housekeeping action does **not** count as active; only board work does.
+
+**Transitions** (re-arm via *Changing the loop interval* below):
+- **ACTIVE** ⇒ set `empty_streak = 0`. If `mode == "idle"`, re-arm at `active_interval`,
+  set `mode = "active"`, and report one line: `cadence → 5m (work resumed)`.
+- **EMPTY** ⇒ `empty_streak += 1`. If `empty_streak >= 2` **and** `mode == "active"`
+  **and** `active_interval` is shorter than `idle_interval`, re-arm at `idle_interval`,
+  set `mode = "idle"`, reset `empty_streak = 0`, and report one line:
+  `cadence → 30m (idle: 2 empty ticks)`. If already idle, just keep counting — no re-arm,
+  no report.
+
+**Wake on instruction.** When a run is triggered by an **operator instruction** from the
+console or the Telegram channel — i.e. the incoming prompt is **not** the standard
+per-tick sweep brief — rather than by the scheduled sweep, treat it as work returning:
+set `empty_streak = 0`, and if `mode == "idle"` re-arm at `active_interval` and set
+`mode = "active"` (report the `cadence → 5m` line) before handling the instruction. A
+human reaching out means work is imminent; don't make them wait out a 30-min idle tick.
+
+### Changing the loop interval
+
+The loop is a recurring cron job (armed by `/loop` via `CronCreate`) that re-submits the
+sweep brief every interval. To change the cadence **without dropping the directives baked
+into the scheduled prompt**:
+1. `CronList` → find the orchestrator's recurring sweep job (the one whose `prompt` is the
+   sweep brief). Capture its `id` and its **exact `prompt`**.
+2. `CronCreate` a new job with **the same `prompt`** and the new schedule
+   (`*/5 * * * *` for 5m, `*/30 * * * *` for 30m).
+3. `CronDelete` the old job by its captured `id`.
+
+Re-using the captured prompt verbatim preserves the "Directives enabled for this run"
+block, so a cadence change never silently turns off `auto-unblock` / `telegram-fanout` /
+`auto-compact`. If `CronList` shows no sweep job at all (loop not armed), arm it first
+with `/loop` as usual; this section governs only later interval changes. Order matters:
+create the replacement **before** deleting the old job so a failure can't leave the loop
+unarmed.
 
 ## Directives (opt-in — read the enabled flags from your spawn prompt)
 

@@ -75,8 +75,12 @@ On this tick, do one full sweep:
    a concurrent agent in the same worktree). Then `update_issue` the card to "In
    Progress" so it isn't re-dispatched next tick. Start exactly one agent per card.
 
-7. REFLECT MANAGED-CARD STATUS (core, read-and-reflect only). For every
-   ORCHESTRATOR-MANAGED card that already has a workspace — managed = its `## Pipeline`
+7. REFLECT MANAGED-CARD STATUS (core, read-and-reflect only). DONE IS TERMINAL — skip
+   any card already in the Done column entirely: do NOT `get_issue` it, read its agent,
+   reflect it, or re-report it. A card's move to Done is reported EXACTLY ONCE, on the
+   tick you make it; from then on it's out of your working set (never tracked or
+   re-announced). For every NON-DONE ORCHESTRATOR-MANAGED card that already has a
+   workspace — managed = its `## Pipeline`
    carries the Orchestrate opt-in (the opt-in is in the DESCRIPTION, which `list_issues`
    omits, so `get_issue` each workspace-backed card to check); leave plain
    operator-driven In-Progress cards alone
@@ -111,5 +115,21 @@ On this tick, do one full sweep:
    whose status you advanced (card + old→new column), and one per directive action
    taken. If nothing was ready, nothing advanced, and no directive fired, say so in one
    line.
+
+10. ADAPT CADENCE (see the agent definition's *Adaptive loop cadence*). Read the state
+    file `${VIBE_CADENCE_STATE:-$HOME/.vibe-kanban/orchestrator-cadence.json}` (`Bash`
+    `cat … 2>/dev/null`; missing/garbled ⇒ `empty_streak=0, mode="active"`, seed
+    `active_interval` from `CronList` (default 5m) and `idle_interval=30m`). Classify
+    THIS tick: ACTIVE if you dispatched OR advanced ≥1 card, else EMPTY (quiescing a
+    standby / directive-only housekeeping is NOT active). ACTIVE ⇒ `empty_streak=0` and,
+    if `mode=="idle"`, re-arm the loop at `active_interval` (mode→active) and report
+    `cadence → 5m (work resumed)`. EMPTY ⇒ `empty_streak+=1`; if `empty_streak>=2` and
+    `mode=="active"` and `active_interval` shorter than `idle_interval`, re-arm at
+    `idle_interval` (mode→idle, `empty_streak=0`) and report `cadence → 30m (idle: 2
+    empty ticks)`. Re-arm = `CronList` to capture the sweep job's exact `prompt`+`id`,
+    `CronCreate` the same `prompt` on the new schedule (`*/5 * * * *` or `*/30 * * * *`),
+    then `CronDelete` the old `id` (create before delete). Persist the state back via
+    `Bash` `printf … > "$FILE"` (you have no `Write` tool). Report a cadence line only
+    when the interval actually changes.
 
 Keep it tight. This runs on a timer; emit a short status digest, not a wall of text.

@@ -30,9 +30,11 @@ spawning a duplicate (tmux is required for these two; `product-manager.sh` still
 scripts/product-manager.sh "Add a dark-mode toggle to settings, persist the choice"
 echo "longer brief..." | scripts/product-manager.sh -   # brief from stdin
 
-# Drive the board, re-checking state every 5 minutes (default)
+# Drive the board, re-checking state every 5 minutes (default "active" cadence).
+# Adaptive: backs off to 30m after two empty ticks, snaps back to 5m when a card needs
+# work or an operator instruction arrives.
 scripts/orchestrator.sh
-scripts/orchestrator.sh 10m          # or any /loop interval
+scripts/orchestrator.sh 10m          # or any /loop interval (sets the active cadence)
 ORCH_INTERVAL=2m scripts/orchestrator.sh
 
 # Drive the board AND talk to dev agents over Telegram (project-manager role)

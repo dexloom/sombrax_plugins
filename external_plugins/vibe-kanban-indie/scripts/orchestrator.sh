@@ -1,8 +1,12 @@
 #!/usr/bin/env bash
 #
 # orchestrator.sh — launch the orchestrator AGENT as the session agent
-# (`claude --agent vibe-kanban-indie:orchestrator`) and re-run its board sweep on a
-# fixed interval via the `/loop` skill.
+# (`claude --agent vibe-kanban-indie:orchestrator`) and re-run its board sweep on an
+# interval via the `/loop` skill. The launch interval is the "active" cadence; the
+# orchestrator then runs ADAPTIVELY — backing the timer off to 30m after two
+# consecutive empty ticks and snapping back to the active interval when a card needs
+# work or an operator instruction arrives (see the agent definition's "Adaptive loop
+# cadence"). It re-arms its own cron to change cadence.
 #
 # The orchestrator's full behavior lives in its agent definition; launching it with
 # --agent (rather than as a Task subagent) makes it the session itself. `/loop
@@ -13,7 +17,7 @@
 # agent per card via the MCP, mark it In Progress, and report. Beyond that core it
 # acts only on the opt-in directives named in its spawn prompt (auto-unblock /
 # auto-answer-questions / telegram-fanout), whose logic lives in the agent
-# definition. Default interval is 5m.
+# definition. Default (active) interval is 5m; idle backoff is 30m.
 #
 # Usage:
 #   scripts/orchestrator.sh            # check every 5 minutes
