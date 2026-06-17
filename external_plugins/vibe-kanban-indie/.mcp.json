@@ -2,7 +2,7 @@
   "mcpServers": {
     "vibe-kanban": {
       "command": "npx",
-      "args": ["-y", "vibe-kanban-indie@latest", "--mcp"],
+      "args": ["-y", "vibe-kanban-indie@${VIBE_KANBAN_CHANNEL:-latest}", "--mcp"],
       "env": {
         "VIBE_HEADED_LOCAL_CONTROL": "true"
       }

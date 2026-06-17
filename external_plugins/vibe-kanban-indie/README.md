@@ -40,9 +40,11 @@ sessions, poll executions, and unblock them when they ask for approval.
 ## Prerequisites
 
 1. **Node.js >= 20.19 with `npx` on your `PATH`.** The bundled `.mcp.json`
-   launches the MCP server via `npx -y vibe-kanban-indie@latest --mcp`, which
-   downloads the published `vibe-kanban-indie` npm package and runs its
-   `vibe-kanban-mcp` binary in global mode — no manual binary install needed.
+   launches the MCP server via `npx -y vibe-kanban-indie@${VIBE_KANBAN_CHANNEL:-latest} --mcp`,
+   which downloads the published `vibe-kanban-indie` npm package and runs its
+   `vibe-kanban-mcp` binary in global mode — no manual binary install needed. The
+   npm dist-tag defaults to the stable `@latest`; see **[Beta channel](#beta-channel)**
+   below to opt into `@beta`.
 2. **A vibe-kanban backend must be running.** The MCP is a thin client over the
    vibe-kanban HTTP API. It resolves the backend URL in this order:
    1. `VIBE_BACKEND_URL` (full URL, e.g. `http://127.0.0.1:8080`)
@@ -56,6 +58,44 @@ sessions, poll executions, and unblock them when they ask for approval.
    [`sombrax-telegram`](../sombrax-telegram/) plugin installed and its **listener
    daemon** running. The orchestrator agent talks to each dev agent over its
    per-branch Telegram topic.
+
+## Beta channel
+
+The `vibe-kanban-indie` npm package (the backend / MCP server) is published on two
+npm dist-tags: **`latest`** (stable) and **`beta`**. The bundled `.mcp.json` selects
+which one to launch from the `VIBE_KANBAN_CHANNEL` environment variable, defaulting
+to stable:
+
+```jsonc
+"args": ["-y", "vibe-kanban-indie@${VIBE_KANBAN_CHANNEL:-latest}", "--mcp"]
+```
+
+- **Default is stable.** Do nothing and the plugin keeps launching the `@latest`
+  package — exactly as before. Existing users see no change.
+- **Opt into beta.** Set `VIBE_KANBAN_CHANNEL=beta` **in the shell/environment that
+  launches Claude Code**, so the MCP subprocess inherits it:
+
+  ```bash
+  # opt into the beta backend for this Claude Code session
+  export VIBE_KANBAN_CHANNEL=beta
+  claude            # (or however you launch Claude Code)
+  ```
+
+  The variable is read when Claude Code spawns the MCP server, so set it **before**
+  starting Claude Code; if Claude Code is already running, restart it (or its MCP
+  server) for the change to take effect.
+- **Switch back to stable.** Unset the variable (or set it to `latest`) and restart
+  Claude Code:
+
+  ```bash
+  unset VIBE_KANBAN_CHANNEL   # or: export VIBE_KANBAN_CHANNEL=latest
+  ```
+
+- **Value is the bare dist-tag — `beta` or `latest`, with no leading `@`.** The
+  `.mcp.json` already supplies the `@`, so `VIBE_KANBAN_CHANNEL=@beta` would expand
+  to `vibe-kanban-indie@@beta` and fail to resolve. Use `beta`, not `@beta`.
+- This opt-in lives in your environment, not in a hand-edited vendored file, so it
+  **survives plugin reinstall/upgrade**.
 
 ## The MCP tool catalog (global mode)
 
