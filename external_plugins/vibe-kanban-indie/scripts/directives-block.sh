@@ -13,6 +13,9 @@
 #   ORCH_AUTO_COMPACT=1            enable `auto-compact` (truthy: 1/true/yes/on)
 #   ORCH_COMPACT_THRESHOLD=300000  per-run context threshold for auto-compact, in
 #                                  tokens (default 300000 when auto-compact is on)
+#   ORCH_NUDGE_STUCK=1            enable `nudge-stuck` (truthy: 1/true/yes/on) — send
+#                                  "Why are you stuck" to a managed agent with no
+#                                  progress across two consecutive ticks
 #
 # Add future directive toggles here the same way (one `case` per flag, appending a
 # `- <flag>` line). The orchestrator agent definition's *Directives* section defines
@@ -26,6 +29,14 @@ case "${ORCH_AUTO_COMPACT:-}" in
     _threshold="${ORCH_COMPACT_THRESHOLD:-300000}"
     _directive_lines="${_directive_lines}
 - auto-compact (threshold: ${_threshold})"
+    ;;
+esac
+
+# nudge-stuck: send "Why are you stuck" to a managed agent with no progress for 2 ticks.
+case "${ORCH_NUDGE_STUCK:-}" in
+  1 | true | yes | on | TRUE | YES | ON)
+    _directive_lines="${_directive_lines}
+- nudge-stuck"
     ;;
 esac
 

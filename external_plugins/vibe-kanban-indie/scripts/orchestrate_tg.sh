@@ -61,6 +61,8 @@
 #   ORCH_AUTO_COMPACT=1 scripts/orchestrate_tg.sh          # /compact headed agents
 #                                                          # over 300k tokens
 #   ORCH_AUTO_COMPACT=1 ORCH_COMPACT_THRESHOLD=250000 scripts/orchestrate_tg.sh
+#   ORCH_NUDGE_STUCK=1 scripts/orchestrate_tg.sh           # "Why are you stuck" to a
+#                                                          # managed agent stuck 2 ticks
 #
 # Spawn = connect: this launches `claude` inside the stable, SHARED tmux session
 # `vk-orchestrator` (override with ORCH_TMUX_SESSION) — the SAME name orchestrator.sh

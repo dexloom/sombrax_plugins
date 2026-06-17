@@ -38,6 +38,9 @@
 #   ORCH_AUTO_COMPACT=1 scripts/orchestrator.sh                     # /compact headed
 #                                                                    # agents over 300k
 #   ORCH_AUTO_COMPACT=1 ORCH_COMPACT_THRESHOLD=250000 scripts/orchestrator.sh
+#   ORCH_NUDGE_STUCK=1 scripts/orchestrator.sh                      # "Why are you stuck"
+#                                                                    # to a managed agent
+#                                                                    # stuck for 2 ticks
 #
 # To stop the loop: type "stop the loop" in the session, or Ctrl-C / exit it.
 #

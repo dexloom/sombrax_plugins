@@ -101,15 +101,21 @@ On this tick, do one full sweep:
    `update_issue` — you never merge, push, open a PR, or instruct the agent.
 
 8. DIRECTIVES (only if enabled). If this run's prompt lists directive flags
-   (`auto-unblock`, `auto-answer-questions`, `telegram-fanout`, `auto-compact`), apply
+   (`auto-unblock`, `auto-answer-questions`, `telegram-fanout`, `auto-compact`,
+   `nudge-stuck`), apply
    each per your agent definition's *Directives* section — recover each running agent's
    execution id via `Bash` GET `$VIBE_BACKEND_URL/api/sessions/<session_id>/executions`
    (last entry), then auto-approve routine tool requests / spawn `decider` for stale
    questions (age > ~600s) / narrate over Telegram / for `auto-compact` measure each
    running `CLAUDE_CODE_HEADED` agent's context usage from its transcript and send
    `/compact` to any over the threshold (default 300000; a flag may carry
-   `auto-compact (threshold: N)`). If no flags are listed, skip this step entirely —
-   that's the default.
+   `auto-compact (threshold: N)`) / for `nudge-stuck`, on each **managed** card (Orchestrate
+   opt-in) whose progress fingerprint (latest coding execution id + `final_message` +
+   recency) is unchanged for a **second consecutive** tick — and which isn't
+   blocked/finished/first-seen — send `run_session_prompt(session_id, "Why are you stuck")`
+   once, idempotent per stall, state in
+   `${VIBE_NUDGE_STATE:-$HOME/.vibe-kanban/orchestrator-nudge.json}`. If no flags are
+   listed, skip this step entirely — that's the default.
 
 9. REPORT. One short line per dispatched card (id/title + executor), one per card
    whose status you advanced (card + old→new column), and one per directive action

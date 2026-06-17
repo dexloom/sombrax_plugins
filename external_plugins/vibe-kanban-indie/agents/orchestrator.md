@@ -320,9 +320,10 @@ After dispatch, walk the **orchestrator-managed** cards that already have a work
 and move each card's column to mirror what its coding agent has actually done. This is
 **core** behavior (not a directive) and is **read-and-reflect only** — the sole write
 you make is `update_issue` to change the card's status. You never merge, push, open a
-PR, run `run_session_prompt`, or otherwise touch the work. (The **one** place this
-agent may call `run_session_prompt` is the opt-in `auto-compact` directive, and then
-only to send `/compact` — never to drive, steer, or review the work; see *Directives*.)
+PR, run `run_session_prompt`, or otherwise touch the work. (The only places this agent
+may call `run_session_prompt` are the opt-in `auto-compact` directive (sending
+`/compact`) and the opt-in `nudge-stuck` directive (sending `Why are you stuck`) —
+never to drive, steer, or review the work; see *Directives*.)
 
 ### Which cards count as "managed"
 
@@ -481,16 +482,18 @@ given. (No block at all ⇒ pure dispatch, nothing else.) A flag may carry a par
 parameter (e.g. `auto-compact (threshold: 300000)`); read it when present, else use the
 directive's default.
 
-To act on `auto-unblock` / `auto-answer-questions` / `auto-compact` you must inspect the
-**running agents** each sweep, so when any is enabled, extend the sweep: after dispatch,
-for every non-archived workspace get its coding `session_id` (`list_sessions`, skip
-`is_orchestrator_session`), recover that session's current execution id (each `/loop`
-tick is memory-less, so `Bash` GET `$VIBE_BACKEND_URL/api/sessions/<session_id>/executions`
+To act on `auto-unblock` / `auto-answer-questions` / `auto-compact` / `nudge-stuck` you
+must inspect the **running agents** each sweep, so when any is enabled, extend the sweep:
+after dispatch, for every non-archived workspace get its coding `session_id`
+(`list_sessions`, skip `is_orchestrator_session`), recover that session's current
+execution id (each `/loop` tick is memory-less, so `Bash` GET
+`$VIBE_BACKEND_URL/api/sessions/<session_id>/executions`
 and take the last entry's `id`), then inspect it: `list_pending_approvals(execution_process_id)`
 for what it's blocked on (each item carries `approval_id`, `kind`, the question/options,
 and **`age_seconds`**) — used by `auto-unblock` / `auto-answer-questions` — and/or
 `get_execution(execution_id)` for its live state and headed handles — used by
-`auto-compact`.
+`auto-compact` and `nudge-stuck` (the latter only over the **managed-card** subset; see
+its bullet).
 
 - **`auto-unblock`** — for **tool-permission** approvals: `respond_to_approval(
   approval_id, execution_process_id, decision='approve')` for routine,
@@ -544,7 +547,8 @@ and **`age_seconds`**) — used by `auto-unblock` / `auto-answer-questions` — 
     as best-effort corroboration.
   - **Action — send `/compact`.** Use `run_session_prompt(session_id, "/compact")` — the
     backend-tracked, sanctioned channel (consistent with "control via MCP, never raw
-    tmux"). This is the **sole** sanctioned use of `run_session_prompt` by this agent;
+    tmux"). This is **one of the two** sanctioned uses of `run_session_prompt` by this
+    agent (the other is the opt-in `nudge-stuck` directive's `Why are you stuck` nudge);
     it is never used to drive, review, or steer the work. *Fallback:* if a headed run is
     observed to insert the MCP prompt as **literal text** rather than executing the
     slash command, the single sanctioned raw-tmux exception is
@@ -554,6 +558,87 @@ and **`age_seconds`**) — used by `auto-unblock` / `auto-answer-questions` — 
     regresses a card, merges, approves, or answers. **Report** one line per agent
     actually compacted (`<card/workspace>: context <N> > <threshold> → sent /compact`)
     and stay silent when nothing crossed the threshold.
+
+- **`nudge-stuck`** — ask a **managed** coding agent that has stalled to account for
+  itself, by sending it the literal prompt `Why are you stuck` once it has shown **no
+  progress across two consecutive ticks**. A stalled agent — wedged in a loop, waiting on
+  nothing, or quietly crashed mid-turn without raising an approval or a question — would
+  otherwise sit untouched indefinitely (status reflection leaves such a card as-is and
+  re-checks next tick). This is the cheapest intervention: it either unsticks the agent or
+  produces a diagnostic final message the operator can act on. Like `auto-compact` it only
+  sends a prompt — it never advances/regresses a card, merges, approves, or answers.
+  - **Scope — managed cards only.** Unlike `auto-compact` (which walks every non-archived
+    workspace), `nudge-stuck` considers **only orchestrator-managed cards** — those whose
+    `## Pipeline` carries the **Orchestrate** opt-in — that currently have a **non-archived
+    workspace**: exactly the managed set the *Reflecting managed-card status* pass already
+    determines. A human-driven idle agent is **never** nudged. Reuse the coding
+    `session_id` + latest-`codingagent`-execution recovery that pass already performs:
+    `list_sessions` (skip `is_orchestrator_session`); `Bash` GET
+    `$VIBE_BACKEND_URL/api/sessions/<session_id>/executions`, last
+    `run_reason == "codingagent"` entry; `get_execution(execution_id)`.
+  - **Progress fingerprint.** Decide "progress" from observable state alone (the tick is
+    memory-less). Build an **opaque fingerprint** of the agent's current coding execution
+    combining at least the **latest coding execution id** + the execution's
+    **`final_message`**, plus a **recency signal** — the execution's **`updated_at`**
+    and/or, when the transcript is readable, the last-assistant-message `usage`/token count
+    (the same transcript `auto-compact` reads). **Fingerprint unchanged** from the recorded
+    snapshot ⇒ *no progress* this tick; **changed** ⇒ progress. If the transcript is
+    unreadable / has no `usage` block yet, fall back to execution-id + `final_message`;
+    never crash. (Accepted coarseness: an agent grinding inside one long execution without
+    changing `final_message` could read as no-progress — err toward "progress" whenever any
+    recency signal advances.)
+  - **Exclusions — not stuck, so skip and reset the streak to 0.** An agent is **never** a
+    nudge candidate when any of these holds: its `pending_approvals` is **non-empty** (it is
+    correctly waiting on a tool/question — that is the canonical "waiting, not stuck" case);
+    its execution `is_finished` is true, **or** the card is in **Done**, **or**
+    `final_message` reports a completed milestone (pipeline complete / merged / PR opened /
+    In Review reached); there is **no coding session / no `codingagent` execution yet** (a
+    freshly dispatched card — first observation only); or the executor **cannot accept a
+    session prompt** (skip silently, never error the sweep).
+  - **First observation establishes a baseline.** The first tick an agent is seen (no prior
+    state entry for its session) ⇒ record its fingerprint with `no_progress_streak = 0` and
+    **do not** nudge — two consecutive no-progress ticks are impossible on first sight.
+  - **Two-tick trigger + idempotence.** Per session keep `last_fingerprint`,
+    `no_progress_streak`, and a nudge marker `nudged_fingerprint`. Each tick:
+    - **excluded** (above) ⇒ set `no_progress_streak = 0`, update `last_fingerprint`, clear
+      `nudged_fingerprint`, no nudge;
+    - **fingerprint changed** (progress) ⇒ set `no_progress_streak = 0`, update
+      `last_fingerprint`, clear `nudged_fingerprint`, no nudge;
+    - **fingerprint unchanged** (no progress) ⇒ increment `no_progress_streak`. When it
+      **transitions to 2** (the second consecutive no-progress tick) **and**
+      `nudged_fingerprint` ≠ the current fingerprint, send
+      `run_session_prompt(session_id, "Why are you stuck")` **once**, then set
+      `nudged_fingerprint` = the current fingerprint. If the streak is already ≥ 2 and
+      `nudged_fingerprint` already equals the current fingerprint, **stay silent** — one
+      nudge per distinct stall, not one per tick.
+    Keying the marker on the **fingerprint** (not the streak) is load-bearing: it clears
+    exactly when progress resumes, so a later *fresh* stall can be nudged again, while a
+    still-unchanged fingerprint never re-fires.
+  - **State file (memory-less — derive from observable state).** Persist the per-session map
+    at `${VIBE_NUDGE_STATE:-$HOME/.vibe-kanban/orchestrator-nudge.json}`, keyed by session
+    id, each entry `{ last_fingerprint, no_progress_streak, nudged_fingerprint }`. **Read**
+    it at the start of this pass (`Bash` `cat "$FILE" 2>/dev/null`); a **missing or
+    unparseable** file ⇒ treat as an empty map (every agent becomes a first observation, so
+    a garbled file can never cause a spurious nudge — only a one-tick delay). **Write** the
+    updated map back at the end of the pass via `Bash` `printf '%s' '<json>' > "$FILE"` (you
+    have no `Write` tool). **Prune** entries for sessions no longer in the current inventory
+    so the file can't grow unbounded (a pruned-then-reappearing session is a safe fresh
+    first observation).
+  - **Channel + payload.** Send **only** via
+    `run_session_prompt(session_id, "Why are you stuck")` — the sanctioned MCP channel,
+    never raw tmux. The literal payload is exactly `Why are you stuck` (no trailing
+    punctuation). **No retry:** if the prompt doesn't land, the next tick re-evaluates — the
+    fingerprint will be unchanged but `nudged_fingerprint` already records it, so it won't
+    spam.
+  - **No board side effects + reporting.** `nudge-stuck` only sends the one prompt and
+    writes its own state file. It never advances/regresses a card, merges, approves, or
+    answers. **Report** one line per agent actually nudged
+    (`<card/workspace>: no progress for 2 ticks → sent "Why are you stuck"`); stay silent
+    for agents that progressed, are excluded, or are on their first/only no-progress tick
+    (streak 1). Under `telegram-fanout`, mirror the line to the Orchestrate topic like other
+    directive actions. A nudge is **directive-only housekeeping** and does **not** make the
+    tick count as ACTIVE for adaptive cadence (an otherwise-empty tick that only nudges
+    stays EMPTY) — the same rule `auto-compact` follows.
 
 ## Safety & honesty
 
