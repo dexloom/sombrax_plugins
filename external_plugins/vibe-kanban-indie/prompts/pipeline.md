@@ -46,12 +46,37 @@ subagents** so they write there, not inside the repo.
   blockers and revise the plan before writing code.
 - **implement (always)** — **this is your own work.** Build the change **step by step
   in one continuous flow** — finish a step, verify it, move straight to the next. Do
-  **not** pause for approval between steps. **Commit as you go** — a commit at the end
+  **not** pause for approval between steps (the **only** exception is a **Wait for
+  approval** stage, if your card lists one — see below). **Commit as you go** — a commit at the end
   of each step (or whenever a meaningful chunk is done) so progress is checkpointed
   and never lost; don't let a large amount of work pile up uncommitted.
 - **code-review** (if listed) — when the work is done, **have codex review the diff**
   (`codex review --base {{BASE_BRANCH}}`, or the `codex-review` skill). Do **not**
   review it yourself. Address its findings and re-run until it passes.
+- **Update documentation** (if listed) — once the change exists (and is code-reviewed,
+  if that stage ran), update the documentation the change actually affects so the docs
+  match what shipped: the repo/plugin's own docs that describe the changed behavior —
+  relevant `README.md`(s), `CLAUDE.md`, prompt/agent docs, or the module docs the
+  change touches. Reflect **what actually changed**, not speculative docs. **Commit the
+  doc updates** as part of this run (commit-as-you-go, same as the implement stage). If
+  nothing user-visible changed and no doc is now stale, **say so** ("no docs needed
+  updating") rather than silently skipping. The convention for what to touch lives in
+  `${CLAUDE_PLUGIN_ROOT}/CLAUDE.md`.
+- **Wait for approval** (if listed) — a deliberate **operator gate**: the one
+  sanctioned exception to the "do not pause for approval between steps" rule above.
+  When you reach this stage, **first commit everything** so no work is lost while
+  parked, then **STOP and wait** for the operator's decision — do **not** advance any
+  later stage on your own. Signal that you are parked by making the **first line of your
+  final message** the exact marker `AWAITING OPERATOR APPROVAL`, followed by a one-line
+  summary of *what* is awaiting decision and *what the operator can say to proceed*
+  (e.g. "approve" or specific instructions). This marker is the agreed park signal the
+  orchestrator watches for — keep it **byte-identical** to the literal recorded in
+  `${CLAUDE_PLUGIN_ROOT}/CLAUDE.md` (a leading `⏸️` is optional decoration and is not
+  part of the marker). The operator's decision/instructions arrive **as a prompt** in
+  this same session (delivered through `run_session_prompt`, the same channel `/compact`
+  arrives on); treat that prompt as the approval decision — proceed as approved (carry
+  out any instructions) or revise as instructed, then continue the remaining stages. Do
+  not poll or re-emit the marker while parked; just wait for the prompt.
 - **merge** (if listed) — do NOT merge or open the PR on your own. When everything
   above is done, first make sure **all your work is committed**, then STOP and report
   that the pipeline is complete and awaiting the merge decision. The orchestrator runs
@@ -64,8 +89,10 @@ subagents** so they write there, not inside the repo.
   Only act on the orchestrator's explicit go — never merge or push on your own
   initiative.
 
-If your card lists no spec/plan/review/merge stages, just implement the task and
-report complete.
+If your card lists no optional stages at all (no spec/plan/review/update-docs/
+wait-for-approval/merge), just implement the task and report complete. If it lists any
+of them — including only an Update documentation or Wait for approval stage — run those
+in order around the implementation.
 
 ## Delegation, and the fallback when you can't
 - **You always do:** implement the task, apply review fixes, commit, and report.
@@ -84,6 +111,9 @@ Keep going on your own through the whole pipeline. Stop and surface only when:
   it as a question), or
 - a stage needs a **side-effecting / destructive / off-plan** action you shouldn't
   take unilaterally, or
+- you reach a **Wait for approval** stage your card lists — park at the operator gate
+  (commit first, emit the `AWAITING OPERATOR APPROVAL` marker, then wait for the
+  operator's prompt), or
 - the pipeline is **complete** and awaiting the merge decision.
 
 Otherwise: don't check in between steps — just run the next stage.

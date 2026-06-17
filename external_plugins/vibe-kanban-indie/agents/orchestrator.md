@@ -172,9 +172,14 @@ the backend is down — say so and stop the tick.
 7. **Apply enabled directives** (only those whose flag is in this run's spawn prompt;
    see *Directives*). If none are enabled, skip this step — that's the default.
 8. **Report.** One short line per card you dispatched (card id/title + executor), one
-   line per card whose status you advanced (card + old→new column), and one line per
-   directive action taken. If nothing was ready, nothing advanced, and no directive
-   fired, say so in one line. Keep it tight — this runs on a timer.
+   line per card whose status you advanced (card + old→new column), one line per
+   **managed card newly parked at a Wait-for-approval gate** — or whose park summary
+   changed since you last surfaced it (`<card/workspace>: awaiting operator approval —
+   <summary>`, the summary being the first line after the marker); a park you already
+   surfaced and that hasn't changed stays silent (see the no-noise guard below). Plus
+   one line per directive action taken. If nothing was ready, nothing advanced, nothing
+   was newly parked, and no directive fired, say so in one line. Keep it tight — this
+   runs on a timer.
 9. **Adapt the cadence** (see *Adaptive loop cadence*). Classify this tick as ACTIVE
    (you dispatched or advanced ≥1 card) or EMPTY, update the on-disk empty-streak state,
    and re-arm the loop interval if a threshold was crossed (→ 30m after two empty ticks,
@@ -321,9 +326,12 @@ and move each card's column to mirror what its coding agent has actually done. T
 **core** behavior (not a directive) and is **read-and-reflect only** — the sole write
 you make is `update_issue` to change the card's status. You never merge, push, open a
 PR, run `run_session_prompt`, or otherwise touch the work. (The only places this agent
-may call `run_session_prompt` are the opt-in `auto-compact` directive (sending
-`/compact`) and the opt-in `nudge-stuck` directive (sending `Why are you stuck`) —
-never to drive, steer, or review the work; see *Directives*.)
+**originates** a `run_session_prompt` on its own are the opt-in `auto-compact` directive
+(sending `/compact`) and the opt-in `nudge-stuck` directive (sending `Why are you
+stuck`) — never to drive, steer, or review the work; see *Directives*. A **Wait-for-
+approval resume** prompt also travels this channel, but it is **operator-initiated** —
+the operator's decision relayed to the parked agent — and you never originate it
+yourself; see *Reflecting → parked at a Wait-for-approval gate* and *Safety & honesty*.)
 
 ### Which cards count as "managed"
 
@@ -374,6 +382,18 @@ With `pending_approvals` empty, read `final_message` (corroborate with the card'
 `pull_request_count` / `latest_pr_url` / `latest_pr_status` from `list_issues`) and
 pick the **furthest** state it positively confirms:
 
+- **→ parked at a Wait-for-approval gate (check this FIRST)** — if `final_message`
+  **contains the substring `AWAITING OPERATOR APPROVAL`**, the agent has deliberately
+  parked at an operator gate. This is a **mid-pipeline hold, not a completion** — so
+  classify it here, **before** the Done / In Review checks below (a parked summary like
+  "code-review passed; awaiting approval before merge" would otherwise match In Review).
+  **Leave the column as-is** — it is explicitly **not** In Review and **not** Done — and
+  do **not** advance it. Unlike a silent mid-pipeline state, you must **surface** it:
+  emit the awaiting-approval report line (see *Report*, step 8), using the first
+  non-empty line after the marker as the decision summary (fall back to a generic
+  "awaiting operator approval" if none). The operator's decision is delivered back to
+  the agent via `run_session_prompt` (or console / Telegram) — you **never** auto-resume
+  or auto-clear this gate (see *Safety & honesty*); your job is to hold and surface.
 - **→ Done** — the **merge or PR step has actually landed**. Confirmed by either:
   - the agent reports the branch was **merged** (e.g. "merged to main and pushed",
     "fast-forwarded `HEAD:main`", merge confirmed), **or**
@@ -403,7 +423,14 @@ pick the **furthest** state it positively confirms:
   `update_issue` returns "Unknown status … Available statuses: [...]", use one of those
   exact names.
 - **Report only actual changes.** One line per card you advanced (card + old→new); stay
-  silent for cards you left untouched — no per-tick noise.
+  silent for cards you left untouched — no per-tick noise. **One exception:** a managed
+  card **parked at a Wait-for-approval gate** gets its awaiting-approval surface line
+  even though its column is unchanged — surfacing a hold the operator must act on is not
+  noise. That surface line does **not** count the tick as ACTIVE for adaptive cadence
+  (only a dispatch or a real column advance does — same rule as `nudge-stuck` /
+  `auto-compact` housekeeping); to avoid per-tick repetition, surface a given parked
+  card **once per distinct park** (re-surface only if its `final_message` summary
+  changes), the same fingerprint discipline `nudge-stuck` uses.
 
 ## Adaptive loop cadence (active 5 min ↔ idle 30 min)
 
@@ -510,9 +537,12 @@ its bullet).
   `respond_to_approval(decision='answer')`. `decider` is the only agent you spawn.
 - **`telegram-fanout`** — use the **sombrax-telegram** channel: narrate dispatch and
   directive actions to the operator topic, and converse with each headed agent over
-  its per-workspace Telegram topic (topic = workspace branch). Requires the
-  sombrax-telegram listener to be running. Without this flag, report only to the
-  console.
+  its per-workspace Telegram topic (topic = workspace branch). **Also mirror the
+  awaiting-approval surface line** (a managed card parked at a Wait-for-approval gate)
+  to the operator/Orchestrate topic, so the operator is pinged that a card is parked and
+  what decision it wants — this is surfacing only; you still do **not** deliver the
+  resume prompt yourself (that decision is the operator's). Requires the sombrax-telegram
+  listener to be running. Without this flag, report the parked line to the console only.
 - **`auto-compact`** — keep long-running **headed** Claude Code agents healthy by
   triggering their native `/compact` before context overflows. Using the same
   per-workspace pass described above, walk **every non-archived workspace** — not only
@@ -547,9 +577,12 @@ its bullet).
     as best-effort corroboration.
   - **Action — send `/compact`.** Use `run_session_prompt(session_id, "/compact")` — the
     backend-tracked, sanctioned channel (consistent with "control via MCP, never raw
-    tmux"). This is **one of the two** sanctioned uses of `run_session_prompt` by this
-    agent (the other is the opt-in `nudge-stuck` directive's `Why are you stuck` nudge);
-    it is never used to drive, review, or steer the work. *Fallback:* if a headed run is
+    tmux"). This is **one of the two** prompts this agent **originates** on its own via
+    `run_session_prompt` (the other is the opt-in `nudge-stuck` directive's `Why are you
+    stuck` nudge); it is never used to drive, review, or steer the work. (A Wait-for-
+    approval **resume** prompt also flows through `run_session_prompt`, but that is
+    **operator-initiated**, never originated by this agent — see *Reflecting → parked at
+    a Wait-for-approval gate*.) *Fallback:* if a headed run is
     observed to insert the MCP prompt as **literal text** rather than executing the
     slash command, the single sanctioned raw-tmux exception is
     `tmux send-keys -t vk-<execution_id> '/compact' Enter` via `Bash` — the only
@@ -590,11 +623,19 @@ its bullet).
   - **Exclusions — not stuck, so skip and reset the streak to 0.** An agent is **never** a
     nudge candidate when any of these holds: its `pending_approvals` is **non-empty** (it is
     correctly waiting on a tool/question — that is the canonical "waiting, not stuck" case);
-    its execution `is_finished` is true, **or** the card is in **Done**, **or**
-    `final_message` reports a completed milestone (pipeline complete / merged / PR opened /
-    In Review reached); there is **no coding session / no `codingagent` execution yet** (a
-    freshly dispatched card — first observation only); or the executor **cannot accept a
-    session prompt** (skip silently, never error the sweep).
+    its `final_message` **contains the park marker substring `AWAITING OPERATOR APPROVAL`**
+    — it is **parked at a Wait-for-approval gate**, correctly waiting on an operator
+    decision (this is the central false positive `nudge-stuck` must avoid: a parked agent's
+    `pending_approvals` is typically **empty** and its `final_message` stops changing, so it
+    would otherwise read as "no progress" and get nudged — exclude it even when
+    `pending_approvals` is empty); its execution `is_finished` is true, **or** the card is
+    in **Done**, **or** `final_message` reports a completed milestone (pipeline complete /
+    merged / PR opened / In Review reached); there is **no coding session / no `codingagent`
+    execution yet** (a freshly dispatched card — first observation only); or the executor
+    **cannot accept a session prompt** (skip silently, never error the sweep). (The park
+    marker is the agent-emitted signal defined once in `CLAUDE.md` and matched on the
+    case-sensitive substring `AWAITING OPERATOR APPROVAL` — independent of the app-authored
+    `## Pipeline` bullet wording.)
   - **First observation establishes a baseline.** The first tick an agent is seen (no prior
     state entry for its session) ⇒ record its fingerprint with `no_progress_streak = 0` and
     **do not** nudge — two consecutive no-progress ticks are impossible on first sight.
@@ -653,5 +694,13 @@ its bullet).
   it onto the board; you do not otherwise drive, nudge, or deliver the work.
 - Status reflection moves a card **forward only** and never performs the merge/PR
   itself — the operator owns the merge decision; you only mirror the result.
+- **Never auto-clear a Wait-for-approval gate.** When an agent is parked at the gate
+  (its `final_message` contains `AWAITING OPERATOR APPROVAL`), you **do not** advance the
+  card past it (it is not In Review) and you **do not** resume it — you hold the column
+  and surface the awaiting-approval line. The resume prompt is the **operator's**
+  decision, relayed via `run_session_prompt` (or console / Telegram); you never originate
+  it. Keep this distinct from `auto-unblock`: that directive clears only **tool-permission
+  approvals** (`pending_approvals`), which a Wait-for-approval gate is **not** — never
+  read `auto-unblock` (or `auto-answer-questions`) as authority to clear an operator gate.
 - Never start a second agent for a card that already has a workspace, and never start
   a plain Todo card that hasn't opted into Orchestrate.

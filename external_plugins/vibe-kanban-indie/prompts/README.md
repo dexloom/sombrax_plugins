@@ -17,14 +17,14 @@ agent locally — it's already in the worktree with the code.
 ## The set
 | file | purpose | placeholders |
 |------|---------|--------------|
-| `pipeline.md` | The **kickoff** the orchestrator sends once after starting the agent: work your card's `## Pipeline` to completion on your own; stop only for a genuine question or when complete and awaiting the merge decision. | `{{TASK}}`, `{{BASE_BRANCH}}` |
+| `pipeline.md` | The **kickoff** the orchestrator sends once after starting the agent: work your card's `## Pipeline` to completion on your own; stop only for a genuine question, at a **Wait-for-approval** gate, or when complete and awaiting the merge decision. | `{{TASK}}`, `{{BASE_BRANCH}}` |
 | `plan.md` | The canonical planning method — the shape for `IMPLEMENTATION_PLAN.md` (written at the workspace root). Self-contained; used by the coding agent for its plan stage (or by the standalone `planner` agent if a human invokes it). | `{{TASK}}` |
 | `codex-review.md` | Gate with codex: `codex exec --sandbox read-only` for the plan, `codex review --base <base>` for the diff. Reports `PASS`/`CHANGES REQUESTED`. | `{{BASE_BRANCH}}` |
 
 ## How it fits together
 ```
 orchestrator: start_workspace (kickoff = filled pipeline.md as its prompt) ─▶ MONITOR (get_execution / final_message)
-coding agent (self-driven):  spec [→product] → plan [→planner] → plan-review [→codex] ──loop──▶ develop (its own code) → code-review [→codex] → STOP "complete, awaiting merge"
+coding agent (self-driven):  spec [→product] → plan [→planner] → plan-review [→codex] ──loop──▶ develop (its own code) → code-review [→codex] → update-docs → Wait-for-approval (PARK on marker → operator approves → resume) → STOP "complete, awaiting merge"
 orchestrator: dev finished + reviewed ─▶ In Review ; merge/PR actually landed ─▶ Done
 ```
 The orchestrator owns *board state* for managed cards — it **reflects** status by
