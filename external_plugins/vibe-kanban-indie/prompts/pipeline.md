@@ -37,6 +37,15 @@ subagents** so they write there, not inside the repo.
   telling it the card and the **workspace root path**, to write
   `<workspace_root>/SPEC.md`. Don't write the spec yourself — wait for it, then build
   on it.
+- **recall-knowledge** (if listed) — **before planning, recall what this project
+  already knows.** Invoke the `vibe-kanban-indie:knowledge-recall` skill (via the
+  Skill tool), passing the **workspace root path**; it greps the project knowledge
+  base (`~/.vibe-kanban/projects/<project_id>/knowledge/`) and writes
+  `<workspace_root>/PRIOR_KNOWLEDGE.md`. Then **pass that workspace root to the
+  `product`/`planner` subagents** so the spec and plan build on it. It is read-only
+  on the knowledge base; if the KB is empty (first card), it notes that and you
+  continue. Fallback: if you can't invoke the skill, follow
+  `${CLAUDE_PLUGIN_ROOT}/skills/knowledge-recall/SKILL.md` inline.
 - **plan** (if listed) — **spawn the `planner` subagent**, telling it the card and the
   **workspace root path**, to write `<workspace_root>/IMPLEMENTATION_PLAN.md`,
   grounded in `SPEC.md` and the real repo. Don't write the plan yourself.
@@ -62,6 +71,17 @@ subagents** so they write there, not inside the repo.
   nothing user-visible changed and no doc is now stale, **say so** ("no docs needed
   updating") rather than silently skipping. The convention for what to touch lives in
   `${CLAUDE_PLUGIN_ROOT}/CLAUDE.md`.
+- **enrich-knowledge** (if listed) — after the change is implemented (and
+  reviewed/documented, if those stages ran), **record reusable knowledge** into the
+  project knowledge base. Invoke the `vibe-kanban-indie:knowledge-enrich` skill; it
+  distills durable facts from `SPEC.md` / `IMPLEMENTATION_PLAN.md` / the git diff,
+  adds or updates topic pages (each tagged with this card's id and the repo(s) the
+  learning concerns), refreshes the index, and **commits the knowledge base** — its
+  own git repo under `~/.vibe-kanban/projects/<project_id>/knowledge/`, separate from
+  your code commit. If nothing reusable emerged, **say so** ("no new knowledge to
+  record") rather than writing filler. The convention lives in
+  `${CLAUDE_PLUGIN_ROOT}/CLAUDE.md`. Fallback: follow
+  `${CLAUDE_PLUGIN_ROOT}/skills/knowledge-enrich/SKILL.md` inline.
 - **Wait for approval** (if listed) — a deliberate **operator gate**: the one
   sanctioned exception to the "do not pause for approval between steps" rule above.
   When you reach this stage, **first commit everything** so no work is lost while
@@ -89,10 +109,11 @@ subagents** so they write there, not inside the repo.
   Only act on the orchestrator's explicit go — never merge or push on your own
   initiative.
 
-If your card lists no optional stages at all (no spec/plan/review/update-docs/
-wait-for-approval/merge), just implement the task and report complete. If it lists any
-of them — including only an Update documentation or Wait for approval stage — run those
-in order around the implementation.
+If your card lists no optional stages at all (no spec/recall-knowledge/plan/review/
+update-docs/enrich-knowledge/wait-for-approval/merge), just implement the task and
+report complete. If it lists any of them — including only an Update documentation,
+Enrich knowledge base, or Wait for approval stage — run those in order around the
+implementation.
 
 ## Delegation, and the fallback when you can't
 - **You always do:** implement the task, apply review fixes, commit, and report.
