@@ -10,17 +10,24 @@ reference — they must stay in sync with the definition here.
 ## Pipeline-item conventions
 
 A card's description may carry a `## Pipeline` block delimited by
-`<!-- vk:pipeline:start -->` / `<!-- vk:pipeline:end -->`. Each bullet inside is an
-**optional stage** the coding agent runs *around* its always-on implementation work.
+`<!-- vk:pipeline:start -->` / `<!-- vk:pipeline:end -->`. vibe-kanban composes this
+block from the pipeline **file** the operator picked
+(`~/.vibe-kanban/pipelines/*.toml`) and the stages they ticked: a **numbered list,
+already in execution order**. The coding agent **runs the listed stages in that order —
+it does not select, skip, or reorder them** (its always-on implementation work is one of
+those stages).
 
-- **The bullets are authored by the vibe-kanban app, not this repo.** The plugin only
-  *interprets* them. So this plugin recognizes a stage by its **name / intent**
-  ("Wait for approval", "Update documentation", "spec", …) — not by an exact
-  app-emitted string. If the app ever emits different canonical phrasing for a stage,
-  the matching language in `pipeline.md` / `orchestrator.md` must be realigned to it;
-  the **park marker** below is independent of that wording because the agent emits it.
-- A card lists **only the subset of stages it opts into**, in the canonical relative
-  order below.
+- **The block is composed by the vibe-kanban app from a pipeline file, not this repo.**
+  The plugin only *interprets* it. The pipeline "brain" (which stages exist, their text,
+  their order) now lives in the file, not in these prompts. This plugin still recognizes
+  a stage by its **name / intent** ("Wait for approval", "Update documentation", "spec",
+  …) — not an exact app-emitted string — to know *how* to run each (delegate spec →
+  `product`, plan → `planner`, reviews → `codex`) and to spot the `Orchestrate` opt-in.
+  If the app ever emits different canonical phrasing for a stage, the matching language
+  in `pipeline.md` / `orchestrator.md` must be realigned to it; the **park marker** below
+  is independent of that wording because the agent emits it.
+- A card lists **only the subset of stages the operator ticked**, in the file's order
+  (which follows the canonical relative order below).
 - **`Orchestrate` is the orchestrator's auto-drive opt-in, not a coding-agent step.**
   When present it is listed **first**. It tells the orchestrator to pick the card up and
   drive it to done (dispatch + status reflection); the coding agent ignores it as a step

@@ -5,8 +5,10 @@ its own, DELEGATING each specialized stage to a subagent/tool rather than doing 
 itself: product writes the spec, planner writes the plan, codex does the reviews.
 The agent's own job is to sequence the pipeline and write the code in the develop
 stage. Fill {{TASK}} with the card's title + id and {{BASE_BRANCH}} with the
-review/merge base (default `main`). The agent reads its actual stage list from the
-card's `## Pipeline` block, so this prompt doesn't restate which stages apply.
+review/merge base (default `main`). The card's `## Pipeline` block is composed by
+vibe-kanban (from the pipeline FILE the operator picked) as a **numbered, ordered**
+stage list, so this prompt doesn't restate which stages apply — the agent runs exactly
+what's listed, in the given order.
 -->
 You own this task end to end. Work it to completion **yourself** — do not stop after
 each step to ask what's next. You are the *integrator*: **implementing the task is
@@ -17,12 +19,15 @@ subagent/tool and act on what it produces.
 ## Task
 {{TASK}}
 
-## Always implement — plus the optional stages your card lists
+## Always implement — plus the stages your card's pipeline lists
 **Implementing the task is unconditional** — do it whether or not your card lists
-any stages. On top of that, your card's description may carry a **`## Pipeline`**
-block (delimited by `<!-- vk:pipeline:start -->` / `<!-- vk:pipeline:end -->`)
-listing **optional** stages to run *around* the implementation. Run the ones it
-lists, in order, and skip the ones it doesn't. (An `Orchestrate` entry is the
+any stages. On top of that, your card's description carries a **`## Pipeline`**
+block (delimited by `<!-- vk:pipeline:start -->` / `<!-- vk:pipeline:end -->`) that
+**vibe-kanban has composed for you from the pipeline file the operator picked**: a
+**numbered list of stages, already in the order you must run them**. **Execute those
+stages in the exact order given — do not add, skip, or reorder them, and do not decide
+for yourself which apply.** The stage text says *what* to do; the notes below say *how*
+(which subagent/tool to delegate each stage to). (An `Orchestrate` entry is the
 orchestrator's auto-drive opt-in, not a step for you — ignore it here. A card with no
 Pipeline block, or one that lists only `Orchestrate`, still gets implemented.)
 
@@ -109,11 +114,11 @@ subagents** so they write there, not inside the repo.
   Only act on the orchestrator's explicit go — never merge or push on your own
   initiative.
 
-If your card lists no optional stages at all (no spec/recall-knowledge/plan/review/
-update-docs/enrich-knowledge/wait-for-approval/merge), just implement the task and
-report complete. If it lists any of them — including only an Update documentation,
-Enrich knowledge base, or Wait for approval stage — run those in order around the
-implementation.
+If your card's pipeline lists no stages beyond implement (no spec/recall-knowledge/
+plan/review/update-docs/enrich-knowledge/wait-for-approval/merge), just implement the
+task and report complete. If it lists any of them — including only an Update
+documentation, Enrich knowledge base, or Wait for approval stage — run them in the exact
+order given, around the implementation.
 
 ## Delegation, and the fallback when you can't
 - **You always do:** implement the task, apply review fixes, commit, and report.
