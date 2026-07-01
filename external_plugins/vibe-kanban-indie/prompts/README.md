@@ -24,7 +24,7 @@ agent locally — it's already in the worktree with the code.
 ## How it fits together
 ```
 orchestrator: start_workspace (kickoff = filled pipeline.md as its prompt) ─▶ MONITOR (get_execution / final_message)
-coding agent (self-driven):  spec [→product] → plan [→planner] → plan-review [→codex] ──loop──▶ develop (its own code) → code-review [→codex] → update-docs → Wait-for-approval (PARK on marker → operator approves → resume) → STOP "complete, awaiting merge"
+coding agent (self-driven):  spec [→product] → recall-knowledge → plan [→planner] → plan-review [→codex] ──loop──▶ develop (its own code) → code-review [→codex] → update-docs → enrich-knowledge → Wait-for-approval (PARK on marker → operator approves → resume) → STOP "complete, awaiting merge"
 orchestrator: dev finished + reviewed ─▶ In Review ; merge/PR actually landed ─▶ Done
 ```
 The orchestrator owns *board state* for managed cards — it **reflects** status by

@@ -32,17 +32,23 @@ When a card lists several of these, they appear in this relative order:
 
 1. **Orchestrate** — opt-in; the orchestrator auto-drives the card (not an agent step). Listed first.
 2. **spec** — `product` subagent writes `SPEC.md` at the workspace root.
-3. **plan** — `planner` subagent writes `IMPLEMENTATION_PLAN.md` at the workspace root.
-4. **plan-review** — codex reviews the plan (`codex exec --sandbox read-only`); resolve blockers.
-5. **implement** — *always*; the coding agent's own core work, committed as it goes.
-6. **code-review** — codex reviews the diff (`codex review --base <base>`); address findings.
-7. **Update documentation** — update the docs the change affects (see below), before merge.
-8. **Wait for approval** — an operator gate. Its slot here (just before merge) is only
+3. **recall-knowledge** — the coding agent invokes `knowledge-recall`: greps the project
+   knowledge base and writes `PRIOR_KNOWLEDGE.md` at the workspace root for the spec/plan
+   stages to build on. Read-only on the knowledge base (see below).
+4. **plan** — `planner` subagent writes `IMPLEMENTATION_PLAN.md` at the workspace root.
+5. **plan-review** — codex reviews the plan (`codex exec --sandbox read-only`); resolve blockers.
+6. **implement** — *always*; the coding agent's own core work, committed as it goes.
+7. **code-review** — codex reviews the diff (`codex review --base <base>`); address findings.
+8. **Update documentation** — update the docs the change affects (see below), before merge.
+9. **enrich-knowledge** — the coding agent invokes `knowledge-enrich`: records reusable
+   knowledge from what shipped into the project knowledge base (its own git repo) and
+   commits it, before merge (see below).
+10. **Wait for approval** — an operator gate. Its slot here (just before merge) is only
    its **most common** placement; unlike the other stages it is **freely placeable** —
    the card can position it wherever an operator sign-off is wanted (e.g. right after
    `plan` to approve the plan before coding, or after `code-review` to approve the change
    before merge). Wherever it sits, it pauses the pipeline at that point (see below).
-9. **merge** — the operator owns the merge/PR decision; the agent stops and awaits it.
+11. **merge** — the operator owns the merge/PR decision; the agent stops and awaits it.
 
 The numbered list is the **default relative order** the other stages keep when several
 are listed; **Wait for approval** is the one stage that may appear earlier than its slot
@@ -66,6 +72,43 @@ alongside, `merge`.
   **commit the doc updates as part of the same pipeline run** (commit-as-you-go). If
   nothing user-visible changed and no doc is now stale, **say so explicitly** ("no docs
   needed updating") rather than silently skipping the stage.
+
+## "Recall prior knowledge" — how it is done
+
+- **When.** Before the plan stage (after spec, if any). Read-only; it never blocks.
+- **Where the knowledge base lives.** One per **project**, a standalone git repo at
+  `~/.vibe-kanban/projects/<project_id>/knowledge/` (debug builds:
+  `~/.vibe-kanban-dev/...`). It is shared and **branch-independent** — every card sees
+  every recorded page immediately, with no merge required. The skill derives the home dir
+  from its cwd (the `worktrees` parent) and the `project_id` from `get_context`.
+- **What it does.** Greps `index.md` + page frontmatter for pages relevant to the card
+  topic (title + `SPEC.md`), reads the top 3–5, and writes a token-bounded
+  `PRIOR_KNOWLEDGE.md` at the **workspace root** (next to `SPEC.md`, outside every repo
+  worktree, so it is never committed). The coding agent passes that workspace root to the
+  `product`/`planner` subagents so the spec/plan build on it.
+- **Convention.** Read-only on the knowledge base — recall never writes or commits there.
+  An empty KB (first card) or unresolvable project context is a normal outcome: it writes a
+  short "no prior knowledge yet" note and the pipeline continues. The method lives in
+  `${CLAUDE_PLUGIN_ROOT}/skills/knowledge-recall/SKILL.md`.
+
+## "Enrich knowledge base" — how it is done
+
+- **When.** After implement (and code-review / update-docs, if those ran), before merge.
+- **What it records.** Only **durable, cross-card** knowledge — architecture, where things
+  live, non-obvious decisions, gotchas, established patterns — distilled from `SPEC.md` /
+  `IMPLEMENTATION_PLAN.md` / the git diff. It **excludes** changelog, transient TODOs, and
+  anything the code/docs already state. Each page carries a `summary` (≤200 chars, the grep
+  payload), `sources:` (contributing card `simple_id`s), and `repos:` (the repo(s) the
+  learning concerns); `index.md` keeps one self-contained line per page between
+  `<!-- vk:kb:index:start -->` / `<!-- vk:kb:index:end -->` markers.
+- **One project KB.** A multi-repo card still records into the single project knowledge
+  base, tagging each fact's `repos:` — never per-repo knowledge bases. Prefer updating an
+  existing page over creating a near-duplicate (anti-bloat).
+- **Convention.** Commit **only** inside the knowledge repo
+  (`git -C <kb> add -A && git -C <kb> commit`, `git init` on first use) — never mix the KB
+  commit with the card's code diff. If nothing reusable emerged, **say so explicitly** ("no
+  new knowledge to record") rather than writing filler. The method lives in
+  `${CLAUDE_PLUGIN_ROOT}/skills/knowledge-enrich/SKILL.md`.
 
 ## "Wait for approval" — the gate, end to end
 

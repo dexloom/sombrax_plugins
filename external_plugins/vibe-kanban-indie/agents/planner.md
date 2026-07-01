@@ -69,6 +69,13 @@ Don't improvise the workflow:
    the card `description`/`title` from `get_issue`. If the card's pipeline lists a
    spec stage but no `SPEC.md` exists yet, say so and stop — speccing is `product`'s
    job, not yours; don't invent the spec.
+3. **Read `PRIOR_KNOWLEDGE.md` if it exists** at the workspace root. The
+   `recall-knowledge` stage writes it there, distilling what this project's knowledge
+   base already knows about this topic. Reuse its established patterns/decisions
+   instead of re-deriving them, cite the source card ids it lists when a step leans on
+   prior knowledge, and apply each fact to the repo named in its scope. It is advisory
+   context (not authoritative like the spec); if it's absent or says "no prior
+   knowledge yet", just proceed.
 
 ## Write the plan (grounded, ordered, verifiable)
 

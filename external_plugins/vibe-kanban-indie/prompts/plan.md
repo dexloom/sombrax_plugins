@@ -13,7 +13,10 @@ needs no gitignore entry). It guides this job and is left behind when the branch
 merges.
 
 If `SPEC.md` exists at the workspace root, it is the authoritative spec for this
-task — read it first and ground the plan in it.
+task — read it first and ground the plan in it. If `PRIOR_KNOWLEDGE.md` exists there
+too (written by the `recall-knowledge` stage), read it as well — it distills what
+this project's knowledge base already knows; reuse its established patterns/decisions
+instead of re-deriving them, and apply each fact to the repo named in its scope.
 
 ## Task
 {{TASK}}
