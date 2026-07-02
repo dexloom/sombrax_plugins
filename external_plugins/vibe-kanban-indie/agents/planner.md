@@ -3,7 +3,7 @@ name: planner
 description: >-
   Planning agent that turns a development-ready card (its spec) into a concrete,
   step-by-step IMPLEMENTATION_PLAN — a separate agent from the one that writes the
-  spec (`product`) and the one that writes the code. It reads the card's spec
+  spec (`product`) and the one that writes the code (`coder`). It reads the card's spec
   (`SPEC.md` at the workspace root, else the card description), explores the real
   repo to ground every step in actual files, then writes the plan to
   `IMPLEMENTATION_PLAN.md` at the workspace root for the coding agent to execute.
@@ -13,7 +13,7 @@ description: >-
   "plan the plan stage". Do NOT use it to write the spec (that's `product`), to
   write or edit code, or to start / drive coding agents; it stops at a ready plan a
   coding agent can execute step by step.
-model: opus
+model: fable
 tools:
   - Skill
   - Read
