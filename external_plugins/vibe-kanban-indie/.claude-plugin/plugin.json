@@ -1,7 +1,7 @@
 {
   "name": "vibe-kanban-indie",
   "description": "Orchestrate vibe-kanban-indie from Claude Code — drive the kanban board and a crew of coding agents through the bundled vibe-kanban MCP server. Ships the vibe-kanban, product-manager, answer-questions, knowledge-recall, knowledge-enrich, and release skills, the orchestrator, product (spec), planner, decider, and release subagents, reusable lifecycle prompts, and looped-orchestrator launchers.",
-  "version": "0.2.14",
+  "version": "0.2.15",
   "keywords": [
     "vibe-kanban",
     "kanban",
