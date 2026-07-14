@@ -55,18 +55,30 @@ subagents** so they write there, not inside the repo.
   **workspace root path**, to write `<workspace_root>/IMPLEMENTATION_PLAN.md`,
   grounded in `SPEC.md` and the real repo. Don't write the plan yourself.
 - **plan-review** (if listed) — **have codex review the plan** (run codex as the
-  reviewer — `codex exec --sandbox read-only` over `IMPLEMENTATION_PLAN.md`, or the
-  `codex-review-plan` skill if available). Do **not** review it yourself. Resolve any
-  blockers and revise the plan before writing code.
+  reviewer — `codex exec --sandbox read-only "<review prompt>" < /dev/null` over
+  `IMPLEMENTATION_PLAN.md`, or the `codex-review-plan` skill if available). Do **not**
+  review it yourself. Resolve any blockers and revise the plan before writing code.
+  **Never leave codex's stdin open:** `codex exec` reads stdin *in addition to* its prompt
+  argument, so without `< /dev/null` it prints "Reading additional input from stdin…" and
+  **blocks forever** waiting for an EOF your shell never sends. Run it from **inside your
+  repo worktree** (not the workspace root); the full method is in `codex-review.md`.
 - **implement (always)** — **this is your own work.** Build the change **step by step
   in one continuous flow** — finish a step, verify it, move straight to the next. Do
   **not** pause for approval between steps (the **only** exception is a **Wait for
   approval** stage, if your card lists one — see below). **Commit as you go** — a commit at the end
   of each step (or whenever a meaningful chunk is done) so progress is checkpointed
   and never lost; don't let a large amount of work pile up uncommitted.
+  **If a stage delegates the coding to a subagent** (e.g. the `coder` agent in an Async
+  pipeline), that subagent **leaves the worktree dirty on purpose** — it never commits,
+  because the calling agent owns the git ceremony. **You are that caller:** when it
+  reports back, **verify its work yourself** (read the diff, run the checks) and then
+  **commit it** before you advance to the next stage. Never move on with a delegated
+  subagent's work sitting uncommitted.
 - **code-review** (if listed) — when the work is done, **have codex review the diff**
-  (`codex review --base {{BASE_BRANCH}}`, or the `codex-review` skill). Do **not**
-  review it yourself. Address its findings and re-run until it passes.
+  (`echo "<what to look for>" | codex review --base {{BASE_BRANCH}}`, or the `codex-review`
+  skill). Do **not** review it yourself. Address its findings and re-run until it passes.
+  Piping the instructions in is what closes codex's stdin here — the pipe sends EOF, so this
+  form needs no `< /dev/null` (and adding one would throw the piped instructions away).
 - **Update documentation** (if listed) — once the change exists (and is code-reviewed,
   if that stage ran), update the documentation the change actually affects so the docs
   match what shipped: the repo/plugin's own docs that describe the changed behavior —
@@ -102,23 +114,120 @@ subagents** so they write there, not inside the repo.
   arrives on); treat that prompt as the approval decision — proceed as approved (carry
   out any instructions) or revise as instructed, then continue the remaining stages. Do
   not poll or re-emit the marker while parked; just wait for the prompt.
-- **merge** (if listed) — do NOT merge or open the PR on your own. When everything
-  above is done, first make sure **all your work is committed**, then STOP and report
-  that the pipeline is complete and awaiting the merge decision. The orchestrator runs
-  the operator handshake and tells you which to do; carry it out in your worktree with
-  `git`/`gh` (the vibe-kanban MCP has no merge/PR tool):
-    - **merge** → commit anything outstanding, then **merge your branch into the
-      upstream/base branch** and confirm the merge landed.
-    - **PR** → commit anything outstanding, **push your branch, and open a pull
-      request** (`gh pr create`); report the PR URL.
-  Only act on the orchestrator's explicit go — never merge or push on your own
-  initiative.
+- **merge / pr** (if listed) — **you perform it yourself, autonomously.** There is no
+  handshake and no "go" to wait for: the operator authorized this **by ticking the
+  default-off stage on the card**, and the orchestrator neither instructs nor performs
+  merges. Carry it out in your worktree with `git`/`gh` (the vibe-kanban MCP has no
+  merge/PR tool). **Do exactly the stage(s) your card lists, and nothing more:** `merge`
+  listed → squash-merge (do **not** open a PR); `pr` listed → open the PR (do **not**
+  merge); **both** listed → do both, in the order the `## Pipeline` gives them, and say so
+  in your report; neither listed → do neither.
+    - **merge** → commit everything outstanding, **squash your branch onto
+      `{{BASE_BRANCH}}`** with the protocol below, **confirm it landed**, push the updated
+      base branch **only if this repo has a remote**, and report what you merged.
+    - **pr** → commit everything outstanding, **push your branch and open a pull request**
+      (`gh pr create`); report the PR URL.
+
+  **The merge protocol.** Other cards are merging into the same base branch at the same
+  time, and no human is watching any more. Do all six steps, in order:
+
+  1. **Commit everything, then take the per-repo merge lock** —
+     `until mkdir /tmp/vk-merge-lock-<repo> 2>/dev/null; do sleep 10; done`, but **bounded**
+     (~10 min, so a leaked lock can never wedge the board) and **released on every exit
+     path, including failure** (`trap … EXIT`). Run the locked section as **one shell
+     invocation** so the trap actually covers it; if you split it across commands, `rmdir`
+     the lock yourself in every failure branch. (`<repo>` is just the repo's directory name;
+     two unrelated repos sharing a name would merely wait for each other — harmless.)
+     **Be honest about what this lock is:** *best-effort serialization only*. It saves
+     wasted work; it guarantees nothing. "The lock is old, so it must be stale" is **not**
+     sound — a legitimate holder may still be rebasing, fixing and testing. Breaking or
+     bypassing it is survivable **only because of the compare-and-swap in step 4**, which
+     turns a concurrent merge into a *failed* update you retry, never a *lost* commit. If
+     you merge without holding the lock, **say so in your report**.
+  2. **Pin the base, then rebase onto exactly that commit** —
+     `OLD=$(git rev-parse "{{BASE_BRANCH}}")`, then `git rebase "$OLD"`. Another card may
+     have landed while you worked. Pinning the OID is what makes step 4 safe.
+  3. **Re-run the build/tests after the rebase.** **A clean rebase is not a passing build.**
+     If it now fails, fix it, commit, and redo step 2.
+  4. **Squash without checkout, and compare-and-swap the ref.** **Never
+     `git checkout {{BASE_BRANCH}}`** — you are in a **linked git worktree**, the base is
+     normally checked out in another one, and the checkout fails outright with *"'…' is
+     already used by worktree at …"*. Instead mint the squash commit and move the ref
+     **only if the base is still where you left it**:
+     ```sh
+     NEW=$(git commit-tree "HEAD^{tree}" -p "$OLD" -m "<CARD>: <summary>")
+     git update-ref -m "<CARD>: squash merge" "refs/heads/{{BASE_BRANCH}}" "$NEW" "$OLD"
+     ```
+     After the rebase your `HEAD` tree **is** exactly what the base should become, so
+     `commit-tree` mints one squash commit (your tree, parented on the base tip you pinned).
+     The trailing `"$OLD"` is `update-ref`'s **expected old value**: the write lands only if
+     the base still points at `$OLD`, so you can never silently overwrite a commit another
+     card landed meanwhile. Parent on `$OLD` — **never re-run `git rev-parse` here**; that
+     would reopen the very race this closes.
+     This touches **only the ref**, never a working tree, so the ref update succeeds
+     regardless of where the base is checked out. It does **not** synchronize that other
+     worktree: a clone with the base checked out keeps its old index and files while its
+     `HEAD` now resolves to the new tip, until someone refreshes it *there*. That is the
+     operator's business — **never reach into another worktree.**
+  5. **If the swap failed *because the base moved*, loop back to step 2** — re-pin, rebase
+     again, **re-run the checks**, re-mint, retry — and **bound the retries** (a handful) so
+     you can never spin forever; if the base keeps moving, report it. **Recognize that
+     failure precisely:** a race reads `cannot lock ref '…': is at <actual> but expected
+     <old>`. A **deleted** ref reads `reference is missing but expected <old>` — that is
+     **not** a race, and neither is any other `update-ref` error: **surface those, do not
+     retry.** Never "report and move on" while your merge has not landed.
+  6. **Verify, unlock, report** — `git log --oneline {{BASE_BRANCH}} -1` shows **your**
+     commit **and** `git diff {{BASE_BRANCH}} HEAD` is **empty** (both, or it did not land);
+     then `rmdir /tmp/vk-merge-lock-<repo>` — **even on failure** — and report what you
+     merged.
+
+  Worked example (fill in `<repo>`, the card id and summary, and your real checks):
+  ```sh
+  repo=$(basename "$(git rev-parse --show-toplevel)"); lock="/tmp/vk-merge-lock-$repo"
+
+  # 1 — lock: best-effort serialization, bounded. The CAS in step 4 is the real backstop.
+  got=""; for i in $(seq 1 60); do                       # ~10 min, so a leaked lock can't wedge us
+    if mkdir "$lock" 2>/dev/null; then got=1; break; fi; sleep 10
+  done
+  if [ -n "$got" ]; then trap 'rmdir "$lock" 2>/dev/null' EXIT INT TERM; fi
+  # Couldn't get it? You may proceed WITHOUT it — the compare-and-swap below means the worst
+  # case is a failed merge you retry, never a lost commit. Say so in your report if you do.
+
+  # 2–5 — pin, rebase, re-verify, mint, compare-and-swap. Retry ONLY when the base moved.
+  merged=""
+  for attempt in 1 2 3 4 5; do
+    OLD=$(git rev-parse "{{BASE_BRANCH}}")                       # pin the base you merge onto
+    git rebase "$OLD" || { echo "rebase conflict — resolve it, commit, then run this again"; exit 1; }
+
+    # 3 — RE-RUN THE BUILD/TESTS HERE. A clean rebase is not a passing build. Fix + commit if red.
+
+    # 4 — squash WITHOUT checkout (never `git checkout {{BASE_BRANCH}}`), CAS onto $OLD
+    NEW=$(git commit-tree "HEAD^{tree}" -p "$OLD" -m "<CARD>: <summary>")
+    if err=$(git update-ref -m "<CARD>: squash merge" "refs/heads/{{BASE_BRANCH}}" "$NEW" "$OLD" 2>&1); then
+      merged=1; break                                            # landed
+    elif printf '%s' "$err" | grep -q "is at .* but expected"; then
+      echo "base moved (attempt $attempt) — re-pin, re-rebase, re-verify, re-mint"; continue
+    else
+      # NOT a race — e.g. "reference is missing but expected …" means the ref was DELETED.
+      echo "update-ref failed, and not because the base moved: $err"; exit 1
+    fi
+  done
+  [ -n "$merged" ] || { echo "base kept moving — merge did not land; report and stop"; exit 1; }
+
+  # 6 — verify it landed, then unlock (the trap also covers the failure paths)
+  git log --oneline {{BASE_BRANCH}} -1                   # your squash commit is the base tip
+  git diff {{BASE_BRANCH}} HEAD                          # must print nothing
+  rmdir "$lock" 2>/dev/null
+
+  # push the base only if this repo actually has that remote:
+  #   git remote get-url origin >/dev/null 2>&1 && git push origin {{BASE_BRANCH}}
+  ```
 
 If your card's pipeline lists no stages beyond implement (no spec/recall-knowledge/
-plan/review/update-docs/enrich-knowledge/wait-for-approval/merge), just implement the
+plan/review/update-docs/enrich-knowledge/wait-for-approval/merge/pr), just implement the
 task and report complete. If it lists any of them — including only an Update
-documentation, Enrich knowledge base, or Wait for approval stage — run them in the exact
-order given, around the implementation.
+documentation, Enrich knowledge base, Wait for approval, merge, or pr stage — run them in
+the exact order given, around the implementation.
 
 ## Delegation, and the fallback when you can't
 - **You always do:** implement the task, apply review fixes, commit, and report.
@@ -140,6 +249,8 @@ Keep going on your own through the whole pipeline. Stop and surface only when:
 - you reach a **Wait for approval** stage your card lists — park at the operator gate
   (commit first, emit the `AWAITING OPERATOR APPROVAL` marker, then wait for the
   operator's prompt), or
-- the pipeline is **complete** and awaiting the merge decision.
+- the pipeline is **complete** — report done. (A card listing `merge`/`pr` has already had
+  you perform it by this point; a card listing neither ends here, and the operator
+  delivers.)
 
 Otherwise: don't check in between steps — just run the next stage.

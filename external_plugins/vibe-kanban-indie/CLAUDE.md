@@ -43,9 +43,11 @@ When a card lists several of these, they appear in this relative order:
    knowledge base and writes `PRIOR_KNOWLEDGE.md` at the workspace root for the spec/plan
    stages to build on. Read-only on the knowledge base (see below).
 4. **plan** — `planner` subagent writes `IMPLEMENTATION_PLAN.md` at the workspace root.
-5. **plan-review** — codex reviews the plan (`codex exec --sandbox read-only`); resolve blockers.
+5. **plan-review** — codex reviews the plan (`codex exec --sandbox read-only … < /dev/null` —
+   codex reads stdin too, so an unredirected `exec` blocks forever); resolve blockers.
 6. **implement** — *always*; the coding agent's own core work, committed as it goes.
-7. **code-review** — codex reviews the diff (`codex review --base <base>`); address findings.
+7. **code-review** — codex reviews the diff (the piped `echo "…" | codex review --base <base>`,
+   whose pipe closes stdin — no redirect); address findings.
 8. **Update documentation** — update the docs the change affects (see below), before merge.
 9. **enrich-knowledge** — the coding agent invokes `knowledge-enrich`: records reusable
    knowledge from what shipped into the project knowledge base (its own git repo) and
@@ -55,16 +57,28 @@ When a card lists several of these, they appear in this relative order:
    the card can position it wherever an operator sign-off is wanted (e.g. right after
    `plan` to approve the plan before coding, or after `code-review` to approve the change
    before merge). Wherever it sits, it pauses the pipeline at that point (see below).
-11. **merge** — the operator owns the merge/PR decision; the agent stops and awaits it.
+11. **merge / pr** — **the coding agent performs the delivery itself**, autonomously, and
+   **each action is conditional on its own stage**: `merge` listed → it **squash-merges** its
+   branch into the base branch (and opens no PR); `pr` listed → it **pushes the branch and
+   opens the PR** (`gh pr create`, and merges nothing); both listed → both, in the order the
+   card gives them; **neither listed → it does neither** and simply reports complete. Both
+   stages are **default-off**, and **ticking one IS the operator's authorization** — there is
+   no further go to wait for and nothing to hand back. The merge rebases onto the latest
+   base, **re-runs the checks**, and squashes **without checking out the base**
+   (`git commit-tree` plus a **compare-and-swap** `git update-ref` — a `git checkout` of the
+   base fails from a linked worktree, and an unguarded ref write would silently clobber
+   another card's merge). The protocol lives in `prompts/pipeline.md`.
 
 The numbered list is the **default relative order** the other stages keep when several
 are listed; **Wait for approval** is the one stage that may appear earlier than its slot
 above, at whatever point the card places the gate.
 
-**Wait for approval vs. merge.** The `merge` stage already stops for the operator's
-*merge* decision. **Wait for approval** is the general-purpose gate for *any*
-mid-pipeline operator sign-off before later stages run — distinct from, and usable
-alongside, `merge`.
+**Wait for approval is the SOLE operator gate.** `merge` no longer stops for anything —
+the operator's merge decision is made **up front**, by ticking (or not ticking) the
+default-off `merge`/`pr` stage. **Wait for approval** is therefore the *only* stage that
+pauses the pipeline, and it is **freely placeable**: put it immediately **before** `merge`
+when a human look at the change is wanted before it lands, or right after `plan` to sign
+off on the plan before any code is written.
 
 ## "Update documentation" — how it is done
 
