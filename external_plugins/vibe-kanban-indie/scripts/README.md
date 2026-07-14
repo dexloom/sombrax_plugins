@@ -20,7 +20,7 @@ spawning a duplicate (tmux is required for these two; `product-manager.sh` still
 | script | role | what it does |
 |--------|------|--------------|
 | `product-manager.sh` | **intake** | Runs the `product-manager` skill: a rough brief → a dev-ready vibe-kanban card. Interactive (it asks you to confirm the spec before filing). |
-| `orchestrator.sh` | **supervise** | Launches the **orchestrator agent** (`claude --agent vibe-kanban-indie:orchestrator`) on a `/loop` timer: each tick it starts an agent for an In-Progress/Orchestrate card that has none, and **reflects** managed-card board status by reading each agent's state (→ In Review when dev is finished + reviewed, → Done once the merge/PR has landed — read-only, it never merges itself). With a directive it can also spawn the `decider` for stale questions / auto-approve / `/compact` overloaded headed agents (`ORCH_AUTO_COMPACT=1`, see *Opt-in directives*). It does **not** drive coding step-by-step — each coding agent runs its own pipeline, and the operator owns the merge decision. |
+| `orchestrator.sh` | **supervise** | Launches the **orchestrator agent** (`claude --agent vibe-kanban-indie:orchestrator`) on a `/loop` timer: each tick it starts an agent for an In-Progress/Orchestrate card that has none, and **reflects** managed-card board status by reading each agent's state (→ In Review when dev is finished + reviewed, → Done once the merge/PR has landed — read-only, it never merges itself). It **always** handles operator instructions — a "create a card…" / "attach a pipeline…" instruction is routed to the **`intake`** agent (**always-on**, no flag) — and, with a directive enabled, it can also spawn the `decider` for stale questions / auto-approve / `/compact` overloaded headed agents (`ORCH_AUTO_COMPACT=1`, see *Opt-in directives*). It does **not** drive coding step-by-step — each coding agent runs its own pipeline, and the operator owns the merge decision. |
 | `orchestrate_tg.sh` | **supervise + Telegram** | Same as `orchestrator.sh`, but also loads the sombrax-telegram channel in the **project-manager** role over all topics, so it can message the per-branch dev agents on Telegram. |
 | `orchestrator-delta.sh` | **delta gate** | Called by the orchestrator agent itself (not by you) once per tick: a `probe`/`commit` pair that lets the sweep skip `get_execution` for sessions whose observable state provably hasn't changed since the last tick. See *The delta gate* below. |
 
@@ -67,7 +67,10 @@ with the per-branch dev agents:
   **accepts the operator's instructions/answers from either surface**, whichever
   arrives first. On the first tick it sends a **welcome**; decisions, approvals,
   questions, and per-tick status all appear in both places. It never blocks
-  silently on the console alone — that was the stuck-question bug this fixes.
+  silently on the console alone — that was the stuck-question bug this fixes. An
+  operator instruction asking to **create a card / attach a pipeline** is handled by
+  spawning the **`intake`** agent, whose report is mirrored to the `Orchestrate` topic
+  (`ORCH_OPERATOR_TOPIC`) the same way. **always-on** — not a directive, no env toggle.
 - **Addressing topics — by numeric id** — under a `*` subscription `channel_send`
   has no default channel, and `to` is **numeric only**. The orchestrator resolves
   names → thread ids from the listener registry
@@ -87,8 +90,9 @@ with the per-branch dev agents:
 
 ## Opt-in directives (`directives-block.sh`)
 
-By default the orchestrator only dispatches and reflects status. Directives turn on
-extra opt-in behaviors; both launchers source **`directives-block.sh`**, which reads
+By default the orchestrator dispatches, reflects status, and handles operator
+instructions (the **always-on** `intake` route above — no flag needed). Directives
+turn on extra opt-in behaviors; both launchers source **`directives-block.sh`**, which reads
 directive env toggles and appends a `Directives enabled for this run:` block to the
 `/loop` spawn prompt (empty when no toggle is set, so the default prompt is unchanged).
 The flag's *logic* lives in the `orchestrator` agent definition; this block just names

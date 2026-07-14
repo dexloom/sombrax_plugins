@@ -7,7 +7,9 @@
 #
 #   DIRECTIVES_BLOCK  — the block text to append to the /loop spawn prompt, or an
 #                       EMPTY string when no directive env is set (the default: no
-#                       block ⇒ pure dispatch, orchestrator behavior unchanged).
+#                       block ⇒ no directive behavior — dispatch, status reflection,
+#                       and the always-on operator-instruction route (spawn intake)
+#                       only).
 #
 # Directive toggles (env vars; default-off, matching every directive's default):
 #   ORCH_AUTO_COMPACT=1            enable `auto-compact` (truthy: 1/true/yes/on)

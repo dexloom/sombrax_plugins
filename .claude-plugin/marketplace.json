@@ -29,8 +29,8 @@
     {
       "name": "vibe-kanban-indie",
       "source": "./external_plugins/vibe-kanban-indie",
-      "description": "Orchestrate vibe-kanban-indie from Claude Code — drive the kanban board and a crew of coding agents via a bundled MCP server, with vibe-kanban, product-manager, answer-questions, knowledge-recall, knowledge-enrich, and release skills, orchestrator, product, planner, decider, and release agents, lifecycle prompts, and looped-orchestrator launchers",
-      "version": "0.2.15",
+      "description": "Orchestrate vibe-kanban-indie from Claude Code — drive the kanban board and a crew of coding agents via a bundled MCP server, with vibe-kanban, product-manager, compose-pipeline, answer-questions, knowledge-recall, knowledge-enrich, and release skills, orchestrator, product, planner, decider, intake, and release agents, lifecycle prompts, and looped-orchestrator launchers",
+      "version": "0.2.16",
       "author": {
         "name": "dexloom"
       },

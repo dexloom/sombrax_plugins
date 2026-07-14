@@ -15,9 +15,11 @@
 # workspace (In-Progress or Orchestrate-opt-in), resolve the executor (the card's
 # pinned agent, else the operator's last-used/default config), start ONE coding
 # agent per card via the MCP, mark it In Progress, and report. Beyond that core it
-# acts only on the opt-in directives named in its spawn prompt (auto-unblock /
+# acts on the opt-in directives named in its spawn prompt (auto-unblock /
 # auto-answer-questions / telegram-fanout), whose logic lives in the agent
-# definition. Default (active) interval is 5m; idle backoff is 30m.
+# definition — and, always-on with no flag, on an operator instruction to create a
+# card / attach a pipeline, which it routes to the intake agent. Default (active)
+# interval is 5m; idle backoff is 30m.
 #
 # Usage:
 #   scripts/orchestrator.sh            # check every 5 minutes

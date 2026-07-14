@@ -6,9 +6,11 @@ description carries a `## Pipeline` block) and runs it end to end without handin
 control back between steps. It is the *integrator*: it writes the code in the
 **develop** stage and **delegates** the specialist stages — the **spec** to the
 `product` subagent, the **plan** to the `planner` subagent, and both **reviews** to
-**codex**. The orchestrator does **not** feed it steps: it **only monitors and reflects
-the board**. The agent delivers its own result — including the merge or PR, when its
-card lists that stage.
+**codex**. The orchestrator does **not** feed it steps: it monitors and reflects the board — and,
+**always-on** with no flag, routes an operator "create a card…" / "attach a
+pipeline…" instruction to the **`intake`** agent (it never creates issues itself). The
+agent delivers its own result — including the merge or PR, when its card lists that
+stage.
 
 So the prompt set is small: a **kickoff** that tells the agent to self-drive its
 pipeline (delegating as above), plus two **methods** for stages that benefit from a
