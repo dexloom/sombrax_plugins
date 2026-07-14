@@ -22,6 +22,7 @@ spawning a duplicate (tmux is required for these two; `product-manager.sh` still
 | `product-manager.sh` | **intake** | Runs the `product-manager` skill: a rough brief → a dev-ready vibe-kanban card. Interactive (it asks you to confirm the spec before filing). |
 | `orchestrator.sh` | **supervise** | Launches the **orchestrator agent** (`claude --agent vibe-kanban-indie:orchestrator`) on a `/loop` timer: each tick it starts an agent for an In-Progress/Orchestrate card that has none, and **reflects** managed-card board status by reading each agent's state (→ In Review when dev is finished + reviewed, → Done once the merge/PR has landed — read-only, it never merges itself). With a directive it can also spawn the `decider` for stale questions / auto-approve / `/compact` overloaded headed agents (`ORCH_AUTO_COMPACT=1`, see *Opt-in directives*). It does **not** drive coding step-by-step — each coding agent runs its own pipeline, and the operator owns the merge decision. |
 | `orchestrate_tg.sh` | **supervise + Telegram** | Same as `orchestrator.sh`, but also loads the sombrax-telegram channel in the **project-manager** role over all topics, so it can message the per-branch dev agents on Telegram. |
+| `orchestrator-delta.sh` | **delta gate** | Called by the orchestrator agent itself (not by you) once per tick: a `probe`/`commit` pair that lets the sweep skip `get_execution` for sessions whose observable state provably hasn't changed since the last tick. See *The delta gate* below. |
 
 ## Usage
 
@@ -147,6 +148,42 @@ is missing (it will not silently fall back to a duplicate-prone foreground launc
 > prompt's documented fallback). For the full delegated pipeline, **install the
 > plugin** (marketplace) so it's available to every spawned agent; then run the
 > orchestrator from your project rather than these checkout launchers (one mode).
+
+## The delta gate (`orchestrator-delta.sh`)
+
+Every `/loop` tick, the sweep would otherwise call `get_execution` for every session it
+watches — and `get_execution` re-serializes the whole `executor_action` (the entire
+dispatch prompt) each time, even when nothing about that session has changed since the
+last tick. `orchestrator-delta.sh` is a probe/commit gate the orchestrator agent runs
+itself (you never invoke it directly) that lets the sweep skip that call for a session
+whose observable state provably hasn't moved.
+
+- **Two subcommands, JSON in / JSON(-lines) out.** `probe` takes a JSON array of
+  `{session_id, column, pull_request_count, latest_pr_url, latest_pr_status, force?}` on
+  stdin and emits one JSON object per line — `POLL` or `SKIP` — one per input session, in
+  input order. `commit` takes a JSON array of probe lines (it reads only
+  `session_id`/`execution_id`/`fingerprint` and ignores everything else) and persists the
+  new fingerprints; no stdout.
+- **State file:** `${VIBE_DELTA_STATE:-$HOME/.vibe-kanban/orchestrator-delta.json}` — a
+  sibling of `orchestrator-cadence.json` / `orchestrator-nudge.json`. It caches
+  **fingerprints only**; every fact a `SKIP` line reports is derived fresh, every tick.
+- **`jq` is a hard dependency** — the first plugin script to need it (the others,
+  `resolve-backend.sh` / `directives-block.sh`, deliberately stick to `sed`/`grep`).
+- **Fail-open (CR-4).** A non-zero exit **or any output that violates the line-per-session
+  contract** (wrong count, wrong order, a mismatched `session_id`, a malformed field) means
+  the orchestrator agent falls back to the raw executions GET + `get_execution` for **every**
+  session in that sweep, exactly as it did before this gate existed. The gate can degrade
+  the saving; it can never hide a transition.
+- **Valve:** `VIBE_DELTA_FORCE_MANAGED=1` forces `POLL` for every session, unconditionally
+  — an escape hatch if the gate is ever suspected of hiding something.
+- **Honest scope.** The gate skips parked / finished / idle sessions — precisely the
+  population that piles up on a board and gets re-polled forever today. A **busy headed
+  agent's transcript changes on essentially every turn**, so it is polled almost every
+  tick — that's deliberate: the transcript's **content hash** is what catches an identical
+  re-park on a live headed session (a resume that reuses the same execution row instead of
+  minting a new one), and hashing it is the only way to make that case sound. The hashing
+  happens **inside this script**, so it costs the calling agent **zero** extra context
+  tokens — it only ever replaces a call whose result is thousands of tokens.
 
 ## Backend connection (why MCP tools sometimes don't load)
 

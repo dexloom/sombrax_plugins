@@ -83,44 +83,59 @@ On this tick, do one full sweep:
    workspace — managed = its `## Pipeline`
    carries the Orchestrate opt-in (the opt-in is in the DESCRIPTION, which `list_issues`
    omits, so `get_issue` each workspace-backed card to check); leave plain
-   operator-driven In-Progress cards alone
-   — mirror its board column to the coding agent's progress. Per card: `list_sessions`
-   → the coding `session_id` (skip `is_orchestrator_session`); `Bash` GET
-   `$VIBE_BACKEND_URL/api/sessions/<session_id>/executions`, take the last
-   `run_reason == "codingagent"` entry; `get_execution(execution_id)` → read
-   `final_message`, `pending_approvals`, `status`. Do NOT trust `status` alone — headed
-   agents stay `running` after finishing; the real "turn done" signal is
-   `pending_approvals` empty AND `final_message` describing a milestone. Then, taking
-   the FURTHEST state positively confirmed (corroborate with the card's
-   `pull_request_count`/`latest_pr_url`/`latest_pr_status`): merge/PR actually landed
-   (branch merged & pushed, or a PR exists) → `update_issue` to DONE; development
-   finished + reviewed, awaiting the merge decision (or a card with no merge/PR stage)
-   → IN REVIEW; otherwise (still working / blocked on an approval / no clear completion
-   report) leave it. NEVER mark Done without a confirmed merge/PR, NEVER move a card
-   backward, and do nothing if it's already in the target column (idempotent). You only
-   `update_issue` — you never merge, push, open a PR, or instruct the agent.
+   operator-driven In-Progress cards alone — then run the DELTA GATE:
+   `printf '%s' '[{"session_id":"…","column":"…","pull_request_count":0,"latest_pr_url":null,"latest_pr_status":null}]' | bash "${CLAUDE_PLUGIN_ROOT}/scripts/orchestrator-delta.sh" probe`
+   — union: managed cards, plus every non-archived workspace's coding session when ANY
+   directive (`auto-unblock`, `auto-answer-questions`, `auto-compact`, `nudge-stuck`) is
+   on; `null` card fields for a session with no card. One JSON line back per session.
+   VALIDATE THE OUTPUT FIRST: exit 0; one JSON object per line; exactly N lines, in
+   input order, each `session_id` matching its request (no dupes/reorder/omissions/
+   extras); `action` ∈ {POLL, SKIP}; every SKIP has a non-null `execution_id`, a 16-hex
+   `fingerprint`, and real booleans. If ANY of those fails — including output you CANNOT
+   PARSE or is otherwise unparseable — fall back for EVERY session you sent: `Bash` GET
+   `$VIBE_BACKEND_URL/api/sessions/<session_id>/executions` → last `codingagent` entry →
+   `get_execution`. Otherwise: SKIP ⇒ do NOT call `get_execution` (nothing changed and
+   the transcript's content hash is unchanged; its column is already right; report
+   nothing) — use the line's fresh facts/handles for the directives. POLL ⇒
+   `get_execution(execution_id)` → read `final_message`, `pending_approvals`, `status`.
+   Missing/corrupt state, unknown session, any probe error ⇒ POLL, never SKIP. Do NOT
+   trust `status` alone — headed agents stay `running` after finishing; the real "turn
+   done" signal is `pending_approvals` empty AND `final_message` describing a milestone.
+   Then, on each POLLed card, taking the FURTHEST state positively confirmed
+   (corroborate with the card's `pull_request_count`/`latest_pr_url`/`latest_pr_status`):
+   merge/PR actually landed (branch merged & pushed, or a PR exists) → `update_issue` to
+   DONE; development finished + reviewed, awaiting the merge decision (or a card with no
+   merge/PR stage) → IN REVIEW; otherwise (still working / blocked on an approval / no
+   clear completion report) leave it. NEVER mark Done without a confirmed merge/PR,
+   NEVER move a card backward, and do nothing if it's already in the target column
+   (idempotent). You only `update_issue` — you never merge, push, open a PR, or instruct
+   the agent.
 
 8. DIRECTIVES (only if enabled). If this run's prompt lists directive flags
    (`auto-unblock`, `auto-answer-questions`, `telegram-fanout`, `auto-compact`,
-   `nudge-stuck`), apply
-   each per your agent definition's *Directives* section — recover each running agent's
-   execution id via `Bash` GET `$VIBE_BACKEND_URL/api/sessions/<session_id>/executions`
-   (last entry), then auto-approve routine tool requests / spawn `decider` for stale
-   questions (age > ~600s) / narrate over Telegram / for `auto-compact` measure each
-   running `CLAUDE_CODE_HEADED` agent's context usage from its transcript and send
-   `/compact` to any over the threshold (default 300000; a flag may carry
-   `auto-compact (threshold: N)`) / for `nudge-stuck`, on each **managed** card (Orchestrate
-   opt-in) whose progress fingerprint (latest coding execution id + `final_message` +
-   recency) is unchanged for a **second consecutive** tick — and which isn't
-   blocked/finished/first-seen — send `run_session_prompt(session_id, "Why are you stuck")`
-   once, idempotent per stall, state in
-   `${VIBE_NUDGE_STATE:-$HOME/.vibe-kanban/orchestrator-nudge.json}`. If no flags are
-   listed, skip this step entirely — that's the default.
+   `nudge-stuck`), apply each per your agent definition's *Directives* section — take
+   each running agent's `execution_id` from the delta-gate probe line you already have
+   (step 7; CR-6's union already covers every session any of these four needs), then
+   auto-approve routine tool requests / spawn `decider` for stale questions (age >
+   ~600s) / narrate over Telegram / for `auto-compact` take the headed handles from the
+   probe line (SKIP) or from `get_execution` (POLL), measure context usage from the
+   transcript, and send `/compact` to any over the threshold (default 300000; a flag may
+   carry `auto-compact (threshold: N)`) / for `nudge-stuck`, on each **managed** card
+   (Orchestrate opt-in) whose progress fingerprint (latest coding execution id +
+   `final_message` + recency) is unchanged for a **second consecutive** tick — and which
+   isn't blocked/finished/first-seen — send `run_session_prompt(session_id, "Why are you
+   stuck")` once, idempotent per stall, state in
+   `${VIBE_NUDGE_STATE:-$HOME/.vibe-kanban/orchestrator-nudge.json}`; set `"force": true`
+   on the probe input (step 7) for any session with a gate entry but no
+   `orchestrator-nudge.json` entry. Only a POLL line calls `get_execution`; a SKIP line
+   already carries `execution_id` and (on a SKIP) the fresh facts/handles. If no flags
+   are listed, skip this step entirely — that's the default.
 
 9. REPORT. One short line per dispatched card (id/title + executor), one per card
    whose status you advanced (card + old→new column), and one per directive action
-   taken. If nothing was ready, nothing advanced, and no directive fired, say so in one
-   line.
+   taken; report NOTHING per session the gate SKIPped, folding `(delta: N/M skipped)`
+   into this line when ≥1 was skipped. If nothing was ready, nothing advanced, and no
+   directive fired, say so in one line.
 
 10. ADAPT CADENCE (see the agent definition's *Adaptive loop cadence*). Read the state
     file `${VIBE_CADENCE_STATE:-$HOME/.vibe-kanban/orchestrator-cadence.json}` (`Bash`
@@ -137,5 +152,16 @@ On this tick, do one full sweep:
     then `CronDelete` the old `id` (create before delete). Persist the state back via
     `Bash` `printf … > "$FILE"` (you have no `Write` tool). Report a cadence line only
     when the interval actually changes.
+
+11. COMMIT DELTA STATE. Last thing in the tick (after cadence):
+    `printf '%s' '[<probe lines>]' | bash "${CLAUDE_PLUGIN_ROOT}/scripts/orchestrator-delta.sh" commit`
+    — pass through, unchanged, every probe line with a non-null `fingerprint` that was a
+    SKIP, or a POLL whose `get_execution` succeeded AND whose column decision was
+    actually applied (already-correct column, or `update_issue` returned success). OMIT
+    any session whose `get_execution` or `update_issue` failed — committing it would
+    strand the card forever (the column is in the digest, so the next tick would
+    recompute the same digest and SKIP). The script reads only
+    `session_id`/`execution_id`/`fingerprint` and ignores the rest. An aborted tick
+    commits nothing ⇒ the next tick re-polls; that is the fail-safe, don't "fix" it.
 
 Keep it tight. This runs on a timer; emit a short status digest, not a wall of text.

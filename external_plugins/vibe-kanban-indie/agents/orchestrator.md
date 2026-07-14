@@ -117,10 +117,19 @@ or `tmux` — with two narrow, sanctioned exceptions:
 
 Those are the only sanctioned raw-`tmux` uses. You use `Bash` only against the
 backend's read APIs (and those tmux exceptions) — to resolve the
-backend URL, read the operator's last-used executor from `/api/config` (below), and
-recover a session's latest execution id from `/api/sessions/<id>/executions` (status
-reflection and standby liveness). If any MCP tool returns "Failed to connect to VK API",
-the backend is down — say so and stop the tick.
+backend URL, read the operator's last-used executor from `/api/config`, run the
+standby-liveness executions read (*Quiescing…*), recover a session's latest execution id
+from `/api/sessions/<id>/executions` **as the delta gate's documented fallback** (see
+*The delta gate* — used only when the gate script fails or its output violates the
+contract), and — **only from inside `scripts/orchestrator-delta.sh`** — read
+`/api/sessions/<id>/executions`, `/api/execution-processes/<id>/agent-progress` and
+`/api/approvals/pending/<id>` to compute the delta-gate fingerprint. Those are **reads**;
+the "never drive the board with raw HTTP" rule governs **control** and is unchanged. In
+particular the raw pending-approvals endpoint is used **only to hash approval ids and
+derive `has_approvals`** — it is not a substitute for `list_pending_approvals`, which
+computes the `age_seconds` that `auto-unblock` / `auto-answer-questions` depend on. If any
+MCP tool returns "Failed to connect to VK API", the backend is down — say so and stop the
+tick.
 
 ## The sweep (each loop tick)
 
@@ -164,11 +173,11 @@ the backend is down — say so and stop the tick.
    you do reflect its board status (next step) once its agent reaches a milestone.
 6. **Reflect managed-card status** (see *Reflecting managed-card status*). For every
    **orchestrator-managed** card that already has a workspace, read its coding agent's
-   latest state and advance the card's column to mirror pipeline progress: **In
-   Review** when development is finished and reviewed, **Done** when the merge/PR step
-   has actually landed. This is read-and-reflect only — you never merge, push, open a
-   PR, or instruct the agent; you only move the card to match what its agent already
-   did.
+   latest state **through the delta gate** (see *The delta gate*) and advance the card's
+   column to mirror pipeline progress: **In Review** when development is finished and
+   reviewed, **Done** when the merge/PR step has actually landed. This is
+   read-and-reflect only — you never merge, push, open a PR, or instruct the agent; you
+   only move the card to match what its agent already did.
 7. **Apply enabled directives** (only those whose flag is in this run's spawn prompt;
    see *Directives*). If none are enabled, skip this step — that's the default.
 8. **Report.** One short line per card you dispatched (card id/title + executor), one
@@ -177,13 +186,19 @@ the backend is down — say so and stop the tick.
    changed since you last surfaced it (`<card/workspace>: awaiting operator approval —
    <summary>`, the summary being the first line after the marker); a park you already
    surfaced and that hasn't changed stays silent (see the no-noise guard below). Plus
-   one line per directive action taken. If nothing was ready, nothing advanced, nothing
-   was newly parked, and no directive fired, say so in one line. Keep it tight — this
-   runs on a timer.
+   one line per directive action taken. Report **nothing** per session the delta gate
+   SKIPped — that silence is the point; when ≥1 session was skipped this tick, fold
+   `(delta: N/M skipped)` into this **same** summary line rather than adding a new one
+   (no per-tick noise). If nothing was ready, nothing advanced, nothing was newly
+   parked, and no directive fired, say so in one line. Keep it tight — this runs on a
+   timer.
 9. **Adapt the cadence** (see *Adaptive loop cadence*). Classify this tick as ACTIVE
    (you dispatched or advanced ≥1 card) or EMPTY, update the on-disk empty-streak state,
    and re-arm the loop interval if a threshold was crossed (→ 30m after two empty ticks,
    → 5m as soon as work returns). Report the interval change only when one happens.
+10. **Commit the delta-gate state** (see *The delta gate* → *Phase 2 — commit*). The
+    genuinely **last** operation of the tick, run after the report and after adapting the
+    cadence — never before.
 
 Use `TodoWrite` when several cards are ready so none is dropped.
 
@@ -364,11 +379,20 @@ Each `/loop` tick is memory-less, so recover state from the API every time:
 1. From `list_workspaces` (step 2) you already have the card↔workspace mapping. For
    the card's workspace, `list_sessions(workspace_id)` → the coding `session_id`
    (skip `is_orchestrator_session: true`).
-2. Recover the latest **coding** execution id: `Bash` GET
-   `$VIBE_BACKEND_URL/api/sessions/<session_id>/executions` and take the last entry
-   whose `run_reason == "codingagent"`.
+2. **Run the probe** — one call over the whole union set (see *The delta gate* → *Phase 1
+   — probe*). This is what recovers each session's current `execution_id` now; the raw
+   `Bash` GET `…/executions` this step used to run is **deleted from this routine path** —
+   the probe owns that read, and returns `execution_id` on **both** `POLL` and `SKIP`
+   lines, so the fat `ExecutionProcess` rows (each carrying the whole `executor_action`)
+   no longer enter your context on a quiet tick. That raw GET **survives only** as CR-4's
+   documented fallback, and only inside *The delta gate*.
 3. `get_execution(execution_id)` → use **`final_message`** (the agent's latest report),
-   **`pending_approvals`**, and `status`/`is_finished`.
+   **`pending_approvals`**, and `status`/`is_finished` — but **only for sessions the probe
+   returned as `POLL`** (or for every session, when the gate failed its output contract
+   and you fell back — see *The delta gate*). A **`SKIP`** line means none of this
+   changed: skip this call, leave the card's column as-is, and read the line's own fresh
+   `is_finished` / `is_parked` / `has_approvals` / handles instead if a directive needs
+   them.
 
 **Important — don't trust execution `status` alone.** Headed agents
 (`CLAUDE_CODE_HEADED`) keep their tmux session, so the execution can read `running`
@@ -431,6 +455,166 @@ pick the **furthest** state it positively confirms:
   `auto-compact` housekeeping); to avoid per-tick repetition, surface a given parked
   card **once per distinct park** (re-surface only if its `final_message` summary
   changes), the same fingerprint discipline `nudge-stuck` uses.
+
+## The delta gate
+
+**Why.** `get_execution` re-serializes the whole `executor_action` — the entire dispatch
+prompt — every single tick. On a tick where nothing about a session has changed, it
+returns the exact answer you already applied last tick. `${CLAUDE_PLUGIN_ROOT}/scripts/orchestrator-delta.sh`
+is a probe/commit gate that lets you skip that call for sessions whose observable state
+provably has not moved.
+
+**Soundness + the invariant.** The column decision (*Deciding the column*, above) is a
+pure function of `final_message`, `pending_approvals`, `status`/`is_finished`, and the
+card's PR fields (`pull_request_count`/`latest_pr_url`/`latest_pr_status`) and column. The
+gate's digest covers **all** of those **plus the transcript's content hash** (see
+*Two-case coverage* below), so an unchanged digest implies an unchanged decision —
+skipping is safe. **In bold, because it is the rule that outlives this feature: add an
+input to the column-decision rules ⇒ add it to the fingerprint.** The state file caches
+**only the fingerprint** — every fact on a `SKIP` line (`is_finished`, `is_parked`,
+`has_approvals`, the headed handles) was read **this tick**, never replayed from the
+cache.
+
+**Two-case coverage.** A resume prompt (`run_session_prompt`) either mints a new
+execution or reuses the live one, and the gate is sound either way:
+- **Non-headed** — a follow-up **always mints a new `ExecutionProcess`**, so the
+  execution-id term in the digest catches it.
+- **Headed** — a follow-up is instead **injected into the live Claude TUI** and reuses the
+  *same* execution row; the **transcript content hash** is what catches it — any agent
+  activity, including a re-park with a byte-identical `final_message`, changes the
+  transcript's bytes.
+
+Every session is covered by one case or the other.
+
+### Phase 1 — probe
+
+After the inventory (steps 1-2 above), **before any `get_execution`**, run the probe over
+the **union** (CR-6): every orchestrator-managed card with a workspace (always) **∪**
+every non-archived workspace's coding session whenever **any** of `auto-unblock` /
+`auto-answer-questions` / `auto-compact` / `nudge-stuck` is enabled — a probe that only
+expanded for `auto-compact` would starve the other three directives of a line to read from
+(see *Directives* → "extend the sweep"). Set `"force": true` on a session's element only
+per the one rule in *Directives* → `nudge-stuck` (a gate entry with no
+`orchestrator-nudge.json` entry). Card fields (`column`, `pull_request_count`,
+`latest_pr_url`, `latest_pr_status`) come from the `list_issues` summary; `null` for a
+session with no card.
+
+```
+printf '%s' '<the JSON array>' | bash "${CLAUDE_PLUGIN_ROOT}/scripts/orchestrator-delta.sh" probe
+```
+
+Input, one element per session:
+
+```json
+[{"session_id":"f32d1e76-1111-2222-3333-444455556666","column":"In Progress","pull_request_count":0,"latest_pr_url":null,"latest_pr_status":null},
+ {"session_id":"aaaabbbb-1111-2222-3333-444455556666","column":null,"pull_request_count":null,"latest_pr_url":null,"latest_pr_status":null}]
+```
+
+Output, one JSON object per line, one line per input session, in input order:
+
+```json
+{"action":"POLL","session_id":"f32d1e76-1111-2222-3333-444455556666","execution_id":"9a4c0000-0000-0000-0000-000000000001","reason":"fp-changed","fingerprint":"a1b2c3d4e5f6a7b8"}
+{"action":"SKIP","session_id":"aaaabbbb-1111-2222-3333-444455556666","execution_id":"9a4c0000-0000-0000-0000-000000000002","fingerprint":"0f1e2d3c4b5a6978","is_finished":false,"is_parked":true,"has_approvals":false,"transcript_path":"/Users/sombrax/.claude/projects/-Users-x/9a4c.jsonl","tmux_session_name":"vk-9a4c0000-0000-0000-0000-000000000002","claude_session_id":"7c1f2e3d"}
+```
+
+`reason` ∈ `new-session | fp-changed | no-state | bad-state | bad-input | no-execution |
+no-transcript | probe-error | forced`. A `POLL` line always carries `fingerprint` (the
+digest the probe already computed, so you can commit it without re-hashing anything
+yourself) — `null` exactly when the probe could not compute one. **`fingerprint: null` ⇒
+commit NOTHING for that session.**
+
+### Validate the output, then the outer fail-open — WITH its recovery path
+
+The gate script cannot always report per-session, and a *parseable but wrong* output — a
+duplicated, reordered, or malformed line — could suppress a read that had to happen.
+**Check ALL of the following before trusting any of it. If ANY fails ⇒ fall back for EVERY
+session you sent:**
+1. exit code is **zero**;
+2. stdout is parseable as **one JSON object per line**;
+3. there are **exactly N lines for the N sessions you sent**, **in input order**, and each
+   line's `session_id` **equals the session_id of the corresponding request** (no
+   duplicates, no reordering, no omissions, no extras);
+4. every line's `action` is exactly **`POLL`** or **`SKIP`**;
+5. every **`SKIP`** line carries a **non-null** `execution_id`, a `fingerprint` matching
+   `^[0-9a-f]{16}$`, and real booleans for `is_finished` / `is_parked` / `has_approvals`.
+
+**The fallback (for every session you sent):** `Bash` GET
+`$VIBE_BACKEND_URL/api/sessions/<session_id>/executions`, take the last `run_reason ==
+"codingagent"` entry to recover the `execution_id`, then call `get_execution(execution_id)`
+and decide exactly as before this gate existed. **Never infer a SKIP from a missing,
+malformed, duplicated, or out-of-order line.** This fallback **is** the pre-change code
+path — it is the correct fail-open precisely because it needs nothing this gate added.
+
+### Per line
+
+- **`POLL`** ⇒ `get_execution(execution_id)`, decide **exactly as today** — *Deciding the
+  column* is **not** changed by this gate. (`execution_id: null` ⇒ no coding execution
+  yet; treat as before.)
+- **`SKIP`** ⇒ **do not call `get_execution`.** Nothing decision-relevant changed and the
+  transcript's content hash is unchanged, so the column you already set is still correct:
+  leave it, **emit no report line**, and feed the line's fresh facts/handles to any enabled
+  directive that wants them.
+
+### Phase 2 — commit, the LAST thing in the tick
+
+Run this **after** the report **and** after *Adapt the cadence* — commit is the genuinely
+final operation of the tick (CR-3).
+
+```
+printf '%s' '<the JSON array>' | bash "${CLAUDE_PLUGIN_ROOT}/scripts/orchestrator-delta.sh" commit
+```
+
+Input, one element per probe line you are keeping (extra keys are ignored, so a probe line
+can be piped straight through):
+
+```json
+{"session_id":"aaaabbbb-1111-2222-3333-444455556666","execution_id":"9a4c0000-0000-0000-0000-000000000002","fingerprint":"0f1e2d3c4b5a6978"}
+```
+
+**Pass through, unchanged, every probe line that (a) has a non-null `fingerprint`, and (b)
+either was a `SKIP`, or was a `POLL` whose `get_execution` succeeded AND whose resulting
+decision was applied** (the card was already in the target column, or `update_issue`
+returned success). **Omit** any session whose `get_execution` failed, or whose resulting
+`update_issue` failed, or that you did not finish processing.
+
+**Why the apply rule matters:** the column is *itself* part of the fingerprint. If you
+committed a fingerprint for a decision that never landed (a failed `update_issue`, or an
+aborted tick right after the read), the next tick would recompute the **same** digest —
+the column never moved — and SKIP, stranding the card forever. Omitting that session
+instead means the next tick reads it as `no-state` ⇒ POLL — fail-safe by construction; do
+not "fix" it into always-commit.
+
+*Expected, benign consequence:* when a column **does** move, the committed digest was
+computed with the **old** column, so the next tick sees `fp-changed`, POLLs once, finds
+the card already in its target column (idempotent no-op), and commits the settled digest.
+**A column change costs two polls, then settles.** That is correct, not a bug.
+
+### State file
+
+`${VIBE_DELTA_STATE:-$HOME/.vibe-kanban/orchestrator-delta.json}` — a **sibling** of
+`orchestrator-cadence.json` and `orchestrator-nudge.json`, both unchanged:
+
+```json
+{
+  "version": 1,
+  "sessions": {
+    "<session_id>": {
+      "execution_id": "9a4c0000-0000-0000-0000-000000000002",
+      "fingerprint": "0f1e2d3c4b5a6978"
+    }
+  }
+}
+```
+
+No booleans, no handles — the cache holds fingerprints only (CR-2). Pruning is
+**structural**: a session that leaves the inventory is simply never probed again, so it's
+in no commit array, so it drops out of the state file on its own.
+
+### Valve
+
+`VIBE_DELTA_FORCE_MANAGED=1` ⇒ the gate returns `POLL … forced` for **every** session,
+unconditionally — an escape hatch if the gate is ever suspected of hiding a transition.
+Ships wired, off.
 
 ## Adaptive loop cadence (active 5 min ↔ idle 30 min)
 
@@ -512,15 +696,19 @@ directive's default.
 To act on `auto-unblock` / `auto-answer-questions` / `auto-compact` / `nudge-stuck` you
 must inspect the **running agents** each sweep, so when any is enabled, extend the sweep:
 after dispatch, for every non-archived workspace get its coding `session_id`
-(`list_sessions`, skip `is_orchestrator_session`), recover that session's current
-execution id (each `/loop` tick is memory-less, so `Bash` GET
-`$VIBE_BACKEND_URL/api/sessions/<session_id>/executions`
-and take the last entry's `id`), then inspect it: `list_pending_approvals(execution_process_id)`
-for what it's blocked on (each item carries `approval_id`, `kind`, the question/options,
-and **`age_seconds`**) — used by `auto-unblock` / `auto-answer-questions` — and/or
-`get_execution(execution_id)` for its live state and headed handles — used by
-`auto-compact` and `nudge-stuck` (the latter only over the **managed-card** subset; see
-its bullet).
+(`list_sessions`, skip `is_orchestrator_session`), then take its `execution_id` **from the
+delta-gate probe line you already have** (see *The delta gate* → *Phase 1 — probe*). Per
+**CR-6**, the probe's union covers **every non-archived workspace's coding session
+whenever ANY of `auto-unblock`, `auto-answer-questions`, `auto-compact` or `nudge-stuck`
+is enabled** — so every directive has a line to read, even a directive that doesn't itself
+turn on the gate's headed-transcript machinery. Then inspect it:
+`list_pending_approvals(execution_process_id)` for what it's blocked on (each item carries
+`approval_id`, `kind`, the question/options, and **`age_seconds`**) — a **different tool**
+from the gate, and the **only** one that computes `age_seconds` — used by `auto-unblock` /
+`auto-answer-questions` — and/or, **only on a `POLL` line**, `get_execution(execution_id)`
+for its live state and headed handles — used by `auto-compact` and `nudge-stuck` (the
+latter only over the **managed-card** subset; see its bullet). On a **`SKIP`** line, use
+the line's own fresh fields instead of calling `get_execution`.
 
 - **`auto-unblock`** — for **tool-permission** approvals: `respond_to_approval(
   approval_id, execution_process_id, decision='approve')` for routine,
@@ -547,15 +735,17 @@ its bullet).
   triggering their native `/compact` before context overflows. Using the same
   per-workspace pass described above, walk **every non-archived workspace** — not only
   managed cards: a human-driven headed agent benefits just as much, and `/compact`
-  touches only the agent's own context, never board state — and for each one's latest
-  execution call `get_execution(execution_id)`. Then:
-  - **Headed-only gate.** Act only when `get_execution` returns the headed handles —
-    `claude_transcript_path`, `tmux_session_name` (= `vk-<execution_id>`), and
-    `claude_session_id`. Their **presence** is the signal that this is a live
-    `CLAUDE_CODE_HEADED` run under headed-local-control; if they're absent the executor
-    isn't a compactable headed agent — skip it. Also skip a session that isn't actively
-    in a turn (don't trust `status` alone — headed agents read `running` when idle;
-    corroborate with transcript recency).
+  touches only the agent's own context, never board state. Then:
+  - **Headed-only gate.** Take the headed handles — `claude_transcript_path`,
+    `tmux_session_name`, `claude_session_id` — from the session's delta-gate line: a
+    **`SKIP`** carries them directly (read fresh each tick from the same `agent-progress`
+    source `get_execution` uses internally, so they are identical); a **`POLL`** means
+    you are calling `get_execution` anyway, so take them from its result. Their
+    **presence** is still the signal that this is a live `CLAUDE_CODE_HEADED` run under
+    headed-local-control; absent ⇒ not a compactable headed agent ⇒ skip it, as today.
+    And the happy consequence of CR-5: **an agent whose context is actually growing has
+    a changing transcript ⇒ it is POLLed ⇒ `auto-compact` gets a full `get_execution`
+    exactly when it matters. It cannot be starved by the gate.**
   - **Measure context usage from the transcript.** `Read` the tail of
     `claude_transcript_path` (JSONL) and find the **last assistant message** carrying a
     `usage` object. Current context-window usage ≈
@@ -604,11 +794,45 @@ its bullet).
     workspace), `nudge-stuck` considers **only orchestrator-managed cards** — those whose
     `## Pipeline` carries the **Orchestrate** opt-in — that currently have a **non-archived
     workspace**: exactly the managed set the *Reflecting managed-card status* pass already
-    determines. A human-driven idle agent is **never** nudged. Reuse the coding
-    `session_id` + latest-`codingagent`-execution recovery that pass already performs:
-    `list_sessions` (skip `is_orchestrator_session`); `Bash` GET
-    `$VIBE_BACKEND_URL/api/sessions/<session_id>/executions`, last
-    `run_reason == "codingagent"` entry; `get_execution(execution_id)`.
+    determines. A human-driven idle agent is **never** nudged. Reuse the session's
+    **delta-gate line**: it carries `execution_id`, and — on a `SKIP` — the
+    freshly-derived `is_finished` / `is_parked` / `has_approvals` and `transcript_path`.
+    Only a **`POLL`** line calls `get_execution`.
+  - **Lemma N — why a `SKIP` tick is safe for nudge's bookkeeping, resting on CR-5.**
+    Nudge's fingerprint NF = f(latest coding execution id, `final_message`, a recency
+    signal read from the transcript). The gate's digest FP contains the execution id,
+    `final_message` **and — per CR-5 — the sha256 of the transcript's contents**.
+    Therefore **FP unchanged ⇒ eid unchanged AND `final_message` unchanged AND the
+    transcript is byte-for-byte identical.** That last clause is what makes this
+    airtight: **NF's recency term cannot have moved either**, because the file it is
+    read from has provably identical content (not merely the same size and
+    modification time). So on
+    a `SKIP` tick **NF is unchanged, in every term** — exactly what a fresh
+    `get_execution` would have told you.
+    - **Exclusions** — from the `SKIP` line's **freshly-derived** `has_approvals` /
+      `is_parked` / `is_finished` ⇒ streak `0`, clear `nudged_fingerprint`. **A parked
+      agent is still never nudged.**
+    - **Otherwise** ⇒ this is a **no-progress tick** ⇒ `no_progress_streak += 1`.
+    - **Writing state** — NF is unchanged, so **carry `last_fingerprint` forward** (write
+      back the value already stored — there is nothing to recompute, and nothing that
+      *could* have changed). On the transition to streak 2, set `nudged_fingerprint =
+      last_fingerprint` — again the value it holds.
+
+    **No stall, no double-count:** the streak advances exactly **once per tick**, POLL or
+    SKIP — the same count a fresh `get_execution` would have produced. The marker is
+    keyed on the *fingerprint value*, so a frozen NF never re-fires; and the moment the
+    agent does anything at all, its transcript content changes ⇒ FP moves ⇒ **POLL** ⇒ a
+    real recompute.
+
+    **The one remaining hole, closed by `force`.** If nudge has **no prior entry** for a
+    session (state file deleted, or the directive enabled mid-run) it has no
+    `last_fingerprint` to carry forward and needs a real `final_message`. **Rule:** when
+    `nudge-stuck` is enabled, set **`"force": true`** on the probe input for any session
+    that has a gate entry but **no `orchestrator-nudge.json` entry** ⇒ `POLL … forced` ⇒
+    nudge establishes its baseline (streak 0, no nudge — its documented "first
+    observation" rule below). One extra poll per session, once.
+
+    **Valve:** if Lemma N is ever contradicted in the field, `VIBE_DELTA_FORCE_MANAGED=1`.
   - **Progress fingerprint.** Decide "progress" from observable state alone (the tick is
     memory-less). Build an **opaque fingerprint** of the agent's current coding execution
     combining at least the **latest coding execution id** + the execution's

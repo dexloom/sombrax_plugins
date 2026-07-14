@@ -151,7 +151,16 @@ AWAITING OPERATOR APPROVAL
   `AWAITING OPERATOR APPROVAL` in `final_message`. The marker is the load-bearing,
   byte-identical literal referenced from `prompts/pipeline.md` (producer) and
   `agents/orchestrator.md` (consumer); change it in one place and you must change it in
-  all three.
+  all four.
+- **The marker now has a second consumer: `scripts/orchestrator-delta.sh`** (the
+  orchestrator's delta-polling gate). It derives `is_parked` by testing `final_message`
+  for the same case-sensitive literal, and it hashes `final_message` as one term of its
+  fingerprint — so the marker living **in `final_message`** is what guarantees a park is
+  never skipped: any transition into or out of the parked state changes `final_message`,
+  which changes the digest, which forces a `POLL`. Moving the marker out of
+  `final_message`, or changing the literal in one place only, would break the gate (a
+  script that no longer recognizes the marker could `SKIP` a session that is actually
+  parked, or fail to recognize the ambient park state at all).
 
 ### Lifecycle
 
@@ -184,4 +193,7 @@ AWAITING OPERATOR APPROVAL
 - `agents/orchestrator.md` — recognizes/holds/surfaces the gate (consumer of the marker);
   `nudge-stuck` exclusion, status-reflection short-circuit, report + telegram-fanout
   surfacing, and the no-auto-resume safety rule.
+- `scripts/orchestrator-delta.sh` — the delta-polling gate; second consumer of the marker
+  (derives `is_parked` from the same literal, and hashes `final_message` into its
+  fingerprint so a park transition is never invisible to it).
 - `prompts/README.md` — the prompt set overview and the stage flow diagram.
