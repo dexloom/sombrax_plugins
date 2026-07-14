@@ -239,138 +239,14 @@ brief implies touching other cards, surface that and let the user decide.
 
 ## Attaching a pipeline (execute "like the UI")
 
-Some briefs don't stop at "spec it" — the user also wants the resulting card to
-**run itself**: "create a card and execute Async Fable", "run it through Async
-Sonnet", "use the basic pipeline", or any request that asks for the card to be
-orchestrated or auto-driven. When you see that, attach a `## Pipeline` block to
-the card's description that is byte-for-byte what the vibe-kanban web UI's New
-Issue dialog would have produced for the same selection. This mirrors
-`packages/web-core/src/shared/lib/pipeline/cardPipeline.ts` in the vibe-kanban
-repo: the orchestrator and execution agent parse these exact generated lines
-back out of the description (to know which stages are still enabled, to seed
-the edit dialog, to track live "stage N of M" progress), so a paraphrase
-anywhere inside the block silently breaks that round-trip. Treat the format
-below as fixed, not as a style to approximate.
-
-### Discover the pipeline
-
-Pipelines live as TOML files on disk, not behind the MCP — read them directly,
-you never invent one:
-
-- `Glob` for `~/.vibe-kanban/pipelines/*.toml`. `Glob` doesn't expand `~`, so
-  resolve it to the real absolute home path first (e.g.
-  `/Users/<you>/.vibe-kanban/pipelines/*.toml`) before calling the tool.
-- `Read` every candidate file. Each one is a pipeline: a top-level `name`, an
-  optional `description`, and an ordered list of `[[stage]]` tables. Each stage
-  has `id`, `label`, `prompt`, `default_enabled` (bool, defaults to `false` if
-  absent), and `heavy` (bool, defaults to `false` if absent).
-- Match the pipeline the user named against each file's `name` field,
-  case-insensitively, or against the file stem (`async-fable.toml` →
-  `async-fable`). "Async Fable", "async fable", and "async-fable" should all
-  resolve to the same file.
-- If nothing matches, don't guess and don't invent stages. List the real
-  pipeline names you found on disk and ask which one via `AskUserQuestion`.
-
-### Select the stages
-
-- **Default selection** is every stage with `default_enabled = true`, kept in
-  the order the stages appear in the file.
-- If the user names steps to add or drop ("with merge", "skip the codex
-  review", "no orchestrate"), apply those as overrides against the stage
-  `label`s and `id`s — add stages they named that weren't default-enabled, drop
-  ones they named that were.
-- The `orchestrate` stage is the one exception to "default = `default_enabled`":
-  include it **only** when the user explicitly asked for execution or
-  auto-drive — phrasing like "and execute", "run it", "let the orchestrator
-  take it", "auto-drive this". Naming a pipeline alone ("use Async Sonnet") is
-  not enough; "execute Async Sonnet" or "run it through Async Sonnet" is.
-- Note which enabled stages have `heavy = true` so you can flag their cost in
-  the final report — never silently include a heavy stage without calling it
-  out.
-
-### Compose the block — byte-exact format
-
-Build the block below, then append it to the end of the card's description as
-`<spec text>` + one blank line + the block. Exactly one block per card — never
-nest or duplicate the delimiters, since they're how the UI replaces the block
-idempotently on later edits.
-
-```
-<!-- vk:pipeline:start -->
-## Pipeline: <Name>
-
-Execute these stages in the order listed. Do not add, skip, or reorder stages. As you begin each numbered stage below, output a single line exactly `VK-PIPELINE-STAGE: N` (N = the number of the stage you are starting) so pipeline progress can be tracked.
-
-1. <stage 1 prompt, verbatim from the TOML>
-2. <stage 2 prompt, verbatim>
-<!-- vk:pipeline:end -->
-```
-
-Rules, all of them load-bearing:
-
-- **The heading** is `## Pipeline: <name>`. If the user's request resolves to
-  more than one pipeline combined, join the names with ` + ` (e.g.
-  `## Pipeline: Async Sonnet + Basic`) and merge their stages in first-seen
-  order, deduplicated by stage `id` — a stage id shared by two pipelines
-  appears once, in the position it was first seen.
-- **The order-instruction line is a fixed string** — it's the paragraph right
-  under the heading in the format above. Reproduce it character-for-character,
-  never paraphrased, reworded, or reflowed; that one copy above is the source
-  of truth, don't retype it from memory elsewhere.
-- **Optional executor pin** — only when the user names an execution agent
-  ("with Claude Code", "pin it to Codex"). Place it after the order-instruction
-  line and a blank line, before the numbered list, as exactly:
-
-  `- Run this card with the **<AGENT>** execution agent: pass ` `executor: "<AGENT>"` ` when starting the workspace.`
-
-  `<AGENT>` is a `BaseCodingAgent` key such as `CLAUDE_CODE` or `CODEX`.
-  Rendered for `CLAUDE_CODE`, this is exactly:
-
-  - Run this card with the **CLAUDE_CODE** execution agent: pass `executor: "CLAUDE_CODE"` when starting the workspace.
-- **Stage prompts go into the numbered list verbatim** — copy the full `prompt`
-  string from the TOML exactly as written, no paraphrasing, no summarizing, no
-  extra prose inside the delimiters. The list is 1-indexed, in the same order
-  as the stage selection above.
-- **Placement:** append at the very end of the card description as
-  `<spec text>\n\n<block>`. Exactly one block per card.
-
-### Golden example
-
-A card asking for "create a card and execute Async Fable" — the pipeline's
-default stages plus explicit execution, so `orchestrate` is included:
-
-```
-<!-- vk:pipeline:start -->
-## Pipeline: Async Fable
-
-Execute these stages in the order listed. Do not add, skip, or reorder stages. As you begin each numbered stage below, output a single line exactly `VK-PIPELINE-STAGE: N` (N = the number of the stage you are starting) so pipeline progress can be tracked.
-
-1. Have the orchestrator agent pick this card up and drive it to done autonomously, running the card's pipeline stages in order — regardless of which board column the card is in (it may be started even from Todo).
-2. <prompt of stage "spec" ("Spec via Fable subagent"), verbatim from async-fable.toml>
-3. <prompt of stage "plan" ("Plan via Fable subagent"), verbatim>
-4. <prompt of stage "plan-review-codex" ("Codex plan review"), verbatim>
-5. <prompt of stage "code-subagent" ("Code via Opus subagent"), verbatim>
-6. <prompt of stage "code-review" ("Review via Codex"), verbatim>
-<!-- vk:pipeline:end -->
-```
-
-Stage 1 is reproduced in full above because it's short and stable across
-pipelines; stages 2–6 are shown as placeholders only so this doc doesn't
-duplicate the entire TOML file. In real output there are no placeholders —
-every numbered line is the stage's full `prompt` string copied
-character-for-character out of the file you read.
-
-If the user had instead said "use the Async Fable pipeline" (no mention of
-executing it), the block would be identical except stage 1 (`orchestrate`)
-would be dropped and the rest renumbered 1–5.
-
-### Report what you attached
-
-- Name the pipeline you attached (or the combined names, if merged).
-- List the stages you enabled, flagging any with `heavy = true`.
-- State whether `orchestrate` was included, and why (explicit ask vs. not
-  requested).
-- State the executor pin, if any, or note that none was set.
+Some briefs don't stop at "spec it" — the user also wants the card to **run itself**
+("create a card and execute Async Fable", "run it through Async Sonnet", "use the
+basic pipeline"). When you see that, invoke the **`compose-pipeline`** skill
+(`vibe-kanban-indie:compose-pipeline`): it owns pipeline discovery, stage selection
+(including the `orchestrate` opt-in), the byte-exact block, and the report facts —
+it is the single source of truth for the format, which is why none of it is repeated
+here. You still own the card: place the block it hands back per that skill's
+placement rule, create the card as usual, and fold its report facts into your report.
 
 ## Examples of the transformation
 
