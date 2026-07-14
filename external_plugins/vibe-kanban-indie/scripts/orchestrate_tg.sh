@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 #
-# orchestrate_tg.sh — the orchestrator (orchestrator.sh) PLUS the sombrax-telegram
-# channel, so it talks to humans and dev agents over Telegram.
+# orchestrate_tg.sh — the orchestrator LOOP MANAGER (orchestrator.sh) PLUS the
+# sombrax-telegram channel, so it talks to humans and dev agents over Telegram.
 #
-# Same loop sweep + backend auto-resolve as orchestrator.sh, but it additionally:
+# Same per-tick brief (spawn ONE fresh sweeper subagent, relay its report) + backend
+# auto-resolve as orchestrator.sh, but it additionally:
 #   • loads the sombrax-telegram channel into the session, and
 #   • runs in the PROJECT-MANAGER role, SUBSCRIBED TO ALL TOPICS — interacting
 #     with the human operator in the "Orchestrate" topic and with each dev agent
@@ -113,6 +114,12 @@ fi
 # Interval: first positional arg wins, else $ORCH_INTERVAL, else 5m.
 INTERVAL="${1:-${ORCH_INTERVAL:-5m}}"
 
+# Resolve PLUGIN_DIR to an ABSOLUTE path now (default = this checkout, the dir we
+# cd'd into above) — must happen before the cd inside orchestrator-attach.sh below (a
+# relative PLUGIN_DIR override would otherwise resolve against its temp dir), and
+# before we build LOOP_BODY below, which carries it as a `PLUGIN ROOT:` line.
+PLUGIN_DIR="$(cd "${PLUGIN_DIR:-$(pwd)}" && pwd)"
+
 PROMPT_FILE="scripts/orchestrator.prompt.md"
 if [[ ! -f "${PROMPT_FILE}" ]]; then
   echo "orchestrate_tg.sh: missing ${PROMPT_FILE}" >&2
@@ -176,12 +183,20 @@ TG_EOF
 # Append the opt-in "Directives enabled for this run" block (empty unless a directive
 # env toggle like ORCH_AUTO_COMPACT=1 is set). Same sourced builder as orchestrator.sh
 # so the two launchers can't drift; the block must END the spawn prompt, so it goes
-# after the Telegram addendum.
+# after the Telegram addendum and after the `PLUGIN ROOT:` line, below.
 . "$(dirname "$0")/directives-block.sh"
 
-# Loop body = shared sweep + the Telegram addendum + any enabled directives block.
+# `PLUGIN ROOT:` lets the loop manager forward this path to the sweeper it spawns each
+# tick: a spawned subagent does not reliably inherit CLAUDE_PLUGIN_ROOT from the
+# environment, so the sweeper's plugin-root resolution order falls back to this line
+# when present (see agents/sweeper.md). Must precede the directives block — the
+# directives block has to stay LAST in the prompt.
+#
+# Loop body = shared sweep + the Telegram addendum + PLUGIN ROOT + any enabled
+# directives block.
 LOOP_BODY="$(cat "${PROMPT_FILE}")
-${TG_ADDENDUM}${DIRECTIVES_BLOCK}"
+${TG_ADDENDUM}
+PLUGIN ROOT: ${PLUGIN_DIR}${DIRECTIVES_BLOCK}"
 
 # Channel ref form: plugin:<plugin-name>:<mcp-server-name> (NOT the @marketplace
 # form). The sombrax-telegram plugin and its MCP server are both named
@@ -189,15 +204,14 @@ ${TG_ADDENDUM}${DIRECTIVES_BLOCK}"
 # CLAUDE_CHANNEL_REF for ad-hoc testing.
 CHANNEL_REF="${CLAUDE_CHANNEL_REF:-plugin:sombrax-telegram:sombrax-telegram}"
 
-# Launch the orchestrator AGENT directly (not as a Task subagent) — its full
-# behavior lives in the agent definition. `--plugin-dir` loads this checkout for the
+# Launch the orchestrator LOOP MANAGER AGENT directly (not as a Task subagent) — its
+# full behavior lives in the agent definition; each tick it spawns a fresh sweeper
+# subagent. `--plugin-dir` loads this checkout for the
 # session so the `vibe-kanban-indie:orchestrator` agent name resolves (cd-ing here
 # does not load it); it also loads the bundled `.mcp.json`, so don't ALSO have the
 # plugin installed via the marketplace (double MCP — see ../README.md "pick one
-# mode"). PLUGIN_DIR defaults to this checkout; override ORCH_AGENT to change agent.
-# Resolve to an ABSOLUTE path now (default = this checkout) — must happen before the
-# cd below, or a relative PLUGIN_DIR override would resolve against the temp dir.
-PLUGIN_DIR="$(cd "${PLUGIN_DIR:-$(pwd)}" && pwd)"
+# mode"). PLUGIN_DIR defaults to this checkout, resolved to an absolute path above;
+# override ORCH_AGENT to change agent.
 ORCH_AGENT="${ORCH_AGENT:-vibe-kanban-indie:orchestrator}"
 
 # "Spawn = connect": launch claude inside the stable, shared `vk-orchestrator` tmux

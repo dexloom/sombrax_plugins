@@ -10,6 +10,10 @@ spawning a duplicate (tmux is required for these two; `product-manager.sh` still
 `exec`s `claude` directly). Both need the **vibe-kanban backend running** (see
 [`../README.md`](../README.md) for prerequisites).
 
+The `orchestrator` agent launched by the supervise scripts is a lean **loop manager**:
+it owns the `/loop` timer only, and spawns a fresh **`sweeper`** subagent each tick to
+do the actual board sweep.
+
 > These launchers are the **standalone / dev** way to run the system from a
 > checkout — they add a `/loop`-timed orchestrator, backend URL auto-resolution,
 > and the Telegram wiring. If you've installed this plugin via the marketplace
@@ -20,9 +24,9 @@ spawning a duplicate (tmux is required for these two; `product-manager.sh` still
 | script | role | what it does |
 |--------|------|--------------|
 | `product-manager.sh` | **intake** | Runs the `product-manager` skill: a rough brief → a dev-ready vibe-kanban card. Interactive (it asks you to confirm the spec before filing). |
-| `orchestrator.sh` | **supervise** | Launches the **orchestrator agent** (`claude --agent vibe-kanban-indie:orchestrator`) on a `/loop` timer: each tick it starts an agent for an In-Progress/Orchestrate card that has none, and **reflects** managed-card board status by reading each agent's state (→ In Review when dev is finished + reviewed, → Done once the merge/PR has landed — read-only, it never merges itself). It **always** handles operator instructions — a "create a card…" / "attach a pipeline…" instruction is routed to the **`intake`** agent (**always-on**, no flag) — and, with a directive enabled, it can also spawn the `decider` for stale questions / auto-approve / `/compact` overloaded headed agents (`ORCH_AUTO_COMPACT=1`, see *Opt-in directives*). It does **not** drive coding step-by-step — each coding agent runs its own pipeline, and the operator owns the merge decision. |
+| `orchestrator.sh` | **supervise** | Launches the **orchestrator agent** (`claude --agent vibe-kanban-indie:orchestrator`) — a lean **loop manager** — on a `/loop` timer. It owns the timer and the relay only: each tick it spawns ONE fresh **`sweeper`** subagent to run the whole board sweep (dispatch an agent for an In-Progress/Orchestrate card that has none, and **reflect** managed-card board status — → In Review when dev is finished + reviewed, → Done once the merge/PR has landed, read-only, it never merges itself), then relays the sweeper's report. It **always** handles operator instructions itself — a "create a card…" / "attach a pipeline…" instruction is routed to the **`intake`** agent (**always-on**, no flag), and a direct "answer that questionnaire" request is routed to **`decider`** — everything else is forwarded to the sweeper, which also handles opt-in directives (stale-question auto-answer / auto-approve / `/compact` overloaded headed agents, `ORCH_AUTO_COMPACT=1`, see *Opt-in directives*). Nobody drives coding step-by-step — each coding agent runs its own pipeline, and the operator owns the merge decision. |
 | `orchestrate_tg.sh` | **supervise + Telegram** | Same as `orchestrator.sh`, but also loads the sombrax-telegram channel in the **project-manager** role over all topics, so it can message the per-branch dev agents on Telegram. |
-| `orchestrator-delta.sh` | **delta gate** | Called by the orchestrator agent itself (not by you) once per tick: a `probe`/`commit` pair that lets the sweep skip `get_execution` for sessions whose observable state provably hasn't changed since the last tick. See *The delta gate* below. |
+| `orchestrator-delta.sh` | **delta gate** | Called by the **sweeper** agent itself (not by you) once per tick: a `probe`/`commit` pair that lets the sweep skip `get_execution` for sessions whose observable state provably hasn't changed since the last tick. See *The delta gate* below. |
 
 ## Usage
 
@@ -95,8 +99,8 @@ instructions (the **always-on** `intake` route above — no flag needed). Direct
 turn on extra opt-in behaviors; both launchers source **`directives-block.sh`**, which reads
 directive env toggles and appends a `Directives enabled for this run:` block to the
 `/loop` spawn prompt (empty when no toggle is set, so the default prompt is unchanged).
-The flag's *logic* lives in the `orchestrator` agent definition; this block just names
-which flags are on.
+The flag's *logic* lives in the `sweeper` agent definition (the `orchestrator` loop manager just
+forwards the block byte-for-byte each tick); this block just names which flags are on.
 
 - **`auto-compact`** — `ORCH_AUTO_COMPACT=1` (truthy: `1`/`true`/`yes`/`on`). Each tick,
   the orchestrator measures every running **`CLAUDE_CODE_HEADED`** agent's context-window
@@ -108,7 +112,7 @@ which flags are on.
   `ORCH_AUTO_COMPACT=1 ORCH_COMPACT_THRESHOLD=250000 scripts/orchestrator.sh`.
 
 To wire a new directive toggle, add a `case` to `directives-block.sh` and document the
-behavior in `agents/orchestrator.md` — both launchers pick it up automatically.
+behavior in `agents/sweeper.md` — both launchers pick it up automatically.
 
 > **GUI is future work, not in this repo.** The vibe-kanban GUI is a separate upstream
 > app; a future toggle there would enable `auto-compact` by injecting the same flag +
@@ -119,16 +123,19 @@ behavior in `agents/orchestrator.md` — both launchers pick it up automatically
 
 `orchestrator.sh` launches `claude --plugin-dir <checkout> --agent
 vibe-kanban-indie:orchestrator "/loop <interval> <sweep>"` — so the orchestrator
-agent IS the session (not a Task subagent), and its full behavior comes from the
-agent definition. `--plugin-dir` loads the plugin from this checkout for the session
-(this is the standalone/dev mode), which is what makes the agent name resolve and
-registers the bundled MCP; don't ALSO install the plugin via the marketplace at the
-same time (double MCP registration — pick one mode, as noted above). The `/loop`
-skill re-runs the per-tick sweep every interval. The sweep brief lives in
-`orchestrator.prompt.md` — edit that file to change what each tick does (it's read
-fresh on launch). Override the agent name with `ORCH_AGENT` and the loaded plugin
-dir with `PLUGIN_DIR`. Stop the loop by typing "stop the loop" in the session, or
-Ctrl-C.
+**loop manager** agent IS the session (not a Task subagent), and its full behavior
+comes from the agent definition. `--plugin-dir` loads the plugin from this checkout
+for the session (this is the standalone/dev mode), which is what makes the agent
+name resolve and registers the bundled MCP; don't ALSO install the plugin via the
+marketplace at the same time (double MCP registration — pick one mode, as noted
+above). The `/loop` skill re-arms a recurring task that re-submits the per-tick
+brief every interval; each tick the loop manager spawns ONE fresh **`sweeper`**
+subagent that does the actual board sweep, and relays its report — the sweep
+itself lives entirely in `agents/sweeper.md`. The per-tick brief that spawns the
+sweeper lives in `orchestrator.prompt.md` — edit that file to change what each
+tick does (it's read fresh on launch). Override the agent name with `ORCH_AGENT`
+and the loaded plugin dir with `PLUGIN_DIR`. Stop the loop by typing "stop the
+loop" in the session, or Ctrl-C.
 
 That `claude` invocation does not run bare: both supervise launchers source
 **`orchestrator-attach.sh`** (alongside `resolve-backend.sh` and
@@ -158,7 +165,7 @@ is missing (it will not silently fall back to a duplicate-prone foreground launc
 Every `/loop` tick, the sweep would otherwise call `get_execution` for every session it
 watches — and `get_execution` re-serializes the whole `executor_action` (the entire
 dispatch prompt) each time, even when nothing about that session has changed since the
-last tick. `orchestrator-delta.sh` is a probe/commit gate the orchestrator agent runs
+last tick. `orchestrator-delta.sh` is a probe/commit gate the **sweeper** agent runs
 itself (you never invoke it directly) that lets the sweep skip that call for a session
 whose observable state provably hasn't moved.
 
@@ -175,7 +182,7 @@ whose observable state provably hasn't moved.
   `resolve-backend.sh` / `directives-block.sh`, deliberately stick to `sed`/`grep`).
 - **Fail-open (CR-4).** A non-zero exit **or any output that violates the line-per-session
   contract** (wrong count, wrong order, a mismatched `session_id`, a malformed field) means
-  the orchestrator agent falls back to the raw executions GET + `get_execution` for **every**
+  the sweeper agent falls back to the raw executions GET + `get_execution` for **every**
   session in that sweep, exactly as it did before this gate existed. The gate can degrade
   the saving; it can never hide a transition.
 - **Valve:** `VIBE_DELTA_FORCE_MANAGED=1` forces `POLL` for every session, unconditionally

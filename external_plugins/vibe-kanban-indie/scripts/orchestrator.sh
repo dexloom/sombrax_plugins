@@ -1,25 +1,29 @@
 #!/usr/bin/env bash
 #
-# orchestrator.sh — launch the orchestrator AGENT as the session agent
-# (`claude --agent vibe-kanban-indie:orchestrator`) and re-run its board sweep on an
-# interval via the `/loop` skill. The launch interval is the "active" cadence; the
-# orchestrator then runs ADAPTIVELY — backing the timer off to 30m after two
-# consecutive empty ticks and snapping back to the active interval when a card needs
-# work or an operator instruction arrives (see the agent definition's "Adaptive loop
-# cadence"). It re-arms its own cron to change cadence.
+# orchestrator.sh — launch the orchestrator LOOP MANAGER as the session agent
+# (`claude --agent vibe-kanban-indie:orchestrator`) and re-arm the `/loop` timer on an
+# interval. The loop manager owns the TIMER, not the tick: each tick it spawns ONE fresh
+# `sweeper` subagent to run the whole board sweep and relays its report, so the manager's
+# own session context stays flat. The launch interval is the "active" cadence; the
+# sweeper classifies each tick and requests re-arms ADAPTIVELY — backing the timer off to
+# 30m after two consecutive empty ticks and snapping back to the active interval when a
+# card needs work or an operator instruction arrives (see agents/sweeper.md's "Adaptive
+# loop cadence and the CADENCE handshake"). The loop manager re-arms its own cron only
+# when the sweeper's CADENCE: line asks it to.
 #
-# The orchestrator's full behavior lives in its agent definition; launching it with
+# The loop manager's full behavior lives in its agent definition; launching it with
 # --agent (rather than as a Task subagent) makes it the session itself. `/loop
-# <interval> <prompt>` re-runs the per-tick dispatch sweep in
-# scripts/orchestrator.prompt.md every <interval>: find READY cards with no
-# workspace (In-Progress or Orchestrate-opt-in), resolve the executor (the card's
-# pinned agent, else the operator's last-used/default config), start ONE coding
-# agent per card via the MCP, mark it In Progress, and report. Beyond that core it
-# acts on the opt-in directives named in its spawn prompt (auto-unblock /
-# auto-answer-questions / telegram-fanout), whose logic lives in the agent
-# definition — and, always-on with no flag, on an operator instruction to create a
-# card / attach a pipeline, which it routes to the intake agent. Default (active)
-# interval is 5m; idle backoff is 30m.
+# <interval> <prompt>` re-runs the per-tick brief in scripts/orchestrator.prompt.md every
+# <interval>: that brief just spawns ONE sweeper (which finds READY cards with no
+# workspace — In-Progress or Orchestrate-opt-in —, resolves the executor: the card's
+# pinned agent, else the operator's last-used/default config, starts ONE coding agent per
+# card via the MCP, marks it In Progress, applies whichever opt-in directives its spawn
+# prompt names — auto-unblock / auto-answer-questions / telegram-fanout / auto-compact /
+# nudge-stuck, whose logic lives in agents/sweeper.md — and reports) and relays its
+# report. The loop manager itself handles two always-on operator-instruction routes with
+# no flag: it routes "create a card / attach a pipeline" to the intake agent, and a
+# direct "answer that questionnaire" request to the decider agent; everything else it
+# forwards to the sweeper verbatim. Default (active) interval is 5m; idle backoff is 30m.
 #
 # Usage:
 #   scripts/orchestrator.sh            # check every 5 minutes
@@ -59,13 +63,26 @@ cd "$(dirname "$0")/.."
 # Interval: first positional arg wins, else $ORCH_INTERVAL, else 5m.
 INTERVAL="${1:-${ORCH_INTERVAL:-5m}}"
 
+# Resolve PLUGIN_DIR to an ABSOLUTE path now (default = this checkout, the dir we
+# cd'd into above) — must happen before the cd inside orchestrator-attach.sh below (a
+# relative PLUGIN_DIR override would otherwise resolve against its temp dir), and
+# before we build LOOP_BODY below, which carries it as a `PLUGIN ROOT:` line.
+PLUGIN_DIR="$(cd "${PLUGIN_DIR:-$(pwd)}" && pwd)"
+
 PROMPT_FILE="scripts/orchestrator.prompt.md"
 if [[ ! -f "${PROMPT_FILE}" ]]; then
   echo "orchestrator.sh: missing ${PROMPT_FILE}" >&2
   exit 1
 fi
 
-LOOP_BODY="$(cat "${PROMPT_FILE}")"
+# `PLUGIN ROOT:` lets the loop manager forward this path to the sweeper it spawns each
+# tick: a spawned subagent does not reliably inherit CLAUDE_PLUGIN_ROOT from the
+# environment, so the sweeper's plugin-root resolution order falls back to this line
+# when present (see agents/sweeper.md). Must precede the directives block below — the
+# directives block has to stay LAST in the prompt.
+LOOP_BODY="$(cat "${PROMPT_FILE}")
+
+PLUGIN ROOT: ${PLUGIN_DIR}"
 
 # Append the opt-in "Directives enabled for this run" block (empty unless a directive
 # env toggle like ORCH_AUTO_COMPACT=1 is set). Sourced so it can't drift from the
@@ -73,8 +90,9 @@ LOOP_BODY="$(cat "${PROMPT_FILE}")"
 . "$(dirname "$0")/directives-block.sh"
 LOOP_BODY="${LOOP_BODY}${DIRECTIVES_BLOCK}"
 
-# Launch the orchestrator AGENT directly (not as a Task subagent). Its full behavior
-# lives in the agent definition; the looped prompt is just the per-tick sweep brief.
+# Launch the orchestrator LOOP MANAGER AGENT directly (not as a Task subagent). Its
+# full behavior lives in the agent definition; the looped prompt is just the per-tick
+# brief that spawns a fresh sweeper subagent.
 #
 # In this standalone/dev mode the plugin is NOT installed via the marketplace, so
 # `--plugin-dir` loads it from this checkout for the session — that's what makes the
@@ -82,10 +100,8 @@ LOOP_BODY="${LOOP_BODY}${DIRECTIVES_BLOCK}"
 # load it). It also loads the bundled `.mcp.json`, so don't ALSO have the plugin
 # installed via the marketplace at the same time (double MCP registration — see
 # ../README.md "pick one mode"). PLUGIN_DIR defaults to this checkout (the dir we
-# cd'd into above); override ORCH_AGENT to use a different agent name.
-# Resolve to an ABSOLUTE path now (default = this checkout) — must happen before the
-# cd below, or a relative PLUGIN_DIR override would resolve against the temp dir.
-PLUGIN_DIR="$(cd "${PLUGIN_DIR:-$(pwd)}" && pwd)"
+# cd'd into above, resolved to an absolute path above); override ORCH_AGENT to use a
+# different agent name.
 ORCH_AGENT="${ORCH_AGENT:-vibe-kanban-indie:orchestrator}"
 
 # "Spawn = connect": launch claude inside the stable, shared `vk-orchestrator` tmux

@@ -17,7 +17,7 @@
 #              are read; every other key is ignored) on stdin
 #           >  nothing on stdout; rewrites the state file atomically
 #
-# FAIL-OPEN IS THE WHOLE POINT (CR-4). This script's caller — the orchestrator
+# FAIL-OPEN IS THE WHOLE POINT (CR-4). This script's caller — the sweeper
 # agent — has `Bash` but no `Write` tool, so it cannot itself parse a broken
 # output stream reliably. The agent therefore validates this script's output as
 # a strict CONTRACT (exit 0; one JSON object per line; exactly N lines in input
@@ -28,14 +28,14 @@
 # `$VIBE_BACKEND_URL/api/sessions/<session_id>/executions`, take the last
 # `run_reason == "codingagent"` entry, then `get_execution(execution_id)`, and
 # decide exactly as before this gate existed. That fallback is the pre-change
-# code path and is the correct fail-open — see `agents/orchestrator.md` →
+# code path and is the correct fail-open — see `agents/sweeper.md` →
 # "The delta gate". This script therefore NEVER emits N POLL lines as a
 # substitute for a hard failure: a hard failure means NO stdout at all, so the
 # agent's fallback is unambiguously triggered rather than silently degraded.
 #
 # THE SUPERSET + DISCRIMINATOR INVARIANT (CR-5) — the invariant that outlives
 # this card: the fingerprint computed by `probe` must remain a SUPERSET of every
-# input the column-decision rules in `agents/orchestrator.md` ("Deciding the
+# input the column-decision rules in `agents/sweeper.md` ("Deciding the
 # column") consume, PLUS a discriminator for every way a turn can change without
 # changing any of those inputs. Today that discriminator is the sha256 CONTENT
 # HASH of the headed transcript file — never file metadata (size + modification
@@ -51,7 +51,7 @@
 #
 # `commit` MUST be fed every SKIPped session, not only POLLed ones, or the state
 # file empties every other tick and the gate sawtooths between "everything looks
-# new" and "everything looks stale" — see `agents/orchestrator.md` → "The delta
+# new" and "everything looks stale" — see `agents/sweeper.md` → "The delta
 # gate" and CR-3/AC-1.
 #
 # DIGEST INPUTS ARE CANONICAL TYPED JSON, ASSEMBLED WITH `jq -n` AND CANONICALIZED
