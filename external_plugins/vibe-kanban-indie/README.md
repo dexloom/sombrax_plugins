@@ -147,6 +147,34 @@ workspace and starts its first coding-agent session; returns `workspace_id`,
   > be registered twice. Pick one mode, or set `VIBE_BACKEND_URL` and run the
   > orchestrator sweep from your project instead.
 
+## The per-tick progress digest
+
+Every sweeper tick with activity renders one fixed-width table — one row per card that moved:
+
+```
+┌────────┬───────────┬─────────────────────────────────────────────────────────────────────────────┐
+│  Lane  │   Card    │                                    Stage                                    │
+├────────┼───────────┼─────────────────────────────────────────────────────────────────────────────┤
+│ VIBE A │ VIBE-2    │ Codex found a real schema/behavior mismatch — card-adjacent bug, being      │
+│        │           │ folded in.                                                                  │
+├────────┼───────────┼─────────────────────────────────────────────────────────────────────────────┤
+│ VIBE B │ VIBE-50   │ spec ✅ (554 lines)                                                         │
+└────────┴───────────┴─────────────────────────────────────────────────────────────────────────────┘
+```
+
+- **Stable lane labels.** A workspace keeps the **same lane letter for as long as its `lanes{}` entry
+  survives**, so you can track a lane visually across ticks. (If that entry is ever dropped — a corrupt state
+  file, say — the workspace simply takes the next free letter: a **cosmetic re-label**, never a lost or
+  mis-attributed row.) Only the letter is persisted, in the `lanes` section of `orchestrator-state.json`; the
+  nickname is re-derived each tick. A workspace with **no linked card** still gets a lane — its `Card` cell
+  shows `—`.
+- **Rows only for activity.** A card with nothing new gets **no row**, and a tick with **no** rows emits **no
+  table** — just the one "nothing happened" line. The no-noise discipline is unchanged.
+- **Aligned in the terminal; plain text on Telegram.** The digest is 100 columns wide and lines up exactly in
+  the tmux console. Under `telegram-fanout` it is mirrored **verbatim, as plain text** — deliberately **not**
+  fenced, because Telegram's transport can split a code block across chunks and drop the message entirely. A
+  proportional font on mobile may render the box ragged; **the console is the source of truth.**
+
 ## Orchestrator directives (opt-in)
 
 Beyond dispatch + status reflection — done every tick by the **`sweeper`** the orchestrator

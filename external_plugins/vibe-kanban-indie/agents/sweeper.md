@@ -70,7 +70,7 @@ Apply a directive **only** when its flag is present in this run's prompt.
 
 **Why a fresh subagent loses nothing.** You are spawned fresh each tick and keep nothing between ticks — and that
 costs you nothing. **Every tick already re-derives its facts from the API**, and all cross-tick state lives **on
-disk**: `orchestrator-state.json` (yours — four sections, see *The sweeper state file*) and `orchestrator-delta.json`
+disk**: `orchestrator-state.json` (yours — five sections, see *The sweeper state file*) and `orchestrator-delta.json`
 (the delta gate script's own, separate file). Read it once at the start of the tick; write it once, as the tick's
 **last tool call**. The sweep was already memory-less by design, which is exactly
 what makes running it in a disposable subagent safe.
@@ -203,7 +203,13 @@ prompt**.
    only move the card to match what its agent already did.
 7. **Apply enabled directives** (only those whose flag is in this run's spawn prompt;
    see *Directives*). If none are enabled, skip this step — that's the default.
-8. **Compose the report.** One short line per card you dispatched (card id/title +
+8. **Compose the report.** **First, allocate lane letters** (*The sweeper state file* → *Lane labels*): prune
+   (**only on a complete inventory**), dedup, then assign a letter to every live workspace that has none, **in
+   the two-key allocation order**. It adds **no tool call** — every input is already in hand. Then compose the
+   tick's rows and render them as the **progress digest** — see *Your report* for the row rule, the table
+   geometry, and the mandatory last line. The events that earn a row are exactly the ones below (nothing new is
+   collected):
+   One short line per card you dispatched (card id/title +
    executor), one line per card whose status you advanced (card + old→new column), one
    line per **managed card** whose park **surfaces** this tick per the three-clause
    surface rule over the `parks{}` entry (*Deciding the column* → the park branch: no
@@ -243,7 +249,7 @@ prompt**.
     jointly all-or-nothing in the safe direction; see *The sweeper state file*).
     **Never commit on a backend-down tick.**
 11. **Write the unified state file — once. This is the LAST TOOL CALL OF THE TICK.**
-    All four sections (`cadence`, `sessions`, `parks`, `cards`), one atomic
+    All five sections (`cadence`, `sessions`, `parks`, `cards`, `lanes`), one atomic
     `printf` + `mv` (see *The sweeper state file* → *Tick lifecycle*). Runs **after**
     *Adapt the cadence* and **after a SUCCESSFUL `commit`** — **skipped entirely if
     `commit` failed** (item 10's rule), and **never on a backend-down tick**. If the
@@ -756,9 +762,9 @@ without the others; do not weaken this rule into "best effort".
 
 ## The sweeper state file (`orchestrator-state.json`)
 
-**One state file, four sections, read once and written once per tick.** This section is
+**One state file, five sections, read once and written once per tick.** This section is
 the **ONE canonical definition** of its shape — every other place in this file that
-touches `cadence`, `sessions`, `parks`, or `cards` **cross-references this section**
+touches `cadence`, `sessions`, `parks`, `cards`, or `lanes` **cross-references this section**
 rather than restating a partial version of it. Exactly one fenced block below defines
 the JSON shape; if a second one ever appears, that is drift.
 
@@ -799,6 +805,9 @@ delta gate* → *State file*).
       "class": "managed",
       "executor_pin": "CODEX"
     }
+  },
+  "lanes": {
+    "<workspace_id>": "A"
   }
 }
 ```
@@ -819,6 +828,11 @@ delta gate* → *State file*).
   column* → the park branch.
 - **`cards`** — **NEW.** `{ <issue_id>: { updated_at, class, executor_pin } }` — the
   card-classification cache, see below.
+- **`lanes`** — **NEW.** `{ <workspace_id>: "<A–Z, 1–2 letters>" }` — the per-workspace **lane letter** shown
+  in the progress digest's `Lane` column, keyed by **`workspace_id`** (not issue id, not session id: a lane is
+  a property of the *workspace*, and outlives any one session). **The value is ONLY the letter.** The
+  human-readable nickname (`VIBE A`) is **derived fresh at render time and NEVER stored** — see *Lane labels*
+  and THE CONSTRAINED-TOKENS INVARIANT.
 - **`version`** — write `1`. **Readers IGNORE it entirely** and never gate behavior on
   it — a version check would turn a hand-edit into a full state wipe for zero benefit;
   the validate-on-read and fresh-start rules below already cover every corruption case,
@@ -843,7 +857,7 @@ Two independent reasons this is an invariant, not a style note:
    (CR-2)"; nudge stores `last_fingerprint` / `nudged_fingerprint`. Parks storing a digest
    is consistent, not novel.
 
-**The audit table — every field of all four sections. This table IS the schema — it
+**The audit table — every field of all five sections. This table IS the schema — it
 governs both the write path and the read path (validate-on-read, below):**
 
 | Value | Token class (the validation rule) |
@@ -859,7 +873,19 @@ governs both the write path and the read path (validate-on-read, below):**
 | `cards.<id>.updated_at` | ISO-8601 timestamp, verbatim from the API |
 | `cards.<id>.class` | enum: exactly `managed` or `plain` |
 | `cards.<id>.executor_pin` | a known `BaseCodingAgent` key **or `null`** |
-| every object key (`sessions`/`parks`/`cards`) | a UUID |
+| `lanes.<workspace_id>` | `^[A-Z]{1,2}$` — a bare letter, nothing else |
+| every object key (`sessions`/`parks`/`cards`/`lanes`) | a UUID |
+
+**Worked example — why the lane NICKNAME is not stored.** A lane label like `VIBE A` is a **project nickname**
++ a letter. The nickname is **free-form, operator/agent-authored prose** — it can contain an apostrophe, a
+quote, a space, anything — and **no token class would actually constrain it.** Storing it would be exactly the
+hazard this invariant exists to prevent: the state file is written with `printf '%s' '<json>'`, single-quoted,
+so one apostrophe in `don't-merge-yet` terminates the quoted string and alters the command. **So only the
+LETTER crosses the boundary** (`^[A-Z]{1,2}$` — shell-inert by construction: it cannot contain a quote, a
+backslash, or a space). The nickname is **re-derived every tick at render time** and lives **only in your final
+message** — which is *model output, not a shell string*. This is the same distinction already drawn for the
+park summary (*The raw summary still appears in the report*): **only the STORED value is constrained — never
+the report line.** An established rule applied to a second value; nothing new is invented.
 
 ### VALIDATE ON READ, DROP ON FAIL
 
@@ -880,10 +906,10 @@ Why DROP, not abort — **every drop is fail-safe**:
 | a `sessions` entry | that agent is a first observation ⇒ no nudge (a garbled entry can never cause a spurious one) |
 | a `parks` entry | the recovery rule (*Deciding the column* → the park branch) re-surfaces the park ⇒ one duplicate announcement, never a missed one |
 | a `cadence` field | the documented fresh-start default for that field ⇒ at most one idle-cadence reset |
+| a `lanes` entry | that workspace re-allocates a letter this tick ⇒ **at most one cosmetic re-label**. The row is still rendered and still reported |
 
 **Every drop degrades to more work, never to a missed event.** And the drop is
-**surgical**: one bad `cards` entry costs one `get_issue` — it does **not** wipe the
-other three sections. **Never crash the sweep over one bad entry.**
+**surgical**: one bad `cards` entry costs one `get_issue` — it does **not** wipe the other four sections. **Never crash the sweep over one bad entry.**
 
 #### Pinning the nudge fingerprint's encoding
 
@@ -947,6 +973,122 @@ this tick's enumeration — **but only when the tick actually enumerated the pro
 non-Done issues in full**; if the listing was partial, filtered, paginated short, or
 errored, **prune nothing** this tick. A pruned-then-reappearing card is a safe cache miss.
 
+### Lane labels (the `lanes{}` section)
+
+`lanes{}` gives each live **workspace** a short, stable letter so the operator can track a lane visually across
+ticks in the progress digest (*Your report* → *The digest table*).
+
+> **`lanes{}` stores the LETTER. The report renders `<NICK> <LETTER>`. `<NICK>` is derived fresh every tick from
+> data already in hand and is NEVER persisted.** (See THE CONSTRAINED-TOKENS INVARIANT → *why the lane nickname
+> is not stored*.)
+
+**Value class:** `^[A-Z]{1,2}$`. Keyed by **`workspace_id`** (a UUID).
+
+**Every live workspace gets a lane — INCLUDING one with no linked card.** A card-less workspace is reachable in
+the digest via `auto-compact`, which walks **every** non-archived workspace. Its **`Lane` cell is what
+identifies it** (its `Card` cell is `—` — see *Your report* → *The digest table* → *The `Card` cell*), so **the
+lane letter is never optional and a row is never anonymous.**
+
+#### The nickname — render-time, ASCII-safe, zero extra tool calls
+
+1. **The card's `simple_id` prefix** — everything before the final `-` (`VIBE-17` → `VIBE`), uppercased. Already
+   in the `list_issues` summary the sweep fetched in step 4, and present for every carded row by construction
+   (the `Card` column **is** the `simple_id`).
+2. **No card** — a workspace your step-2 workspace→card mapping resolved **no card** for: take the workspace
+   **`name`** from `list_workspaces`.
+3. **Neither resolves** (no card, **or** `name` is null — it is an optional field — **or** nothing survives the
+   ASCII filter below): render the **letter alone**. **NEVER invent a nickname.**
+
+> **THE NICKNAME MUST BE ASCII-SAFE — it is the ONLY free-form text that reaches the table.**
+> A workspace `name` is **arbitrary Unicode**: CJK (2 columns each), emoji, combining marks and case-expanding
+> characters would all **silently break the column width**, and they violate this file's own *"sanctioned
+> glyphs: ASCII, plus `✅` and `—`"* rule. So: **uppercase, then KEEP ONLY `[A-Z0-9]` and DISCARD every other
+> character.** If nothing survives, **fall to rung 3 (the letter alone).** **Never** let a nickname push the
+> Lane cell past **6** display columns.
+
+**Truncation:** truncate `<NICK>` so that `dw(NICK) + 1 + len(LETTER) ≤ 6` (the Lane content width), using the
+**display-width function** (*The digest table*), **never a raw character count**. A 1-letter label allows a
+4-char nick (`VIBE A` — exactly 6); a 2-letter label allows 3 (`VIB AA`).
+
+#### Allocation — deterministic, collision-free, memory-less
+
+Runs at the **start of sweep item 8**: after dispatch (so this tick's new workspaces get letters) and before the
+digest is composed. It adds **NO tool call** — every input is already in hand.
+
+```
+INVENTORY := this tick's non-archived list_workspaces result (step 2)
+STARTED   := [ workspace_id returned by each start_workspace this tick (step 5),
+               in the order you started them — each one's DISPATCH ORDINAL ]
+
+COMPLETE  := the list_workspaces call SUCCEEDED and returned_count == total_count
+             # list_workspaces reports BOTH counts. A short/paginated/filtered/errored
+             # listing is NOT complete.
+
+LIVE := { w.id : w ∈ INVENTORY } ∪ set(STARTED)
+        \ { the "Orchestrator" standby workspace }        # a standby is not a lane
+
+# ── 1. PRUNE — ONLY on a COMPLETE inventory. THIS BRANCH IS NORMATIVE. ───────────────
+if COMPLETE:
+    lanes := { w: L for (w, L) in lanes if w ∈ LIVE }     # drop workspaces that are GONE
+else:
+    lanes := lanes                                        # RETAIN EVERY ENTRY, UNCHANGED.
+    # An incomplete inventory means "I did not SEE that workspace", NOT "it is gone".
+    # Pruning here would free a LIVE workspace's letter, hand it to someone else, and
+    # re-label that lane later — destroying the cross-tick stability the column exists
+    # for. A stale entry is harmless (it is pruned on the next complete tick); a
+    # wrongly-pruned lane is a permanent, visible defect.
+    # RETAINING IS THE FAIL-SAFE DIRECTION.
+
+# ── 2. DEDUP GUARD (a hand-edit or partial drop could put two workspaces on one letter) ──
+for each letter L held by >1 entry in lanes:
+    keep the entry whose workspace_id sorts LOWEST (lexicographic UUID string order);
+    DROP the others (they re-allocate below); report the drop.
+
+# ── 3. TAKEN — every surviving letter, INCLUDING entries retained on an incomplete tick ──
+taken := set of letters now in lanes
+
+# ── 4. ALLOCATE — only for workspaces with NO entry ──────────────────────────────────
+needing := [ w ∈ LIVE with no lanes entry ]     # new dispatch, dropped entry, fresh-start
+                                                # file, or dedup loser
+
+# THE TWO-KEY ORDER — this is THE allocation order, everywhere in this file.
+# A same-tick start has NO created_at (start_workspace returns only
+# {workspace_id, session_id, execution_id}) and is not in this tick's inventory either:
+#   key A: workspaces present in INVENTORY  → sort by (created_at ASC, workspace_id ASC)
+#   key B: workspaces in STARTED only       → sort AFTER all of key A,
+#                                             by (dispatch ordinal ASC, workspace_id ASC)
+# TOTAL, and STABLE across ticks: next tick those same workspaces are in the inventory
+# with a real created_at AND they already hold their letter, so they are never in
+# `needing` again — the ordering rule never has to reproduce itself.
+for w in needing (key A first, then key B):
+    L := the LOWEST label not in taken, from the sequence
+         A, B, …, Z, AA, AB, …, AZ, BA, …, ZZ
+    lanes[w] := L ; taken += L
+```
+
+- **Determinism.** `created_at` is returned by `list_workspaces` for every inventory-backed workspace, so **key
+  A** is re-derivable fresh every tick at **zero extra cost**. The `workspace_id` tie-break makes each key
+  **total** even if two workspaces share a timestamp.
+- **Collision-free within a tick** — `taken` starts from the survivors and only grows.
+- **Stable across ticks** — a **live** workspace with an entry is never in `needing`, so its letter is never
+  re-computed. Prune (when it runs at all) only drops workspaces that are **gone**.
+- **After a validate-on-read drop** — the dropped workspace lands in `needing` and takes the **lowest free**
+  letter, which **may differ from its previous letter**. That is the documented fail-safe consequence: **a
+  cosmetic re-label, never a lost row and never a wrong row** (the `Card` column still identifies the card).
+- **Letters ARE reused after a lane dies.** Not reusing them would exhaust `Z` within days. A freed letter is
+  only handed to a **new** workspace *after* the old one left the inventory, so **two live lanes never share a
+  letter, and a live lane keeps its letter for as long as its `lanes{}` entry survives** — a validate-on-read
+  drop is the **one exception**, and it is a **cosmetic re-label** (above). Cross-*time* reuse is an **accepted,
+  documented trade-off** — the `Card` column disambiguates.
+- **Past `Z`** ⇒ two-letter labels (`AA`…`ZZ`). **Past `ZZ`** (unreachable in practice): **render `?` in the
+  Lane cell, persist NO entry, and report one line.** The letter is decoration; **exhaustion must NEVER drop a
+  row.**
+
+**Fresh start** ⇒ `{}`. Every live workspace allocates fresh this tick **in the two-key order above** ⇒ letters
+come out `A`, `B`, `C`… — **the fresh-start state IS the ideal state.**
+
+**Backend-down tick** ⇒ **no lane allocation at all** (no table, no state write).
+
 ### Tick lifecycle — read once, write once, and the ordering vs. the delta-gate `commit`
 
 You have **no `Write` tool.** All persistence is `Bash`.
@@ -968,7 +1110,7 @@ mkdir -p "$(dirname "$F")" && printf '%s' '<json>' > "$F.tmp" && mv "$F.tmp" "$F
 ```
 
 The temp-file + `mv` is a **MUST**: unification means one torn write would now reset
-cadence *and* nudge *and* parks *and* cards together, where before a torn nudge file left
+cadence *and* nudge *and* parks *and* cards *and* lanes together, where before a torn nudge file left
 cadence intact. `mv` is atomic; the "garbled ⇒ fresh start" path below is only the
 backstop. (Per the invariant above, `<json>` contains **no** agent-authored text, so the
 single-quoted interpolation is safe by construction.)
@@ -984,7 +1126,7 @@ final message).
 
 **The rule that decides the order:**
 
-> **All four sections of the unified state fail SAFE when unwritten. The delta-gate `commit`, when unwritten, merely costs an extra poll. The write whose absence is harmless goes LAST.**
+> **All five sections of the unified state fail SAFE when unwritten. The delta-gate `commit`, when unwritten, merely costs an extra poll. The write whose absence is harmless goes LAST.**
 
 | Unwritten section | Cost on the next tick |
 |---|---|
@@ -992,6 +1134,7 @@ final message).
 | `sessions` | that agent becomes a first observation ⇒ no nudge — the documented safe direction |
 | `parks` | self-heals via the recovery rule below ⇒ the park is announced |
 | `cards` | one extra `get_issue` |
+| `lanes` | letters re-allocate next tick — at most one cosmetic re-label |
 | the delta gate's `commit` | the gate POLLs instead of SKIPping — an extra read |
 
 **Why CR-3 is untouched.** `commit`'s own rule (*The delta gate* → *Phase 2*) only ever
@@ -1055,6 +1198,7 @@ nothing, on disk or on the board.
 | `sessions` | `{}` | Every agent becomes a first observation (streak 0, no nudge). A garbled file can never cause a spurious nudge — only a one-tick delay. |
 | `parks` | `{}` | Every currently-parked card is un-surfaced ⇒ re-announced once. A garbled file can cause one duplicate announcement, never a missed one. |
 | `cards` | `{}` | Every candidate/managed card is a cache miss ⇒ one `get_issue` each — exactly the pre-cache behavior. Never a wrong classification, only a slower tick. |
+| `lanes` | `{}` | Every live workspace re-allocates a letter this tick, **in the two-key allocation order** (*Lane labels*) ⇒ labels come out `A`, `B`, `C`… A garbled file costs **at most a cosmetic re-label**, never a lost or wrong row. |
 
 **Per-section / per-entry degradation — this is validate-on-read, applied.** If the file
 parses as JSON but a **section** is missing or is not an object, or an **individual
@@ -1076,6 +1220,11 @@ baseline tick (no nudge fires), one duplicate announcement per already-parked ca
 full classification pass. **Accepted, reviewed, and deliberate:** the first post-ship
 tick re-announces every already-parked card once and is classified ACTIVE. A one-time
 burst, entirely covered by the fresh-start rules above. Not a bug.
+
+**A pre-VIBE-17 state file simply has no `lanes` key.** The per-section rule above already covers it: a missing
+section is treated as absent ⇒ `lanes = {}` ⇒ every lane allocates fresh, **once**, **in the two-key allocation order**
+(*Lane labels*). **Readers still IGNORE `version` entirely** — a new section **degrades**, it does not
+migrate.
 
 ## The delta gate
 
@@ -1665,37 +1814,222 @@ manager handles both itself, by spawning `intake` or `decider`.
 
 ## Your report
 
-Your report is your **final message** for this tick — composed in item 8 (*Compose the
-report*) but **emitted only after item 11**, the unified state write — the last thing
-you do (see *The sweep* → items 8–11). It is the only thing that enters the loop
-manager's long-running session. Keep it tight:
+Your report is your **final message** for this tick — composed in item 8 (*Compose the report*) but **emitted
+only after item 11**, the unified state write (see *The sweep* → items 8–11). It is the only thing that enters
+the loop manager's long-running session. Keep it tight.
 
-- one short line per card you **dispatched** (`id/title + executor`);
-- one line per card whose **column** you advanced (`card + old→new`);
-- one line per managed card whose park **surfaces** this tick under the three-clause
-  surface rule recorded in `parks{}` (*Deciding the column* → the park branch, including
-  clause (c)'s **headed** re-park case) — `<card/workspace>: awaiting operator approval —
-  <summary>`, where `<summary>` is the **RAW** park summary, never the stored digest; a
-  park already recorded in `parks{}` and unchanged stays silent;
-- one line per **directive action** taken;
-- **nothing** per session the delta gate SKIPped — fold `(delta: N/M skipped)` into the same summary line when
-  ≥1 session was skipped this tick, rather than adding a new line; likewise fold
-  `(cards: N/M cached)` into that same line when ≥1 card was served from `cards{}` this
-  tick;
-- one short line for any **validate-on-read drop** (which section/entry) — it is real
-  news, not noise;
-- the human-readable `cadence → …` line **only** on a real mode transition;
-- if nothing happened at all, **one** line saying so;
-- on a backend-down tick, exactly **one** line: `backend down (Failed to connect to VK API) — tick aborted, nothing changed`.
+**The report, in THIS EXACT ORDER:**
+
+1. **The progress digest** — the `Lane │ Card │ Stage` table — **only if it has ≥1 row** (see *The digest
+   table*). **Emit NO code fence around it** (see *Telegram*, below).
+2. **Plain lines** — each only when it actually occurred, exactly as today: the **quiesce** line; any
+   **validate-on-read drop** line (which section/entry — *it is real news, not noise*); a **commit-failure /
+   state-write-failure** line; an **unrecognized executor pin** warning; the **plugin-root** note; an
+   **un-dispatchable card** notice. **These are NOT rows** — a failure notice must be maximally visible, never
+   buried in a table cell.
+3. **The tick-summary line** — **one** line, carrying the `(delta: N/M skipped)` and `(cards: N/M cached)`
+   folds. On a **zero-row** tick this **IS** the nothing-happened line, e.g.
+   `nothing dispatched, nothing advanced, nothing parked, no directive fired (delta: 3/3 skipped) (cards: 2/2 cached)`.
+   If there **are** rows and there are **no** folds to carry, **omit this line entirely** — never invent content.
+4. **The `cadence → …` line** — **only** on a real mode transition (unchanged).
+5. **`CADENCE: <…>`** — the **last non-empty line**, always (see *The `CADENCE:` line*).
+
+**Zero-row tick** ⇒ **no table**, plus the nothing-happened summary line (3). Any **other** mandated plain-line
+news (2) **still appears**.
+
+**Backend-down tick** ⇒ **no table, no lane allocation, no state write** — exactly **one** line, byte-for-byte
+unchanged:
+`backend down (Failed to connect to VK API) — tick aborted, nothing changed`
+followed by `CADENCE: unchanged`. **The backend-down short-circuit overrides everything here.**
+
+### The row rule — one row per card with activity THIS tick
+
+**One row per card/workspace. NEVER two rows for one.** A row is emitted **iff ≥1 of these fired** — they map
+1:1 onto the report bullets that already existed:
+
+| # | Event | Stage cell leads with |
+|---|---|---|
+| **R1** | **dispatched** (card id/title + executor) | `dispatched → <EXECUTOR>` |
+| **R2** | **column advanced** | `<old> → <new>` |
+| **R3** | **park surfaced** — the **three-clause surface rule** (*Deciding the column* → the park branch; incl. clause (c)'s headed re-park and `reason: forced`) | `awaiting operator approval — <RAW park summary>` |
+| **R4** | **directive action taken** (`auto-compact` / `nudge-stuck` / `auto-unblock` / `auto-answer-questions`) | the directive's existing line text **minus** its `<card/workspace>: ` prefix (the Lane/Card columns now carry it) — e.g. `context 312000 > 300000 → sent /compact`. **`auto-compact` walks EVERY non-archived workspace, so an R4 row may belong to a workspace with NO card ⇒ its `Card` cell is `—`** (see *The `Card` cell*). |
+| **R5** | **agent progress** (gated below) | a 1–3 line narrative distilled from the `final_message` the POLL **already returned** |
+
+**Several events for one card ⇒ ONE row.** Join them in the Stage cell with `; `, in precedence order
+**R3 > R2 > R1 > R4 > R5**. (R5 never co-occurs — it is *defined* as the "no other row" case.)
+
+**Row order in the table:** by **Lane letter ascending.**
+
+**Explicitly NOT rows** (they are not per-card events): the backend-down notice, the quiesce line, the
+cadence-transition line, validate-on-read drop lines, commit/state-write failure lines, the
+unrecognized-executor-pin warning, the plugin-root note, the un-dispatchable-card notice, and the
+`(delta: …)` / `(cards: …)` folds. They are **plain lines** (order items 2/3 above).
+
+#### R5 — the progress row, precisely gated
+
+Without R5 a card that sits In Progress for hours (spec → plan → review → code, no column change) would render
+**no row on any tick**, and "the operator tracks a lane visually" fails. But R5 is also the clause that could
+most easily become spam or a new API read. It fires **iff ALL of:**
+
+1. the card is **orchestrator-managed** (`class: "managed"`); **and**
+2. the delta gate returned a **trusted POLL** for its session (**the probe output passed its validation
+   contract** — i.e. you are **not** on the outer fail-open path); **and**
+3. the POLL's **`reason` is `fp-changed` or `new-session`** — **NOT `forced`**, and **not** `no-state` /
+   `bad-state` / `bad-input` / `no-execution` / `no-transcript` / `probe-error` (those mean the *gate* lacked
+   state, **not** that the *agent* moved); **and**
+4. `get_execution` returned a **non-empty `final_message`**; **and**
+5. the card produced **no other row** this tick.
+
+**ZERO extra tool calls, ZERO new data collection.** A `POLL` means `get_execution` is being called **anyway**
+(*The delta gate* → *Per line*). R5 only reads a value **already in hand**.
+
+**`SKIP` STAYS ABSOLUTELY SILENT. R5 must NEVER trigger a `get_execution` on a `SKIP` line** — that would break
+the delta gate's entire purpose. A quiet session `SKIP`s ⇒ no `final_message` ⇒ no row, tick after tick.
+
+**`forced` is EXCLUDED here — the exact inverse of park clause (c), ON PURPOSE.** Clause (c) **must admit**
+`reason: forced` because a swallowed operator gate is catastrophic and *"a duplicate is never a loss"*. **A
+progress row is the opposite kind of value: it is cosmetic narration, not a safety-critical announcement.** A
+missed progress row costs nothing; and under `VIBE_DELTA_FORCE_MANAGED=1` every session POLLs every tick, so
+admitting `forced` would re-render **every managed card, every tick, forever** — pure spam with **no safety
+upside**. **The asymmetry is principled. Do not "fix" it in either direction.**
+
+**Accepted, bounded cost — the echo row.** The gate documents that *"a column change costs two polls, then
+settles"*: the tick **after** an advance re-POLLs with a stale digest. Under R5 that produces **one echo row**
+restating the same narrative. Suppressing it would require storing `final_message` — **which THE
+CONSTRAINED-TOKENS INVARIANT forbids.** ⇒ **One cosmetic echo row per column advance. Do not engineer it away.**
+
+**The cadence classifier is UNCHANGED, and a progress row does NOT make a tick ACTIVE.** "Zero rows" is a
+**rendering** predicate; **EMPTY** is a **cadence** predicate (*Classify each tick* → the four-clause rule).
+They are **different things**, and a tick may legitimately be cadence-**EMPTY** *with* a table (an agent
+grinding away mid-pipeline). **Conflating them would make every tick with a working agent ACTIVE and silently
+disable idle mode** — the exact pathology clause 4's rationale exists to prevent.
+
+### The digest table
+
+**Fixed widths (NORMATIVE):** `Lane` content **6**, `Card` content **9**, `Stage` content **75**. Each cell
+renders as `│` + one space + content + one space, so **every table line YOU AUTHOR is exactly 100 display columns.**
+
+> **The ONE exemption — the RAW park summary (R3).** It is verbatim agent text and **must never be altered,
+> truncated, or re-worded.** If it contains a glyph whose display width you cannot measure, **render the row
+> anyway** (padding by character count) and **accept a ragged right border on THAT row.** **Content outranks
+> alignment, always.** Every *other* row — every line you compose yourself — is exactly 100 columns.
+
+#### The `Card` cell — always identified, never free text
+
+- **The card's `simple_id`** (e.g. `VIBE-17`) when the workspace **has** a linked card. Short ASCII, well
+  inside 9 columns.
+- **When the workspace has NO linked card, the `Card` cell is exactly `—`** — **one em dash, display width
+  1**, padded to 9. This is reachable in practice: `auto-compact` walks **every** non-archived workspace, so an
+  **R4** row can belong to a card-less workspace.
+  **NEVER a workspace name, NEVER a UUID, NEVER free text.** Those are **unbounded** — they would blow the
+  fixed 9-column width and drag arbitrary Unicode into a structured cell, which is exactly what this file's
+  glyph rule and its constrained-text discipline exist to prevent.
+- **The row is still NEVER anonymous:** the **`Lane` cell always carries that workspace's lane label** (*The
+  sweeper state file* → *Lane labels*). **The lane letter identifies the workspace.**
+- **The 9-column width guarantee therefore holds in BOTH cases** — a `simple_id` is short ASCII, and `—` is
+  width 1.
+
+#### Geometry
+
+**The three rule lines are LITERAL CONSTANTS. COPY THEM. Never count a dash:**
+
+```
+┌────────┬───────────┬─────────────────────────────────────────────────────────────────────────────┐
+├────────┼───────────┼─────────────────────────────────────────────────────────────────────────────┤
+└────────┴───────────┴─────────────────────────────────────────────────────────────────────────────┘
+```
+
+**Cell padding — the only arithmetic you do:**
+
+- Content is **left-aligned** in data rows, **centred** in the header row.
+- Pad **right** with spaces to exactly the content width.
+- **DISPLAY WIDTH = (number of characters) + (1 extra for each `✅`).** `✅` (U+2705) is East-Asian **Wide** and
+  occupies **2 terminal columns**, not 1. So `spec ✅ (554 lines)` is 18 characters but **19 columns**, and its
+  cell takes **56** trailing spaces, not 57. **Pad to the DISPLAY width, never to the character count.**
+- **Sanctioned glyphs in a cell: ASCII, plus `✅` (width 2) and `—` (width 1). No other emoji, no CJK, no
+  combining marks.** The lane nickname is **filtered to `[A-Z0-9]`** and the card-less `Card` cell is **exactly
+  `—`**, precisely so neither can ever violate this. **The RAW park summary (R3) is the one exemption** — see
+  above.
+- **Wrap** the Stage cell at 75 display columns onto continuation lines whose `Lane` and `Card` cells are
+  **blank** (6 and 9 spaces).
+- A **divider** line goes **between** rows.
+
+**Stage narrative length.** You **author** the R1/R2/R4/R5 narratives, so **compose them to fit ≤3 wrapped
+lines** (≈220 chars). The **RAW park summary (R3) is exempt**. **NEVER drop, truncate, or re-word a report line
+to make it fit.**
+
+```
+┌────────┬───────────┬─────────────────────────────────────────────────────────────────────────────┐
+│  Lane  │   Card    │                                    Stage                                    │
+├────────┼───────────┼─────────────────────────────────────────────────────────────────────────────┤
+│ VIBE A │ VIBE-2    │ Codex found a real schema/behavior mismatch — card-adjacent bug, being      │
+│        │           │ folded in.                                                                  │
+├────────┼───────────┼─────────────────────────────────────────────────────────────────────────────┤
+│ VIBE B │ VIBE-50   │ spec ✅ (554 lines)                                                         │
+└────────┴───────────┴─────────────────────────────────────────────────────────────────────────────┘
+```
+
+*(The `Lane` cell is `<NICK> <LETTER>`. A card-less workspace renders the same way but with `—` in `Card` — see
+*The `Card` cell*. Note the `✅` row: 18 characters, 19 columns.)*
+
+**Two tiers — alignment is COSMETIC, content is LOAD-BEARING:**
+
+- **Tier 1 (default):** the box table above.
+- **Tier 2 (fallback):** if **you** cannot produce a well-formed box for any reason, emit **compact single
+  lines** instead — no box, no padding, no fence (the `Card` cell rule still applies — a card-less row shows
+  `—`):
+  ```
+  Lane | Card | Stage
+  VIBE A | VIBE-2 | Codex found a real schema/behavior mismatch — card-adjacent bug, being folded in.
+  VIBE B | VIBE-50 | spec ✅ (554 lines)
+  ```
+  **Tier 2 is YOURS alone** — a choice *you* make while composing. **The loop manager never converts a Tier-1
+  table into Tier 2**: it relays whatever you emit, verbatim (*Telegram*, below).
+- **NEVER Tier 0. NEVER drop, truncate, or re-word a report line — and NEVER omit or move the `CADENCE:` line —
+  in order to make a table align.** Content and the `CADENCE:` line **outrank alignment, always.**
+
+### Telegram — you emit NO fence, and neither does anyone else
+
+**Emit no code fence around the table, ever.** Your report is plain text: a bare box table (already monospace in
+the tmux console) + plain lines + `CADENCE:`.
+
+**Why no fence anywhere in the pipeline:** `channel_send`'s `format` **defaults to `'text'`**, which passes **no
+`parse_mode`** — so a fence would arrive as **three literal backtick characters**. And the loop manager
+**cannot** safely switch to a rich-text mode instead: the Telegram transport **re-chunks long messages at a
+limit it does not expose**, so a code block can be **split across chunks**, leaving every fragment unparseable
+and **dropping the entire report with no error anywhere**. Emitting no fence **eliminates that MarkdownV2
+parse-failure loss mode** outright.
+
+**What is NOT fixed — state it plainly, and do not overclaim.** **Telegram delivery and chunking remain
+best-effort and unobservable** from the orchestrator: the listener still chunks at a configured limit and stops
+on a failed chunk, and the send is **unacknowledged**. **Plain text is strictly SAFER, not SAFE.** **The console relay is the source of truth.**
+
+**Cosmetic cost:** on a mobile client with a proportional font the box table may render **ragged**. That is
+**accepted** — it is exactly aligned in the tmux console, the operator's primary surface.
+
+Your `telegram-fanout` per-line narration is **unchanged**.
+
+### The `CADENCE:` line — HARD CONTRACT
 
 Then, **always**, as the report's **last non-empty line, alone, case-sensitive, no bullet, no trailing
-punctuation, no markdown emphasis, not inside a code fence**:
+punctuation, no markdown emphasis, NOT inside a code fence, and NEVER inside the table**:
 
 ```
 CADENCE: unchanged
 CADENCE: re-arm <interval>
 ```
 
-matching exactly `^CADENCE: (unchanged|re-arm (([1-9]|[1-5][0-9])m|([1-9]|1[0-9]|2[0-3])h))$`. Emit it on every
-tick, including the backend-down one, where it is exactly `CADENCE: unchanged`. The loop manager relays your
-report **verbatim** — it is the only thing that enters its context, so it must be sufficient on its own.
+matching exactly `^CADENCE: (unchanged|re-arm (([1-9]|[1-5][0-9])m|([1-9]|1[0-9]|2[0-3])h))$`. Emit it on
+**every** tick, including the backend-down one, where it is exactly `CADENCE: unchanged`.
+
+**The failure mode, named explicitly:** if you put `CADENCE:` **inside** the table (or inside a fence), the
+report's last non-empty line becomes a **box character** or a fence marker, the loop manager's parse **fails**,
+and it applies its *"absent or unparseable ⇒ treat as `unchanged`, re-arm nothing"* rule ⇒ **the loop silently
+stops adapting its cadence, forever.**
+
+**Safe by construction:** a `CADENCE:`-looking string *inside* a cell is prefixed by `│ ` and therefore cannot
+match `^CADENCE: `. The only real hazard is **placement** — which is why the report order above is pinned, and
+why the table always comes **first** and `CADENCE:` **last**.
+
+The loop manager relays your report **verbatim** — it is the only thing that enters its context, so it must be
+sufficient on its own.

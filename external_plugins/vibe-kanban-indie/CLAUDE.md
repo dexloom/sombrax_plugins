@@ -201,8 +201,8 @@ AWAITING OPERATOR APPROVAL
   **orchestrator loop manager**, which owns the timer and the relay, spawns one `sweeper`
   per tick, and routes card-creation to `intake` and a direct "answer that questionnaire"
   request to `decider` — it never reads a `final_message`, so it never matches the marker
-  itself. Owns the unified `orchestrator-state.json` (its four sections: `cadence`,
-  `sessions`, `parks`, `cards` — see *The sweeper state file* in `agents/sweeper.md`).
+  itself. Owns the unified `orchestrator-state.json` (its five sections: `cadence`,
+  `sessions`, `parks`, `cards`, `lanes` — see *The sweeper state file* in `agents/sweeper.md`).
 - `scripts/orchestrator-delta.sh` — the delta-polling gate; second consumer of the marker
   (derives `is_parked` from the same literal, and hashes `final_message` into its
   fingerprint so a park transition is never invisible to it).

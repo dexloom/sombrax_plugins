@@ -70,7 +70,20 @@ doing anything else.
 
    If the bare name `sweeper` fails to resolve, use `vibe-kanban-indie:sweeper` and say so.
 2. **Relay** the sweeper's report. **Console always**; and, under `telegram-fanout`, `channel_send` to the **`Orchestrate`** topic — `to` is numeric only, so `Read` `~/.claude/channels/telegram/topic-names.json` to resolve it first; if it is not in the registry, send to General and say so. **Add nothing of your own but a failure note** — never re-run, re-check, summarize away, or contradict a sweep you did not run.
-3. **Re-arm ONLY if asked** — parse the report's **last non-empty line**.
+   **The Telegram mirror is plain text, and it is fire-and-forget.** Relay the sweeper's report to Telegram
+   **verbatim, exactly as you relay it to the console** — **leave `format` at its default (`'text'`)**, and
+   **transform nothing** (you hold the report only as rendered text; you have no rows, no cards, and no board
+   tools with which to re-render it). **Do NOT wrap it in a code fence and do NOT switch to a rich-text mode**:
+   the transport **re-chunks long messages at a limit it does not expose to you**, so a code block can be split
+   across chunks, leaving every fragment unparseable and **dropping the whole report with no error anywhere**.
+   Relaying verbatim as plain text **eliminates that MarkdownV2 parse-failure loss mode**.
+   **It does NOT make delivery reliable, and you must not claim that it does.** **Telegram delivery and chunking
+   remain best-effort and unobservable** from here: the listener chunks at a configured limit and stops on a
+   failed chunk, and `channel_send` hands the message off and returns — **Telegram's own response never comes
+   back to you**, so a delivery failure is **invisible**. You therefore **cannot detect it and must not claim to retry it.** **The console relay is the source of truth.**
+3. **Re-arm ONLY if asked** — parse the report's **last non-empty line**, which must match exactly:
+   `^CADENCE: (unchanged|re-arm (([1-9]|[1-5][0-9])m|([1-9]|1[0-9]|2[0-3])h))$`
+   **You parse the SWEEPER'S report — the text you RECEIVED — never any copy you sent elsewhere.**
    - `CADENCE: unchanged` ⇒ **do nothing**.
    - `CADENCE: re-arm <interval>` ⇒ **canonicalize `<interval>` with the same function the sweeper runs** (*Interval canonicalization*). A **rejected** value ⇒ **re-arm nothing**, report it loudly, and **leave the loop at its current interval**. Otherwise run *Changing the loop interval*, below.
    - **Absent or unparseable** ⇒ treat it as `unchanged`, **re-arm nothing**, and append `(no CADENCE line from sweeper — cadence left unchanged)` to the relayed report. **Never infer a re-arm.**
