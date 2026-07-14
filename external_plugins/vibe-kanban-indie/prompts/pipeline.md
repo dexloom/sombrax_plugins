@@ -4,8 +4,9 @@ coding agent. It tells the agent to work its card's `## Pipeline` to completion 
 its own, DELEGATING each specialized stage to a subagent/tool rather than doing it
 itself: product writes the spec, planner writes the plan, codex does the reviews.
 The agent's own job is to sequence the pipeline and write the code in the develop
-stage. Fill {{TASK}} with the card's title + id and {{BASE_BRANCH}} with the
-review/merge base (default `main`). The card's `## Pipeline` block is composed by
+stage. Fill {{TASK}} with the card's title + description (it carries the `## Pipeline`
+block) and {{BASE_BRANCH}} with the review/merge base (default `main`). The card's
+`## Pipeline` block is composed by
 vibe-kanban (from the pipeline FILE the operator picked) as a **numbered, ordered**
 stage list, so this prompt doesn't restate which stages apply — the agent runs exactly
 what's listed, in the given order.
@@ -38,10 +39,36 @@ directory is your repo worktree, and the workspace root is its parent (it holds
 that absolute path once (the parent of your repo root) and **pass it to the spec/plan
 subagents** so they write there, not inside the repo.
 
-- **spec** (if listed) — **spawn the `product` subagent** (via the Task/Agent tool),
-  telling it the card and the **workspace root path**, to write
-  `<workspace_root>/SPEC.md`. Don't write the spec yourself — wait for it, then build
-  on it.
+- **spec** (if listed) — **first, check whether the card already carries the spec.**
+  **The test — all three, or it fails:** the description **already contains the full spec**
+  only when `### Outcome`, `### Scope`, and `### Testing & acceptance criteria` each occur
+  **at the start of a line** (a *prefix* match — the real heading is `### Outcome — what's
+  different when this is done`), and **not** inside a fenced code block or a block quote.
+  **All three are required.** If any one is missing → take the **Otherwise** path below.
+  **When all three are there — don't spawn anything: copy it through.** Write
+  `<workspace_root>/SPEC.md` as **exactly** this: the line
+  `## Task: <the card's title, verbatim>`, then a **blank line**, then the
+  **card description, verbatim** — the description does *not* carry the title (it begins at
+  `**In one sentence:**`), which is why you reconstruct that first line from the card's
+  `title` field. **Strip the `## Pipeline` block** from the body, **anchored to standalone
+  marker lines**: take the LAST line whose entire content is exactly
+  `<!-- vk:pipeline:start -->`, and the first line after it whose entire content is exactly
+  `<!-- vk:pipeline:end -->`, and delete everything between them, **including both marker
+  lines**. A marker mentioned inside a prose line **is not a delimiter** — leave that line
+  alone (a spec may legitimately *quote* the markers while describing them). Then
+  **collapse the blank run the strip leaves behind** so the file ends with a single trailing
+  newline. Also sweep out any stray executor-pin bullet
+  (`- Run this card with the … execution agent: pass …`) left *outside* the block — normally
+  it sits *inside* it and goes with it, so this is a no-op safety net for hand-edited cards.
+  Report one line: `spec adopted from card description`. The description is already in your
+  `## Task` above, so no `get_issue` is needed (if your kickoff carried only the title/id,
+  `get_issue` the card to fetch it). **Adopt it as-is** — the card's **Decisions made** are
+  the operator's settled choices; don't re-open them, and don't re-verify here (the planner
+  grounds it next, and codex reviews the plan).
+  **Otherwise** — a one-liner card, or only a partial/mini spec —
+  **spawn the `product` subagent** (via the Task/Agent tool), telling it the card and the
+  **workspace root path**, to write `<workspace_root>/SPEC.md`. Don't write the spec
+  yourself — wait for it, then build on it.
 - **recall-knowledge** (if listed) — **before planning, recall what this project
   already knows.** Invoke the `vibe-kanban-indie:knowledge-recall` skill (via the
   Skill tool), passing the **workspace root path**; it greps the project knowledge

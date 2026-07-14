@@ -133,6 +133,11 @@ Your spec can land in one of two shapes, depending on what you're asked to do:
   given a path, write it one level above your repo root (its parent). Here the card
   exists, so you don't `create_issue`; the deliverable is the `SPEC.md` file. Report
   that it's written.
+  (A caller may legitimately **skip spawning you** for such a card: when the description
+  already *is* the full spec, the coding agent copies it straight to `SPEC.md`. If you *are*
+  spawned on a card that already carries a full spec, **adopt it** — carry its sections
+  through, ground them against the repo, and correct only what the code actually
+  contradicts. Never silently re-decide what its **Decisions made** already settled.)
 
 Either way you produce a spec and never write code, a plan, or a diff.
 
