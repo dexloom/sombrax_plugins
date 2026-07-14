@@ -10,8 +10,9 @@ description: >-
   project's checks green and a report of what changed. Use this agent WHENEVER
   a specced + planned card needs its code written — "implement this card",
   "execute the plan", "do the coding stage", "write the code for this" — and
-  as the coding subagent an Opus main loop spawns in the Async pipeline's
-  "Code via Sonnet subagent" stage. Do NOT use it to write specs (`product`)
+  as the coding subagent an Opus main loop spawns in an Async pipeline's code
+  stage: "Code via Sonnet subagent" on Async Sonnet and Async Opus, "Code via
+  Opus subagent" on Async Fable. Do NOT use it to write specs (`product`)
   or plans (`planner`), to review code, or to drive the board / merge / open
   PRs; it stops at implemented, verified code in the worktree.
 model: sonnet

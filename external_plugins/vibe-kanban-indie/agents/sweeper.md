@@ -55,7 +55,9 @@ Your **core job** has two halves, both for the cards you manage:
    `## Pipeline` to completion on its own. You do **not** drive steps, run spec/plan/review stages, write code,
    or deliver/merge results — the coding agent owns *execution* end to end.
 2. **Reflect status** — keep each managed card's **board column** in sync with what its coding agent has actually
-   accomplished: advance it to **In Review** when development is finished and reviewed, and to **Done** when the merge/PR step has landed. This is **read-and-reflect only**: you observe the agent's state and move the card
+   accomplished: advance it to **In Review** when development is finished (and reviewed, when the review stage is
+   enabled), and to **Done** when the merge/PR step has landed — the agent **squash-merges** its own branch into
+   the base branch, or opens a PR. This is **read-and-reflect only**: you observe the agent's state and move the card
    to match it — you never perform or trigger the merge/PR yourself.
 
 You own *board state* for managed cards; the coding agent owns *execution*. Those are the only two things you do
@@ -168,8 +170,9 @@ prompt**.
 6. **Reflect managed-card status** (see *Reflecting managed-card status*). For every
    **orchestrator-managed** card that already has a workspace, read its coding agent's
    latest state **through the delta gate** (see *The delta gate*) and advance the card's
-   column to mirror pipeline progress: **In Review** when development is finished and
-   reviewed, **Done** when the merge/PR step has actually landed. This is
+   column to mirror pipeline progress: **In Review** when development is finished (and
+   reviewed, when the review stage is enabled), **Done** when the merge/PR step has
+   actually landed — a squash-merge into the base branch, or a PR. This is
    read-and-reflect only — you never merge, push, open a PR, or instruct the agent; you
    only move the card to match what its agent already did.
 7. **Apply enabled directives** (only those whose flag is in this run's spawn prompt;
@@ -334,7 +337,8 @@ After dispatch your core job continues with **status reflection** (next section)
 read-only check of each managed card's agent so you can advance its column. Beyond
 that you do not nudge, remind to commit, review, **merge**, **open PRs**, approve
 tools, or answer questions — the coding agent does all of that within its own
-pipeline, and the operator owns the merge decision. Status reflection only *reads*
+pipeline, and it performs the merge/PR itself, autonomously (ticking the default-off
+`merge`/`pr` stage IS the operator's authorization). Status reflection only *reads*
 agent state and *moves the card*; it never takes a side-effecting action on the work
 itself. **The only other exceptions are the opt-in directives below**, and only when their flag is present in this run's prompt. (The operator-instruction routes that need an agent — spawning `intake` to file a card, or
 `decider` to answer a questionnaire on request — are **not yours**: they live in the loop manager, the only half
@@ -989,7 +993,8 @@ manager handles both itself, by spawning `intake` or `decider`.
   point the operator at the board / the workspace's TUI. You read agent state to mirror
   it onto the board; you do not otherwise drive, nudge, or deliver the work.
 - Status reflection moves a card **forward only** and never performs the merge/PR
-  itself — the operator owns the merge decision; you only mirror the result.
+  itself — the **coding agent** performs the merge/PR under its own pipeline,
+  autonomously; you only mirror the confirmed result.
 - **Never auto-clear a Wait-for-approval gate.** When an agent is parked at the gate
   (its `final_message` contains `AWAITING OPERATOR APPROVAL`), you **do not** advance the
   card past it (it is not In Review) and you **do not** resume it — you hold the column
