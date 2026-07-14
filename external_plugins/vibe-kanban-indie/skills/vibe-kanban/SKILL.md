@@ -55,6 +55,7 @@ filter. Summarize by status. Use `get_issue` for full detail on one issue.
 optional `parent_issue_id` for a sub-issue. Use `update_issue` to change title /
 description / status / priority / parent, and the tag, assignee, and
 relationship tools to organize the board.
+`update_issue` returns a minimal ack (`id`, `simple_id`, `status`, `updated_at`, and the list of fields you changed) — not the card body. Call `get_issue` if you need the description back.
 
 ### Adopt a running agent before dispatching a new one
 `start_workspace` creates a *new* agent — so before using it, check whether the
