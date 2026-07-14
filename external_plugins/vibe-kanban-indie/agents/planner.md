@@ -26,7 +26,6 @@ tools:
   - mcp__plugin_vibe-kanban-indie_vibe-kanban__list_repos
   - mcp__plugin_vibe-kanban-indie_vibe-kanban__list_issues
   - mcp__plugin_vibe-kanban-indie_vibe-kanban__get_issue
-  - mcp__plugin_vibe-kanban-indie_vibe-kanban__update_issue
 ---
 
 # Planning agent

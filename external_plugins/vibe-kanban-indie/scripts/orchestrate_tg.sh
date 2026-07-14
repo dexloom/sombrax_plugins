@@ -59,11 +59,22 @@
 #   scripts/orchestrate_tg.sh            # loop every 5m, all topics, operator=Orchestrate
 #   scripts/orchestrate_tg.sh 10m        # custom interval
 #   TELEGRAM_TOPIC="vk/0123-x" scripts/orchestrate_tg.sh   # narrow subscription
-#   ORCH_AUTO_COMPACT=1 scripts/orchestrate_tg.sh          # /compact headed agents
-#                                                          # over 300k tokens
+#
+# Opt-in directives (default-off; injected into the spawn prompt — see
+# directives-block.sh), canonical order:
+#   ORCH_AUTO_UNBLOCK=1 scripts/orchestrate_tg.sh   # auto-unblock: approve routine,
+#                                                   # plan-sanctioned tool permissions
+#   ORCH_AUTO_ANSWER=1 scripts/orchestrate_tg.sh    # auto-answer-questions: answer a
+#                                                   # stale question prompt
+#   ORCH_TELEGRAM_FANOUT=1 scripts/orchestrate_tg.sh   # telegram-fanout: proactive
+#                                                      # operator-topic messages + per-
+#                                                      # branch agent chat (this is the
+#                                                      # correct launcher for it)
+#   ORCH_AUTO_COMPACT=1 scripts/orchestrate_tg.sh   # auto-compact: /compact headed
+#                                                   # agents over 300k tokens
 #   ORCH_AUTO_COMPACT=1 ORCH_COMPACT_THRESHOLD=250000 scripts/orchestrate_tg.sh
-#   ORCH_NUDGE_STUCK=1 scripts/orchestrate_tg.sh           # "Why are you stuck" to a
-#                                                          # managed agent stuck 2 ticks
+#   ORCH_NUDGE_STUCK=1 scripts/orchestrate_tg.sh    # nudge-stuck: "Why are you stuck" to
+#                                                   # a managed agent stuck 2 ticks
 #
 # Spawn = connect: this launches `claude` inside the stable, SHARED tmux session
 # `vk-orchestrator` (override with ORCH_TMUX_SESSION) — the SAME name orchestrator.sh

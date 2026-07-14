@@ -40,13 +40,20 @@
 # (the launcher fails clearly if it is missing). See orchestrator-attach.sh.
 #
 # Opt-in directives (default-off; injected into the spawn prompt — see
-# directives-block.sh):
-#   ORCH_AUTO_COMPACT=1 scripts/orchestrator.sh                     # /compact headed
-#                                                                    # agents over 300k
+# directives-block.sh), canonical order:
+#   ORCH_AUTO_UNBLOCK=1 scripts/orchestrator.sh   # auto-unblock: approve routine,
+#                                                 # plan-sanctioned tool permissions
+#   ORCH_AUTO_ANSWER=1 scripts/orchestrator.sh    # auto-answer-questions: answer a
+#                                                 # stale question prompt
+#   ORCH_TELEGRAM_FANOUT=1 scripts/orchestrate_tg.sh   # telegram-fanout: accepted by
+#                                                      # either launcher, but only
+#                                                      # orchestrate_tg.sh loads the
+#                                                      # channel — use that one
+#   ORCH_AUTO_COMPACT=1 scripts/orchestrator.sh    # auto-compact: /compact headed
+#                                                  # agents over 300k
 #   ORCH_AUTO_COMPACT=1 ORCH_COMPACT_THRESHOLD=250000 scripts/orchestrator.sh
-#   ORCH_NUDGE_STUCK=1 scripts/orchestrator.sh                      # "Why are you stuck"
-#                                                                    # to a managed agent
-#                                                                    # stuck for 2 ticks
+#   ORCH_NUDGE_STUCK=1 scripts/orchestrator.sh     # nudge-stuck: "Why are you stuck" to
+#                                                  # a managed agent stuck for 2 ticks
 #
 # To stop the loop: type "stop the loop" in the session, or Ctrl-C / exit it.
 #

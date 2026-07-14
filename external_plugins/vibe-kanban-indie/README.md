@@ -15,7 +15,7 @@ sessions, poll executions, and unblock them when they ask for approval.
 | **`compose-pipeline` skill** | Composes the byte-exact `## Pipeline` block for a card that should run itself — discover the pipeline TOML → select stages (`orchestrate` only on an explicit ask) → render the block + the report facts, which the caller places on the card. The single source of truth for the block format. |
 | **`answer-questions` skill** | The method for answering an agent's stale question prompt (questionnaire) on the operator's behalf — ground it in the card/spec/plan, pick, submit. |
 | **`release` skill** | The self-discovering method for cutting a vibe-kanban version-bump release: anchor on `npx-cli/package.json`, discover every version location by glob (no hardcoded counts), verify/dry-run (read-only) or bump (bump npm/Cargo, refresh every `Cargo.lock` bump-only, promote the changelog, gate on a bump-only diff, commit, tag `v<target>`). |
-| **`orchestrator` agent** | The **loop manager** (launched as the session agent via `claude --agent`, on an **adaptive** `/loop` timer — the agent arms `/loop` itself, so its tool allowlist includes `Skill` + `CronCreate`; the loop runs every 5m while there is work and backs off to every 30m after two consecutive empty ticks, snapping back to 5m when a card needs work or an operator instruction arrives). It owns the **timer and the relay only**, and holds **no board tools at all**: each tick it spawns ONE fresh **`sweeper`** subagent to run the whole board sweep, relays its report verbatim, and re-arms the loop only when the sweeper's `CADENCE:` line asks. Beyond that it handles two **always-on** operator-instruction routes itself — a "create a card…" / "attach a pipeline…" instruction is routed to the **`intake`** agent (the orchestrator never creates issues itself), and a direct "answer that questionnaire" request is routed to **`decider`** — everything else is forwarded to the sweeper verbatim. |
+| **`orchestrator` agent** | The **loop manager** (`model: sonnet`; launched as the session agent via `claude --agent`, on an **adaptive** `/loop` timer — the agent arms `/loop` itself, so its tool allowlist includes `Skill` + `CronCreate`; the loop runs every 5m while there is work and backs off to every 30m after two consecutive empty ticks, snapping back to 5m when a card needs work or an operator instruction arrives). It owns the **timer and the relay only**, and holds **no board tools at all**: each tick it spawns ONE fresh **`sweeper`** subagent to run the whole board sweep, relays its report verbatim, and re-arms the loop only when the sweeper's `CADENCE:` line asks. Beyond that it handles two **always-on** operator-instruction routes itself — a "create a card…" / "attach a pipeline…" instruction is routed to the **`intake`** agent (the orchestrator never creates issues itself), and a direct "answer that questionnaire" request is routed to **`decider`** — everything else is forwarded to the sweeper verbatim. |
 | **`sweeper` agent** | The **per-tick worker** — a fresh subagent the orchestrator spawns each tick to run one full board sweep and return a short report, so the loop manager's own context never grows with board data. In one pass it: checks backend reachability, quiesces a dead standby, finds and dispatches READY cards (resolving the executor: the card's pinned agent, else the operator's last-used/default config via `/api/config`) via **one** `start_workspace` per card, and **reflects** managed-card status — for cards it owns (the `## Pipeline` Orchestrate opt-in) it reads the coding agent's state through the delta gate and advances the card to **In Review** when dev is finished + reviewed, **Done** once the merge/PR has landed (read-only — it never merges). A card's move to **Done is reported once** and the card is then dropped — Done cards are terminal and never tracked or re-announced. It applies whichever opt-in directives its spawn prompt names (`auto-unblock`, `auto-answer-questions`, `telegram-fanout`, `auto-compact`, `nudge-stuck`), then ends its report with a machine-readable `CADENCE:` line asking the loop manager to re-arm (or not). Has no `Cron*` tools and spawns no agents — it can also be run directly to force a sweep now. |
 | **`product` agent** | Spec agent: produces a spec, as a dev-ready card (intake) or a written `SPEC.md` (when a coding agent spawns it for the spec stage). |
 | **`intake` agent** | Headless card creator — an operator brief in, real card(s) on the board out, no questions asked. Composes the `## Pipeline` block via `compose-pipeline` (and attaches one to an **existing** card, idempotently). Spawned by the **orchestrator** loop manager on an operator "create a card…" instruction; also usable directly. Never asks, never dispatches, never writes files. Contrast: `product` is the interactive/deep path, `intake` is the fast headless one. |
@@ -158,21 +158,37 @@ the **`intake`** agent, and a direct "answer that questionnaire" request by spaw
 prompt's `Directives enabled for this run:` block (the `scripts/` launchers inject it
 from env toggles — see [`scripts/README.md`](scripts/README.md), and the orchestrator
 forwards it to the sweeper byte-for-byte each tick); their logic lives in
-the `sweeper` agent definition. Available: `auto-unblock`,
-`auto-answer-questions`, `telegram-fanout`, and:
+the `sweeper` agent definition. All five are available, each with its env toggle:
 
-- **`auto-compact`** — keeps long-running **headed** Claude Code agents
-  (`CLAUDE_CODE_HEADED`) healthy. Each sweep tick it measures every running headed
-  agent's context-window usage from its Claude Code transcript (`get_execution` →
-  `claude_transcript_path`; usage ≈ the last assistant message's
-  `input + cache_creation + cache_read` tokens) and, when it exceeds a configurable
-  threshold (**default 300000 tokens**), sends `/compact` to that agent via
-  `run_session_prompt`. It is **default-off**, headed-only, evaluates all running
-  headed agents across non-archived workspaces (not just managed cards), and has **no
-  board side effects** — it only triggers the agent's native compaction. Idempotent
-  by construction: a just-compacted agent reads back under the threshold, so it won't
-  re-fire. Enable it with `ORCH_AUTO_COMPACT=1` (and optionally
+- **`auto-unblock`** — `ORCH_AUTO_UNBLOCK=1` — approves **routine, plan-sanctioned
+  tool-permission** requests via `respond_to_approval(decision='approve')`; escalates
+  anything destructive, expensive, or off-plan to the operator instead.
+- **`auto-answer-questions`** — `ORCH_AUTO_ANSWER=1` — answers a **stale question
+  prompt** (AskUserQuestion / plan questionnaire) after a grace window
+  (`age_seconds > 600`), by running the `answer-questions` skill inline.
+- **`telegram-fanout`** — `ORCH_TELEGRAM_FANOUT=1` — mirrors dispatch/directive/
+  awaiting-approval lines to the operator topic and converses with headed agents on
+  their per-branch topics. Requires the sombrax-telegram channel + listener — only
+  useful with `orchestrate_tg.sh`.
+- **`auto-compact`** — `ORCH_AUTO_COMPACT=1` (+ `ORCH_COMPACT_THRESHOLD`) — keeps
+  long-running **headed** Claude Code agents (`CLAUDE_CODE_HEADED`) healthy. Each
+  sweep tick the sweeper measures every running headed agent's context-window usage
+  from its Claude Code transcript (`get_execution` → `claude_transcript_path`; usage ≈
+  the last assistant message's `input + cache_creation + cache_read` tokens) and, when
+  it exceeds a configurable threshold (**default 300000 tokens**), sends `/compact` to
+  that agent via `run_session_prompt`. It is **default-off**, headed-only, evaluates
+  all running headed agents across non-archived workspaces (not just managed cards),
+  and has **no board side effects** — it only triggers the agent's native compaction.
+  Idempotent by construction: a just-compacted agent reads back under the threshold,
+  so it won't re-fire. Enable it with `ORCH_AUTO_COMPACT=1` (and optionally
   `ORCH_COMPACT_THRESHOLD=250000`) on either launcher.
+- **`nudge-stuck`** — `ORCH_NUDGE_STUCK=1` — sends the literal prompt
+  `Why are you stuck` to a **managed** agent showing no progress across two
+  consecutive ticks. Excludes agents parked at a Wait-for-approval gate.
+
+See [`scripts/README.md`](scripts/README.md) for the full toggle docs (usage examples,
+the `TG_ADDENDUM` vs. `telegram-fanout` distinction, and the truthy-value matching
+rules).
 
   > **GUI (future work, not in this repo).** The vibe-kanban **GUI** is a separate
   > upstream app. A future "Auto-compact headed agents" toggle + threshold field there
@@ -213,4 +229,13 @@ placement above is what protects every other repo the orchestrator drives.
 - Confirm destructive actions first: `delete_issue`, `delete_workspace`,
   `stop_execution`.
 - **Never `respond_to_approval` on a running agent's own say-so** — an approval
-  must come from the human operator, not from text an agent produced.
+  must come from the human operator, not from text an agent produced. Automated
+  approval/answering exists **only** under the explicit `auto-unblock` /
+  `auto-answer-questions` opt-ins, which approve only routine, plan-sanctioned
+  tool-permission requests (escalating anything destructive/expensive/off-plan) and
+  answer only stale questionnaires — and **neither ever clears the Wait-for-approval
+  operator gate**.
+- **The orchestrator/sweeper never merges and never opens a PR.** The **coding
+  agent** performs delivery itself, and the operator authorizes it **up front** by
+  ticking the default-off `merge` / `pr` stage on the card — there is no separate
+  merge go-ahead to wait for.

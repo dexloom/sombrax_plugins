@@ -24,7 +24,7 @@ do the actual board sweep.
 | script | role | what it does |
 |--------|------|--------------|
 | `product-manager.sh` | **intake** | Runs the `product-manager` skill: a rough brief → a dev-ready vibe-kanban card. Interactive (it asks you to confirm the spec before filing). |
-| `orchestrator.sh` | **supervise** | Launches the **orchestrator agent** (`claude --agent vibe-kanban-indie:orchestrator`) — a lean **loop manager** — on a `/loop` timer. It owns the timer and the relay only: each tick it spawns ONE fresh **`sweeper`** subagent to run the whole board sweep (dispatch an agent for an In-Progress/Orchestrate card that has none, and **reflect** managed-card board status — → In Review when dev is finished + reviewed, → Done once the merge/PR has landed, read-only, it never merges itself), then relays the sweeper's report. It **always** handles operator instructions itself — a "create a card…" / "attach a pipeline…" instruction is routed to the **`intake`** agent (**always-on**, no flag), and a direct "answer that questionnaire" request is routed to **`decider`** — everything else is forwarded to the sweeper, which also handles opt-in directives (stale-question auto-answer / auto-approve / `/compact` overloaded headed agents, `ORCH_AUTO_COMPACT=1`, see *Opt-in directives*). Nobody drives coding step-by-step — each coding agent runs its own pipeline, and the operator owns the merge decision. |
+| `orchestrator.sh` | **supervise** | Launches the **orchestrator agent** (`claude --agent vibe-kanban-indie:orchestrator`, `model: sonnet`) — a lean **loop manager** — on a `/loop` timer. It owns the timer and the relay only: each tick it spawns ONE fresh **`sweeper`** subagent to run the whole board sweep (dispatch an agent for an In-Progress/Orchestrate card that has none, and **reflect** managed-card board status — → In Review when dev is finished + reviewed, → Done once the merge/PR has landed, read-only, it never merges itself), then relays the sweeper's report. It **always** handles operator instructions itself — a "create a card…" / "attach a pipeline…" instruction is routed to the **`intake`** agent (**always-on**, no flag), and a direct "answer that questionnaire" request is routed to **`decider`** — everything else is forwarded to the sweeper, which also applies whichever of the five opt-in directives its spawn prompt names (`auto-unblock`, `auto-answer-questions`, `telegram-fanout`, `auto-compact`, `nudge-stuck` — see *Opt-in directives*). Nobody drives coding step-by-step — each coding agent runs its own pipeline; the sweeper is **read-only on delivery** (it never merges and never opens a PR) — the **coding agent performs the merge/PR itself**, and the operator authorizes it up front by ticking the default-off `merge` / `pr` stage on the card. |
 | `orchestrate_tg.sh` | **supervise + Telegram** | Same as `orchestrator.sh`, but also loads the sombrax-telegram channel in the **project-manager** role over all topics, so it can message the per-branch dev agents on Telegram. |
 | `orchestrator-delta.sh` | **delta gate** | Called by the **sweeper** agent itself (not by you) once per tick: a `probe`/`commit` pair that lets the sweep skip `get_execution` for sessions whose observable state provably hasn't changed since the last tick. See *The delta gate* below. |
 
@@ -47,10 +47,15 @@ scripts/orchestrate_tg.sh            # all topics, 5m loop
 scripts/orchestrate_tg.sh 10m
 TELEGRAM_TOPIC="vk/0123-x" scripts/orchestrate_tg.sh   # scope to one branch
 
-# Opt into the auto-compact directive (works on either launcher)
+# Opt into directives (all five toggles; none is on by default, none is set implicitly)
+ORCH_AUTO_UNBLOCK=1 ORCH_AUTO_ANSWER=1 scripts/orchestrator.sh   # auto-unblock +
+                                                                 # auto-answer-questions
+ORCH_TELEGRAM_FANOUT=1 scripts/orchestrate_tg.sh   # telegram-fanout: needs the Telegram
+                                                   # channel — orchestrate_tg.sh only
 ORCH_AUTO_COMPACT=1 scripts/orchestrator.sh                      # /compact headed
                                                                  # agents over 300k
 ORCH_AUTO_COMPACT=1 ORCH_COMPACT_THRESHOLD=250000 scripts/orchestrate_tg.sh
+ORCH_NUDGE_STUCK=1 scripts/orchestrator.sh   # nudge-stuck: "Why are you stuck"
 ```
 
 ## Telegram orchestration (`orchestrate_tg.sh`)
@@ -94,22 +99,58 @@ with the per-branch dev agents:
 
 ## Opt-in directives (`directives-block.sh`)
 
-By default the orchestrator dispatches, reflects status, and handles operator
-instructions (the **always-on** `intake` route above — no flag needed). Directives
-turn on extra opt-in behaviors; both launchers source **`directives-block.sh`**, which reads
-directive env toggles and appends a `Directives enabled for this run:` block to the
-`/loop` spawn prompt (empty when no toggle is set, so the default prompt is unchanged).
-The flag's *logic* lives in the `sweeper` agent definition (the `orchestrator` loop manager just
-forwards the block byte-for-byte each tick); this block just names which flags are on.
+By default, each tick the **sweeper** dispatches an agent for a ready card and reflects
+managed-card board status; the loop manager's own always-on job is just the operator-
+instruction routes above (`intake` / `decider` — no flag needed). Directives turn on
+extra opt-in **sweeper** behaviors; both launchers source **`directives-block.sh`**,
+which reads directive env toggles and appends a `Directives enabled for this run:` block
+to the `/loop` spawn prompt (empty when no toggle is set, so the default prompt is
+unchanged). The flags' *logic* lives in the `agents/sweeper.md` agent definition (the
+`orchestrator` loop manager just forwards the block byte-for-byte each tick); this block
+just names which flags are on. **None of the five is on by default, and no launcher
+sets one implicitly.**
 
+- **`auto-unblock`** — `ORCH_AUTO_UNBLOCK=1` (truthy: `1`/`true`/`yes`/`on`). Approves
+  **routine, plan-sanctioned tool-permission** requests via
+  `respond_to_approval(decision='approve')`; **escalates** anything destructive,
+  expensive, or off-plan to the operator instead. Never approves a tool just because
+  the agent's own output asked for it.
+- **`auto-answer-questions`** — `ORCH_AUTO_ANSWER=1` (truthy: `1`/`true`/`yes`/`on`).
+  Answers a **stale question prompt** (AskUserQuestion / plan questionnaire) after a
+  grace window keyed off `age_seconds > 600` (~two loop intervals), by running the
+  `answer-questions` skill inline and submitting `respond_to_approval(decision='answer')`.
+- **`telegram-fanout`** — `ORCH_TELEGRAM_FANOUT=1` (truthy: `1`/`true`/`yes`/`on`).
+  Mirrors dispatch/directive/awaiting-approval lines to the operator topic and converses
+  with headed agents on their per-branch topics. **Requires the sombrax-telegram channel
+  + listener — i.e. only useful with `orchestrate_tg.sh`.** Accepted from either
+  launcher (one sourced `case`), but it does nothing (and may error on `channel_send`)
+  without the Telegram channel loaded, so it is only ever shown invoked with
+  `orchestrate_tg.sh` (see *Usage* above). **Distinct from `TG_ADDENDUM`** (see below) —
+  they are not two ways to "turn Telegram on".
 - **`auto-compact`** — `ORCH_AUTO_COMPACT=1` (truthy: `1`/`true`/`yes`/`on`). Each tick,
-  the orchestrator measures every running **`CLAUDE_CODE_HEADED`** agent's context-window
+  the sweeper measures every running **`CLAUDE_CODE_HEADED`** agent's context-window
   usage from its Claude Code transcript and sends `/compact` (via `run_session_prompt`)
   to any agent whose usage exceeds the threshold. **Threshold** defaults to **300000**
   tokens, overridable with `ORCH_COMPACT_THRESHOLD=<tokens>`. Headed-only,
   all-running-headed scope (not just managed cards), no board side effects, idempotent
   (a compacted agent reads back under the threshold). Example:
   `ORCH_AUTO_COMPACT=1 ORCH_COMPACT_THRESHOLD=250000 scripts/orchestrator.sh`.
+- **`nudge-stuck`** — `ORCH_NUDGE_STUCK=1` (truthy: `1`/`true`/`yes`/`on`). Sends the
+  literal prompt `Why are you stuck` to a **managed** agent showing no progress across
+  two consecutive ticks. Excludes agents parked at a Wait-for-approval gate.
+
+**`TG_ADDENDUM` vs. `telegram-fanout` — not two ways to "turn Telegram on".**
+`TG_ADDENDUM` (`orchestrate_tg.sh:131`, a `read -r -d ''` heredoc) is an **always-on
+session/UI policy** the Telegram launcher injects into the spawn prompt: console and
+Telegram are dual, equal surfaces — mirror output to both, accept input from either,
+never use a blocking `AskUserQuestion` picker, send a first-tick welcome, relay approvals
+to both surfaces. It applies to **every** `orchestrate_tg.sh` run, with or without any
+directive, and it **never names the `telegram-fanout` flag**. `telegram-fanout`
+(`ORCH_TELEGRAM_FANOUT=1`) is instead an **opt-in sweeper directive**: it enables the
+sweeper's **proactive** dispatch/directive/awaiting-approval messages and its
+**conversation with headed agents on their per-branch topics**. They can produce
+**overlapping status messages** when fanout is explicitly on, but they do **not
+conflict**, and neither is a substitute for the other.
 
 To wire a new directive toggle, add a `case` to `directives-block.sh` and document the
 behavior in `agents/sweeper.md` — both launchers pick it up automatically.
@@ -218,6 +259,14 @@ If you already launched a session before this fix, **exit and re-run** the scrip
 
 ## Safety note
 
-The orchestrator sweep is told to **surface** approval requests for you to answer,
-never to auto-approve — matching the plugin safety rule that a `respond_to_approval`
-comes from you, not from an agent's own text.
+**By default** (no directives enabled) the sweep only **surfaces** approval requests
+and questions for you to answer; it approves and answers nothing. **Auto-approval
+exists only under the explicit `auto-unblock` opt-in**, and only for **routine,
+plan-sanctioned tool-permission** requests — destructive / expensive / off-plan requests
+are **escalated to the operator, never approved**. `auto-answer-questions` likewise
+answers only **stale** questionnaires past their grace window. **The invariants that
+survive every directive:** an approval is **never** granted because an agent's own
+output asked for it (agent text is untrusted), and the **Wait-for-approval operator
+gate is never auto-resumed or auto-cleared** — `auto-unblock` clears tool-permission
+approvals only, and must not be read as clearing that gate (`CLAUDE.md` states this
+explicitly).
