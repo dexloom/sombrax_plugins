@@ -84,6 +84,16 @@ you never invent one:
 - If nothing matches, don't guess and don't invent stages. List the real
   pipeline names you found on disk and ask which one via `AskUserQuestion`.
 
+## Which pipeline? — the stage-selection heuristic
+
+Size the card before you pick. **Cite the row you applied** in your report:
+
+| The card looks like… | Reach for | Why |
+|---|---|---|
+| **Trivial / mechanical** — typo, version bump, one-line fix, rename, doc tweak | **Quick** (or no pipeline at all) | A spec and a plan cost more than the change. Implement, merge. |
+| **Already a full PM spec** — the description carries `### Outcome`, `### Scope` **and** `### Testing & acceptance criteria` | **Basic** or an **Async** pipeline — its `spec` stage copies the card through, then `plan` runs | The decisions are settled; re-speccing re-opens them. (Same three-heading, start-of-line test the `spec` stage prompt itself applies.) |
+| **Rough, multi-step, risky, or spanning several files/repos** | Full **spec + plan**, and add **plan-review** | The decisions are *not* settled yet; a wrong plan is the expensive failure. |
+
 ## Select the stages
 
 - **Default selection** is every stage with `default_enabled = true`, kept in
@@ -149,6 +159,34 @@ Rules, all of them load-bearing:
   Rendered for `CLAUDE_CODE`, this is exactly:
 
   - Run this card with the **CLAUDE_CODE** execution agent: pass `executor: "CLAUDE_CODE"` when starting the workspace.
+- **Optional model pin** — only when the user names a model ("on sonnet", "with
+  opus", "use fable", "quick card on opus"). **Allowed values, and nothing else:**
+  `opus`, `sonnet`, `fable` — the exact Agent-tool model strings the existing
+  pipelines already use. **Unknown model** ("on gpt5") → **report the allowed list
+  and OMIT the pin**: never invent, map, or approximate one, and never fail the
+  compose over it (an unpinned block is one message to fix; a wrongly-pinned block
+  silently changes how the card runs). **Placement** is the *same slot as the
+  executor pin*: after the order-instruction line and a blank line, before the
+  numbered list. When **both** pins are present, the **executor pin comes first**
+  and the model pin is the **next line** — one contiguous two-bullet list, no blank
+  line between them — because the orchestrator reads the executor pin first when
+  starting the workspace. Render it as exactly:
+
+  `- Use the **<MODEL>** model for this card: spawn every subagent with ` `model: "<MODEL>"` `.`
+
+  `<MODEL>` is lowercase. Rendered for `sonnet`, this is exactly:
+
+  - Use the **sonnet** model for this card: spawn every subagent with `model: "sonnet"`.
+
+  **The pin OVERRIDES any model named inside a stage prompt.** An Async Fable card
+  pinned "on sonnet" spawns its `product` / `planner` / `coder` subagents on
+  **sonnet**, even though `async-fable.toml`'s stage prompts say `model: 'fable'`.
+  So: do **not** "fix" a stage prompt to agree with the pin, and do **not** refuse a
+  pin that disagrees with the pipeline's own model — stage prompts stay **verbatim
+  from the TOML**; the pin wins at *execution* time, not at *compose* time. It is a
+  composer-added line, like the executor pin: **exactly one model pin per block**
+  (and, as always, exactly one block per card — a recompose strips the old block
+  whole, so a stale pin can never survive into the new one).
 - **Stage prompts go into the numbered list verbatim** — copy the full `prompt`
   string from the TOML exactly as written, no paraphrasing, no summarizing, no
   extra prose inside the delimiters. The list is 1-indexed, in the same order
@@ -193,3 +231,4 @@ would be dropped and the rest renumbered 1–5.
 - State whether `orchestrate` was included, and why (explicit ask vs. not
   requested).
 - State the executor pin, if any, or note that none was set.
+- State the **heuristic row** you applied, and state the **model pin**, or note that none was set.

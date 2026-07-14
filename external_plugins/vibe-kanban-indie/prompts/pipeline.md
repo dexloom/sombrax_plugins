@@ -260,6 +260,13 @@ the exact order given, around the implementation.
 - **You always do:** implement the task, apply review fixes, commit, and report.
 - **You delegate (when the stage is listed):** spec → `product`; plan → `planner`;
   reviews → `codex`.
+- **Model pin (if the card's `## Pipeline` block carries one):** a line
+  `- Use the **<MODEL>** model for this card: …` is a **block-level directive, not a
+  stage**. Pass that `model:` on **every** Agent/subagent spawn — `product`, `planner`,
+  `coder`, and any other — and it **overrides any model named inside a stage prompt**
+  (an Async Fable card pinned on sonnet spawns its subagents with `model: 'sonnet'`,
+  even though the stage prompts say `model: 'fable'`). **Absent a pin, nothing changes:**
+  spawn with whatever model the stage prompt names.
 - **Fallback:** if you **can't** spawn the `product`/`planner` subagents — e.g. you're
   not a Claude Code agent, or have no Task/Agent tool or those subagents aren't
   available — then **write `SPEC.md` / `IMPLEMENTATION_PLAN.md` yourself** (follow the

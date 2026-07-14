@@ -122,6 +122,9 @@ not restate the block format.** You own only:
   second. The card's existing text above the block is preserved unchanged.
 - **Executor pin** only when an execution agent is named in the brief (e.g.
   "with Claude Code", "pin it to Codex").
+- **Model pin** only when a model is named in the brief ("on sonnet", "with opus",
+  "use fable"); `compose-pipeline` validates it — an unknown model comes back as a
+  report, not a guess.
 - **`orchestrate` only on an explicit ask** to execute/auto-drive. Being asked
   to file a card by the orchestrator is **not** such an ask.
 - Never hardcode a stage list — the pipeline TOMLs on disk are the only source
@@ -166,7 +169,7 @@ orchestrator that spawned you) reads:
 - Pipeline attached — its name, the enabled **stages**, any **`heavy = true`**
   stage called out by name, and **`orchestrate` yes/no + why** (explicit ask
   vs. not requested).
-- **Executor pin, or "none".**
+- **Executor pin, or "none"** — and the **model pin, or "none"**.
 - Every default/assumption you took, one line each.
 - Any ambiguity that stopped a create or an override, named plainly.
 

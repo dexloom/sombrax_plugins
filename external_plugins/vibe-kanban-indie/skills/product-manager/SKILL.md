@@ -247,6 +247,10 @@ basic pipeline"). When you see that, invoke the **`compose-pipeline`** skill
 it is the single source of truth for the format, which is why none of it is repeated
 here. You still own the card: place the block it hands back per that skill's
 placement rule, create the card as usual, and fold its report facts into your report.
+The same applies when the user asks for a **Quick** card or names a **model** ("on
+sonnet", "with opus", "use fable"): pass the phrasing straight through to
+`compose-pipeline` — it owns the model pin, its allowed values, and the
+stage-selection heuristic.
 
 ## Examples of the transformation
 
