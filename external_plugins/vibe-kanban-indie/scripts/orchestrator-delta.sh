@@ -68,15 +68,19 @@
 # fact — at worst it produces a wrong SKIP/POLL classification, never a wrong
 # fact on a line the orchestrator trusts.
 #
-# CR-3'S APPLY RULE: `commit` is the LAST operation of a tick. A fingerprint
-# must be committed for a POLLed session ONLY IF that session's decision was
-# actually applied this tick (the card was already in the target column, or
-# `update_issue` returned success) — never for a POLLed session whose
-# `get_execution` or `update_issue` failed or was never attempted. The column is
-# itself part of the fingerprint, so committing a fingerprint for a decision
-# that never landed would make the next tick recompute the SAME fingerprint,
-# SKIP, and strand the card forever. Omitting that session's entry instead makes
-# the next tick read `no-state` for it ⇒ POLL — fail-safe by construction.
+# CR-3'S APPLY RULE: `commit` runs after every `update_issue`, so a fingerprint
+# is never committed for a board decision that did not land. (The sweeper's
+# unified state write now follows `commit` as the tick's last tool call — a
+# pure local file write that takes no board action, so it cannot violate this
+# rule.) A fingerprint must be committed for a POLLed session ONLY IF that
+# session's decision was actually applied this tick (the card was already in
+# the target column, or `update_issue` returned success) — never for a POLLed
+# session whose `get_execution` or `update_issue` failed or was never
+# attempted. The column is itself part of the fingerprint, so committing a
+# fingerprint for a decision that never landed would make the next tick
+# recompute the SAME fingerprint, SKIP, and strand the card forever. Omitting
+# that session's entry instead makes the next tick read `no-state` for it ⇒
+# POLL — fail-safe by construction.
 #
 # State file: ${VIBE_DELTA_STATE:-$HOME/.vibe-kanban/orchestrator-delta.json}
 # Global valve: VIBE_DELTA_FORCE_MANAGED=1 (truthy) ⇒ POLL "forced" for every

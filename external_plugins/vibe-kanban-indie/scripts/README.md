@@ -217,7 +217,7 @@ whose observable state provably hasn't moved.
   `session_id`/`execution_id`/`fingerprint` and ignores everything else) and persists the
   new fingerprints; no stdout.
 - **State file:** `${VIBE_DELTA_STATE:-$HOME/.vibe-kanban/orchestrator-delta.json}` — a
-  sibling of `orchestrator-cadence.json` / `orchestrator-nudge.json`. It caches
+  sibling of `orchestrator-state.json`. It caches
   **fingerprints only**; every fact a `SKIP` line reports is derived fresh, every tick.
 - **`jq` is a hard dependency** — the first plugin script to need it (the others,
   `resolve-backend.sh` / `directives-block.sh`, deliberately stick to `sed`/`grep`).

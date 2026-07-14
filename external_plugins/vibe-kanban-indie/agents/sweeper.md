@@ -70,8 +70,9 @@ Apply a directive **only** when its flag is present in this run's prompt.
 
 **Why a fresh subagent loses nothing.** You are spawned fresh each tick and keep nothing between ticks — and that
 costs you nothing. **Every tick already re-derives its facts from the API**, and all cross-tick state lives **on
-disk**: `orchestrator-delta.json`, `orchestrator-cadence.json`, `orchestrator-nudge.json`. Read them at the start
-of the tick; write them back before you report. The sweep was already memory-less by design, which is exactly
+disk**: `orchestrator-state.json` (yours — four sections, see *The sweeper state file*) and `orchestrator-delta.json`
+(the delta gate script's own, separate file). Read it once at the start of the tick; write it once, as the tick's
+**last tool call**. The sweep was already memory-less by design, which is exactly
 what makes running it in a disposable subagent safe.
 
 **You have no Cron tools, no `Write` tool, and you spawn NO agents.** You do not own the timer: you end your
@@ -112,8 +113,8 @@ tick.
 
 **Backend-down short-circuit — this overrides every rule below.** If any MCP call returns `Failed to connect to
 VK API`, the backend is down: **abort the tick immediately**. Do **not** classify the tick ACTIVE or EMPTY, do
-**not** run the cadence transitions or the reconciliation, do **not** write `orchestrator-cadence.json` or
-`orchestrator-nudge.json`, and do **not** run the delta gate's `commit`. Report exactly one line — `backend down
+**not** run the cadence transitions or the reconciliation, do **not** write `orchestrator-state.json`,
+and do **not** run the delta gate's `commit`. Report exactly one line — `backend down
 (Failed to connect to VK API) — tick aborted, nothing changed` — and end with `CADENCE: unchanged`. **An outage
 must never move the timer:** two unreachable ticks would otherwise read as "empty", back the loop off to 30m, and
 slow the recovery. A backend-down tick changes **nothing**, on disk or on the board.
@@ -146,11 +147,27 @@ prompt**.
    `## Pipeline` / Orchestrate opt-in lives in the **description**. You therefore
    **cannot judge readiness from the list alone**. Build the candidate set = every card
    that has **no workspace yet** and is **not** in a terminal column (every **Todo** and
-   **In Progress** card without a workspace; you can ignore Done), then **`get_issue`
-   each candidate to read its description** before classifying it. Do **not** conclude a
-   Todo card has no opt-in because the list summary doesn't show one — the summary
-   *never* shows one; you must open the card. (This is the bug that made the orchestrator
-   skip every Todo card: it judged from `list_issues` and never read the description.)
+   **In Progress** card without a workspace; you can ignore Done), then classify each
+   candidate from its description — **cache-gated by `cards{}`** (see *The sweeper state
+   file* → the `cards{}` cache):
+   - **Cache hit** ⇔ `cards[I.id]` exists (and **survived validate-on-read**) **AND**
+     `cards[I.id].updated_at` equals the candidate's **fresh** `list_issues.updated_at`,
+     compared by **exact string equality** (never parsed, never ordered) ⇒ use the cached
+     `class` / `executor_pin`; **do not call `get_issue`**.
+   - **Cache miss** — entry absent, **DROPPED** by validate-on-read, or the stamps differ
+     ⇒ `get_issue(I.id)`, derive `class` and a **validated** `executor_pin` from the fresh
+     description, and store `cards[I.id] = { updated_at: <get_issue's stamp>, class,
+     executor_pin }`.
+
+   **The cache remembers, it does not infer.** Every `class` value in `cards{}`
+   originates from a real `get_issue`, taken at the `updated_at` stored alongside it —
+   the cache does not *infer* classification from the list summary (that would re-open
+   the exact bug below); it *remembers* a classification you genuinely read, and re-reads
+   the moment the summary says the description could have moved.
+
+   Do **not** conclude a Todo card has no opt-in because the list summary doesn't show
+   one — the summary *never* shows one; you must open the card (`get_issue`, or a cache
+   hit that already did). (This is the bug that made the orchestrator skip every Todo card: it judged from `list_issues` and never read the description.)
 
    A candidate card is **ready to dispatch** when, after reading its description, either:
    - its description carries a **`## Pipeline`** block whose stages include the
@@ -164,6 +181,15 @@ prompt**.
    opt-in) — that is the operator's backlog. But you only know a Todo card is "plain"
    *after* you've read its description; **never skip reading it**. Do nothing for cards
    that already have a workspace.
+
+   **A dispatch always `get_issue`s the card, cache hit or not** — see *Starting a coding
+   agent* → `prompt`; the cache never supplies the `{{TASK}}` description.
+
+   **Pruning `cards{}`** is about file size, not correctness: drop entries for issues this
+   tick's listing showed as **Done**; drop entries **not present** in this tick's
+   enumeration **only when the tick actually enumerated the project's non-Done issues in
+   full** — a partial, filtered, paginated-short, or errored listing ⇒ **prune nothing**
+   this tick. A pruned-then-reappearing card is a safe cache miss.
 5. **Dispatch each ready card** (see *Starting a coding agent*). Start exactly one
    agent per ready card. You don't drive a card step-by-step after starting it — but
    you do reflect its board status (next step) once its agent reaches a milestone.
@@ -177,36 +203,56 @@ prompt**.
    only move the card to match what its agent already did.
 7. **Apply enabled directives** (only those whose flag is in this run's spawn prompt;
    see *Directives*). If none are enabled, skip this step — that's the default.
-8. **Report.** One short line per card you dispatched (card id/title + executor), one
-   line per card whose status you advanced (card + old→new column), one line per
-   **managed card newly parked at a Wait-for-approval gate** — or whose park summary
-   changed since you last surfaced it (`<card/workspace>: awaiting operator approval —
-   <summary>`, the summary being the first line after the marker); a park you already
-   surfaced and that hasn't changed stays silent (see the no-noise guard below). Plus
-   one line per directive action taken. Report **nothing** per session the delta gate
-   SKIPped — that silence is the point; when ≥1 session was skipped this tick, fold
-   `(delta: N/M skipped)` into this **same** summary line rather than adding a new one
-   (no per-tick noise). If nothing was ready, nothing advanced, nothing was newly
+8. **Compose the report.** One short line per card you dispatched (card id/title +
+   executor), one line per card whose status you advanced (card + old→new column), one
+   line per **managed card** whose park **surfaces** this tick per the three-clause
+   surface rule over the `parks{}` entry (*Deciding the column* → the park branch: no
+   entry, digest changed, or a **trusted POLL** with an unchanged digest) —
+   `<card/workspace>: awaiting operator approval — <summary>`, where `<summary>` is the
+   **RAW** park summary (never the stored digest); a park that does **not** surface this
+   tick (already recorded in `parks{}` and unchanged) stays silent. Plus one line per
+   directive action taken. Report **nothing** per session the delta gate SKIPped — that
+   silence is the point; when ≥1 session was skipped this tick, fold `(delta: N/M skipped)` into this **same** summary line rather than adding a new one (no per-tick
+   noise); likewise, when ≥1 card was served from `cards{}` this tick, fold `(cards: N/M cached)` into that **same** line — never a new line, never a per-card line. Report any
+   **validate-on-read drop** in one short line (which section/entry was dropped) — it is
+   real news, not noise. If nothing was ready, nothing advanced, nothing was newly
    parked, and no directive fired, say so in one line. Keep it tight — this runs on a
    timer.
-   **This report is your final message** — see *Your report* for its exact shape and its mandatory last line.
+   **Compose these lines now; they are emitted after item 11, as your final message** —
+   see *Your report* for their exact shape and the mandatory last line.
 9. **Adapt the cadence** (see *Adaptive loop cadence and the CADENCE handshake*).
-   Classify this tick as ACTIVE (you dispatched or advanced ≥1 card) or EMPTY,
-   update the on-disk empty-streak state, and **decide** the cadence — but do not re-arm anything:
-   you have **no Cron tools**. You *request* a re-arm by ending your report with the machine-readable
-   `CADENCE:` line: → `re-arm <idle_interval>` after two empty ticks,
-   → `re-arm <active_interval>` as soon as work returns, else `unchanged`.
-   **The loop manager owns the timer and performs the re-arm.**
-   Report the human-readable interval change only when a real mode transition happens.
-   **Skip this step entirely on a backend-down tick.**
-10. **Commit the delta-gate state** (*The delta gate* → *Phase 2 — commit*).
-    It is the genuinely **last tool call** of the tick: after every `update_issue`,
-    after *Adapt the cadence*, and **immediately before you emit your final report**.
-    (Today's rule said "after the report"; a subagent's report *is* its final message, so that ordering is not
-    physically available to you. `commit` remaining the last tool call is what preserves the invariant — and it
-    is strictly safer, because the cron re-arm now happens after the commit, in the loop manager, where it
-    cannot affect a card's column.)
+   Classify this tick as **ACTIVE** — you dispatched ≥1 card, advanced ≥1 managed card's
+   column, ≥1 managed session holds non-empty `pending_approvals`, **or** ≥1 managed
+   card's park **surfaced** this tick (see *Classify each tick* for the authoritative
+   four-clause rule) — or **EMPTY** otherwise, update the in-memory `cadence` section,
+   and **decide** the cadence — but do not re-arm anything: you have **no Cron tools**.
+   You *request* a re-arm by ending your report with the machine-readable `CADENCE:`
+   line: → `re-arm <idle_interval>` after two empty ticks, → `re-arm <active_interval>`
+   as soon as work returns, else `unchanged`. **The loop manager owns the timer and
+   performs the re-arm.** Report the human-readable interval change only when a real mode
+   transition happens. **Skip this step entirely on a backend-down tick.**
+10. **Commit the delta-gate state** (*The delta gate* → *Phase 2 — commit*). Run this
+    **after every `update_issue`** and **after *Adapt the cadence*** — that (and only
+    that) is what CR-3 protects. It is **no longer the last tool call of the tick**: the
+    unified state write (item 11) follows it. That is safe because the state write is a
+    **pure local file write that takes no board action** — it cannot cause a fingerprint
+    to be committed for a board decision that did not land, so sequencing it after
+    `commit` does not touch CR-3 at all.
+    **THE COMMIT-FAILURE RULE: if `commit` fails, item 11 does NOT run** — report the
+    failure loudly and **change nothing on disk** (this is what keeps the two writes
+    jointly all-or-nothing in the safe direction; see *The sweeper state file*).
     **Never commit on a backend-down tick.**
+11. **Write the unified state file — once. This is the LAST TOOL CALL OF THE TICK.**
+    All four sections (`cadence`, `sessions`, `parks`, `cards`), one atomic
+    `printf` + `mv` (see *The sweeper state file* → *Tick lifecycle*). Runs **after**
+    *Adapt the cadence* and **after a SUCCESSFUL `commit`** — **skipped entirely if
+    `commit` failed** (item 10's rule), and **never on a backend-down tick**. If the
+    write itself fails: report loudly, do nothing else — **NO ROLLBACK**; the next tick
+    self-heals on every section. (Accepted residual: a crash **between** this write and
+    the report below still loses that one announcement — bounded, unclosable; see *The
+    sweeper state file*.)
+
+**Then emit the report — your final message** (see *Your report*).
 
 Use `TodoWrite` when several cards are ready so none is dropped.
 
@@ -288,10 +334,15 @@ For each ready card, decide the `executor` in this order:
 1. **Pinned in the card.** If the card's `## Pipeline` block contains an
    execution-agent directive — a line of the form
    **"Run this card with the `AGENT` execution agent: pass `executor: \"AGENT\"`…"** —
-   use that `AGENT` verbatim as the `executor` (it is a `BaseCodingAgent` key such as
-   `CLAUDE_CODE`, `CLAUDE_CODE_HEADED`, `CODEX`, `GEMINI`, `AMP`, `OPENCODE`,
-   `CURSOR_AGENT`, `QWEN_CODE`, `COPILOT`, `DROID`). Read it from the card description
-   via `get_issue`.
+   use that `AGENT` as the `executor`. Read it from **`cards{}.executor_pin` on a cache
+   hit** (*The sweeper state file* → the `cards{}` cache); on a cache miss, the
+   classification `get_issue` you already ran (step 4) supplies it from the fresh
+   description. **Validate before use** — accept it **only** if it matches
+   `^[A-Z][A-Z0-9_]*$` **and** is one of the known `BaseCodingAgent` keys
+   (`CLAUDE_CODE`, `CLAUDE_CODE_HEADED`, `CODEX`, `GEMINI`, `AMP`, `OPENCODE`,
+   `CURSOR_AGENT`, `QWEN_CODE`, `COPILOT`, `DROID`); **otherwise store `null`**, report
+   the unrecognized pin loudly, and fall back to the config's last-used executor (item
+   2 below). **Never store the raw string.**
 2. **Otherwise, the operator's last-used / default agent configuration.** Resolve the
    backend base (`$VIBE_BACKEND_URL`, else the `vibe-kanban.port` file — same lookup
    as `scripts/resolve-backend.sh`) and `Bash`:
@@ -308,7 +359,9 @@ pin or the config's last-used value. If the config has no `executor_profile`
 The MCP `start_workspace` **requires** a non-empty `executor`, so always pass the one
 you resolved above. Build the call:
 
-- **`prompt`** — the self-drive kickoff. Read
+- **`prompt`** — the self-drive kickoff. **A dispatch ALWAYS `get_issue`s the card here
+  — `cards{}` never supplies the `{{TASK}}` description**, cache hit or not (the cache
+  only ever eliminates the *classification* `get_issue`, never this one). Read
   `${CLAUDE_PLUGIN_ROOT}/prompts/pipeline.md`, fill `{{TASK}}` with the card's title +
   description (the description already carries the `## Pipeline` block, so the coding
   agent reads its own stage list from there) and `{{BASE_BRANCH}}` with the base
@@ -365,18 +418,22 @@ A card is **orchestrator-managed** when its description's `## Pipeline` carries 
 **Orchestrate** opt-in (the "Have the orchestrator agent pick this card up and drive
 it to done autonomously…" line) — these are the cards you were told to drive to done,
 so you own their board state through the whole lifecycle. The opt-in lives in the
-**description**, which `list_issues` does **not** return, so `get_issue` each card with
-a workspace to read its description before deciding it is managed (reuse the description
-you already fetched in step 4 for any candidate that overlaps). A plain In-Progress card
-with **no** Orchestrate opt-in is operator-hand-driven: you may have dispatched it,
-but the operator owns its delivery, so **do not** auto-advance it — leave its column
-alone. Only reflect status for managed cards that currently have a non-archived
-workspace.
+**description**, which `list_issues` does **not** return, so classify each card with a
+workspace before deciding it is managed — **cache-gated by the same `cards{}` rule as
+step 4** (reuse the description you already fetched in step 4, or the `cards{}` hit, for
+any candidate that overlaps): cache hit (entry present, survived validate-on-read, and
+its `updated_at` matches the fresh summary) ⇒ use the cached `class`; cache miss (entry
+absent, dropped, or the stamps differ) ⇒ `get_issue`, classify, and record. A plain
+In-Progress card with **no** Orchestrate opt-in is operator-hand-driven: you may have
+dispatched it, but the operator owns its delivery, so **do not** auto-advance it — leave
+its column alone. Only reflect status for managed cards that currently have a
+non-archived workspace.
 
 **Done is terminal — never track or re-report a Done card.** Before you walk a card,
 check its column from `list_issues`: if it is **already in Done**, drop it entirely —
 do **not** `get_issue` it, do **not** read its agent (`list_sessions` / `get_execution`),
-do **not** reflect or re-report it. You report a card's move to Done **exactly once**,
+do **not** reflect or re-report it, and **drop its `cards{}` entry** (this column is
+terminal for the cache too). You report a card's move to Done **exactly once**,
 on the tick you actually move it (Reflecting status → Done writes one `update_issue` and
 one report line); from the next tick on, that card is in Done and falls out of your
 working set forever. This keeps the loop from re-scanning finished work every tick and
@@ -423,12 +480,12 @@ pick the **furthest** state it positively confirms:
   classify it here, **before** the Done / In Review checks below (a parked summary like
   "code-review passed; awaiting approval before merge" would otherwise match In Review).
   **Leave the column as-is** — it is explicitly **not** In Review and **not** Done — and
-  do **not** advance it. Unlike a silent mid-pipeline state, you must **surface** it:
-  emit the awaiting-approval report line (see *Report*, step 8), using the first
-  non-empty line after the marker as the decision summary (fall back to a generic
-  "awaiting operator approval" if none). The operator's decision is delivered back to
+  do **not** advance it. Unlike a silent mid-pipeline state, you must **decide whether to
+  surface** it — see *The park fingerprint* and *The three-clause surface rule* below.
+  The operator's decision is delivered back to
   the agent via `run_session_prompt` (or console / Telegram) — you **never** auto-resume
-  or auto-clear this gate (see *Safety & honesty*); your job is to hold and surface.
+  or auto-clear this gate (see *Safety & honesty*); your job is to hold and, when the
+  rule below says so, surface.
 - **→ Done** — the card's **merge or PR stage has actually landed**. Confirmed by either:
   - the card's agent reports its **squash-merge to the base branch landed** (e.g. "squash-merged to `main`" +
     SHA, "merged to main", merge confirmed) — the agent performs the merge itself per its pipeline; **or**
@@ -447,6 +504,232 @@ pick the **furthest** state it positively confirms:
   **not** advance the card; let a later tick re-check. If it's blocked on an approval
   and a directive is enabled, that's handled in step 7.
 
+#### The park fingerprint — a digest over (`execution_id`, summary)
+
+The park marker is unchanged and remains defined **once**, in the plugin's `CLAUDE.md`:
+the case-sensitive substring `AWAITING OPERATOR APPROVAL` in the agent's `final_message`.
+
+**Step 1 — extract the park summary (this is the REPORT text):**
+
+```
+park_summary(final_message) :=
+  1. Find the FIRST occurrence of the case-sensitive substring "AWAITING OPERATOR APPROVAL".
+  2. Take the remainder of final_message after the end of that occurrence.
+  3. Split it into lines; take the FIRST line whose trimmed content is non-empty; trim
+     leading/trailing whitespace. That string is the PARK SUMMARY.
+  4. If no such line exists, the park summary is the literal: awaiting operator approval
+```
+
+**Step 2 — digest it together with the `execution_id` (this is the STORED value):**
+
+```
+park_fingerprint(execution_id, park_summary)
+  := first 16 lowercase hex chars of sha256( "<execution_id>\n<park_summary>" )
+```
+
+Matches `^[0-9a-f]{16}$` — the same shape the delta gate's fingerprints use.
+
+**⚠ The digest ALONE is NOT a sufficient park identity.** An earlier revision claimed a
+same-execution re-park **cannot happen**, on the reasoning that parking twice requires a
+resume. **That claim is FALSE** — *Two-case coverage* above says so itself: a **headed**
+resume is *injected into the live Claude TUI and reuses the same execution row*. So a
+**headed re-park with a byte-identical summary yields an identical digest** — the gate
+correctly hands it to us as a POLL (its transcript hash moved), and a digest-only
+comparison would **throw it away.** A permanently unannounced operator gate is the exact
+catastrophe this mechanism exists to prevent — **the three-clause surface rule below is
+the fix.** The digest still does the real work in clauses (a)/(b).
+
+**Computing it safely — the summary is arbitrary agent text and MUST NOT be interpolated
+into a quoted shell string.** Pass it on **stdin via a quoted heredoc** (a quoted
+delimiter disables *all* expansion, so `don't merge yet` is inert):
+
+```sh
+park_fp=$(
+  {
+    printf '%s\n' "$EXECUTION_ID"          # a UUID — safe to interpolate
+    cat <<'VK_PARK_EOF'
+<the park summary, verbatim, one line>
+VK_PARK_EOF
+  } | shasum -a 256 | cut -c1-16
+)
+```
+
+> **Delimiter-collision rule (makes the recipe total).** A quoted heredoc is still unsafe
+> if the one-line summary happens to **equal the delimiter exactly** — it would terminate
+> the heredoc early and what follows would be parsed as shell. **Before emitting the
+> heredoc, compare the summary line against the delimiter; if they are equal, extend the
+> delimiter (`VK_PARK_EOF` → `VK_PARK_EOF_2` → …) until it differs.**
+
+`shasum` is **verified present** — use **`shasum -a 256`**; no fallback hedge needed.
+
+**Keyed by `session_id`** (not issue id) — the park is a property of the agent's session.
+
+**The raw summary still goes in the report line** (*Compose the report*, step 8). Only
+the **stored** value (`parks[session_id]`) is a digest.
+
+#### The three-clause surface rule
+
+**Surface the park iff ANY of:**
+
+- **(a)** there is **no `parks[session_id]` entry** — first sight, or the state was
+  lost/dropped (this is the recovery path below).
+- **(b)** the computed digest **≠** `parks[session_id]` — the summary changed, **or** a
+  **non-headed** re-park minted a new `execution_id`.
+- **(c)** the gate returned a **trusted POLL** for this session **and** the digest
+  **equals** `parks[session_id]`. Per *Two-case coverage*, an unchanged digest on a
+  POLLed parked session can only be a **headed re-park with a byte-identical summary.**
+  Surface it and re-record.
+
+**Otherwise: SILENT.** The steady state is `SKIP` + unchanged digest — precisely the
+every-tick spam this mechanism kills.
+
+> **"Trusted POLL" — the exact definition (TWO conjuncts, not three):** the probe output
+> **passed its validation contract** (i.e. you are **not** on the outer fail-open path)
+> **AND** the line's `action` is **`POLL`**. **The `reason` is IRRELEVANT — `forced`
+> COUNTS.**
+
+**Why `forced` MUST be admitted.** An earlier revision excluded `reason == forced` from
+clause (c), to stop the `VIBE_DELTA_FORCE_MANAGED=1` valve from re-announcing every
+parked card every tick. **That priority was backwards, and it re-opened the permanent
+swallow:**
+
+> `parks[S] = P` exists. A **headed** session resumes and re-parks with the same summary
+> in the same execution row. The valve is **on**, so every probe line is `POLL
+> reason=forced`. Clause (a) is false (the entry exists), clause (b) is false (the digest
+> is unchanged), and clause (c) was **excluded because the POLL was `forced`**. ⇒ **The
+> park is never announced, on any tick, for as long as the valve is on.**
+
+That is not an accepted trade-off — it is the **same permanent-swallow bug in a new
+place, introduced by a debugging tool.** The valve's *entire stated purpose* is *"an
+escape hatch if the gate is ever suspected of hiding a transition."* **It must never be
+the thing that hides one. Do NOT "optimize" the `forced` exclusion back in.**
+
+**The cost, stated honestly instead of engineered away:**
+
+> While `VIBE_DELTA_FORCE_MANAGED=1` is on, **every** session POLLs **every** tick, so
+> **every parked card re-announces every tick.** That is **the valve's documented cost,
+> not a regression.** The valve ships **wired, off**; turning it on is a deliberate
+> operator action taken *because the gate is under suspicion*, and it already forces a
+> full `get_execution` for every session. **Noise under an emergency debug valve is
+> acceptable; a silently-lost operator gate is not. A duplicate is never a loss.**
+
+**The other `force` path is accounted for and is moot here:** `nudge-stuck`'s
+**per-session** baseline force fires only for a session with **no `sessions{}` entry** —
+which in practice means the state file was lost or dropped, in which case `parks{}` has
+no entry for it either and **clause (a) fires anyway.**
+
+**Why clause (c) is sound, at ZERO extra reads.** A parked, idle agent moves **nothing**
+observable — no new execution, no transcript bytes, no approvals — so on an unforced gate
+it `SKIP`s. **A POLL on a parked session therefore means the agent actually did
+something**, and for a parked agent the only thing that makes it act is a **resume**. The
+gate is handing us the re-park; we must not throw it away.
+
+**Accepted false positive — a DUPLICATE, never a loss.** Three sources can produce a POLL
+on an unchanged park: the valve (above), the gate's fail-safe "omit the commit for a
+session whose decision did not land" path, and a change to a non-`final_message` digest
+term (e.g. the card's PR fields). Each re-announces the park **once** (or, under the
+valve, once per tick). **All are duplicates, never missed announcements** — they err in
+exactly the direction this mechanism is built to protect.
+
+**Accepted residual — the fail-open path.** On an outer fail-open tick (the gate script
+errored or violated its output contract) there are no trustworthy probe lines, so clause
+(c) cannot be evaluated and you fall back to (a)/(b) alone. A headed identical-summary
+re-park landing on **that** tick is not surfaced *that tick* — but it is **not lost**: a
+fail-open tick commits nothing for those sessions, so the **next healthy tick reads
+`no-state`/`fp-changed` ⇒ POLL ⇒ clause (c) fires ⇒ the park is surfaced.** A **one-tick
+delay, not a loss.**
+
+Column handling is **unchanged**: a parked card is a mid-pipeline hold — **not In
+Review, not Done** — and the park check still runs **FIRST**, before the Done / In
+Review checks.
+
+**Not parked** (`is_parked == false`) ⇒ **delete `parks[session_id]`**; no surface line.
+(Un-parking clears the memory, so a *future* park is correctly a **distinct** park and is
+announced.)
+
+**On any surface** ⇒ set `parks[session_id] = fingerprint`, emit the report line (see
+*Compose the report*), and, under `telegram-fanout`, mirror it to the Orchestrate topic —
+and **mark the tick ACTIVE** (*Classify each tick*, clause 4).
+
+#### `SKIP` reasoning — why silence is safe
+
+On a `SKIP` line the sweeper does **not** call `get_execution`, so it does not hold
+`final_message` this tick. It does not need to:
+
+> **An unchanged gate digest implies an unchanged `execution_id`, an unchanged
+> `final_message`, AND a byte-identical transcript** — the gate hashes all three (CR-5).
+> **Every input to the park decision is therefore provably unmoved: the digest cannot
+> have changed, and no re-park — headed or not — can have occurred**, because a headed
+> re-park would have moved the transcript's bytes, which would have moved the gate's
+> digest, which would have produced a POLL. This is the exact analogue of nudge's
+> *Lemma N*, resting on the same property.
+
+So on a `SKIP` line whose `parks[session_id]` entry is **present**: **stay silent, carry
+the entry forward untouched, call nothing.** Zero extra cost. **The transcript term is
+what makes `SKIP` safe here — and its absence from the digest-only comparison is exactly
+what made clause (c) necessary.**
+
+#### The recovery rule — the one hole this closes (LOAD-BEARING)
+
+**The gap:** if `parks{}` has no entry for a session (the state file was lost, an entry
+was **DROPPED by validate-on-read**, a write failed, the `commit` failed and suppressed
+the write, the tick crashed before its state write, or the card was parked before this
+feature shipped) while that card **is** parked *and* its gate digest is already settled,
+the gate returns `SKIP`, you never read `final_message`, and **the park is never
+announced — forever.** Without a rule for this, the park store would silently *swallow*
+the very event it exists to surface.
+
+> On a **`SKIP`** line with a freshly-derived **`is_parked: true`** and **no
+> `parks[session_id]` entry**, call `get_execution(execution_id)` **for that one
+> session** — read `final_message`, compute the park fingerprint, surface the line
+> (raw summary), and record it. This is a bounded exception to "`SKIP` ⇒ no
+> `get_execution`": it fires only when a park exists that has no recorded surface.
+
+**Cost, stated accurately:** **one successful recovery per recorded park.** Once the
+forced `get_execution` **and** the state write have **both** succeeded, the entry exists
+and the rule never fires again for that park. **If either the read or the persistence
+fails, the entry stays absent and recovery correctly retries on the next tick.** That is
+the desired behavior — it is what makes the announcement *eventually* certain.
+
+**This rule is what makes the state-write-last ordering, the commit-failure rule, AND
+validate-on-read's drop of a `parks` entry safe.** They are a set. Do not implement one
+without the others; do not weaken this rule into "best effort".
+
+#### The full algorithm (per managed card with a workspace)
+
+1. Determine `is_parked`, `execution_id`, and the line kind **for this tick**:
+   - **POLL** line ⇒ `execution_id` from the line; `is_parked` from
+     `get_execution().final_message` (case-sensitive substring test). *(The `reason`
+     does not matter — see the three-clause rule above.)*
+   - **SKIP** line ⇒ `execution_id` from the line; `is_parked` from the line's own
+     **freshly-derived** boolean.
+   - **Outer fail-open** ⇒ no trustworthy line; `get_execution` for every session as
+     today; treat as "no trusted-POLL signal available" (clause (c) unavailable — see
+     the accepted residual above).
+2. `is_parked == false` ⇒ `delete parks[session_id]`; no surface line. **Done.**
+3. `is_parked == true`:
+   - **SKIP** and `parks[session_id]` **present** ⇒ every digest input provably
+     unchanged and **no re-park possible** ⇒ **silent**, carry the entry forward.
+     **Done.**
+   - **SKIP** and `parks[session_id]` **absent** ⇒ the recovery rule:
+     `get_execution(execution_id)` for this one session ⇒ `final_message`.
+   - **POLL** ⇒ you already have `final_message`.
+   - Compute `summary = park_summary(final_message)` and
+     `fp = park_fingerprint(execution_id, summary)`.
+   - **Surface iff** (a) `parks[session_id]` is **absent**, **or** (b)
+     `fp != parks[session_id]`, **or** (c) this was a **trusted POLL** (any `reason`,
+     incl. `forced`; not fail-open) **and** `fp == parks[session_id]`.
+   - On surface ⇒ report the **raw `summary`**, set `parks[session_id] = fp`, mark the
+     tick **ACTIVE**.
+   - Else ⇒ **silent**.
+
+**Pruning `parks{}`:**
+- **Delete** when the session's fresh `is_parked` is `false` (step 2 above — the primary
+  rule; it covers both line kinds without needing `final_message`).
+- **Delete** when the session is no longer in this tick's non-archived
+  workspace/session inventory (workspace archived, card Done). A re-created session gets
+  a fresh UUID, so it is correctly a fresh, un-surfaced park.
+
 ### Honesty & idempotence guards
 
 - **Only advance on a positive signal, and never regress.** Never mark a card **Done**
@@ -462,11 +745,337 @@ pick the **furthest** state it positively confirms:
   silent for cards you left untouched — no per-tick noise. **One exception:** a managed
   card **parked at a Wait-for-approval gate** gets its awaiting-approval surface line
   even though its column is unchanged — surfacing a hold the operator must act on is not
-  noise. That surface line does **not** count the tick as ACTIVE for adaptive cadence
-  (only a dispatch or a real column advance does — same rule as `nudge-stuck` /
-  `auto-compact` housekeeping); to avoid per-tick repetition, surface a given parked
-  card **once per distinct park** (re-surface only if its `final_message` summary
-  changes), the same fingerprint discipline `nudge-stuck` uses.
+  noise. Surfacing is **once per distinct park** — each surfaced park's **fingerprint**
+  (a digest of its `execution_id` + its summary line) is recorded in the `parks{}`
+  section of `orchestrator-state.json`, so an unchanged park is announced **once**, not
+  once per tick. **A re-park is a DISTINCT park** — including a **headed** re-park with
+  an identical summary, which you detect from the delta gate's **POLL** (see *Deciding
+  the column* → clause (c)). A **newly** surfaced park **DOES** count the tick as **ACTIVE** (blocked work is work — an operator decision is pending and the loop should
+  stay responsive). A park **already surfaced and unchanged** does **not**, and is
+  silent.
+
+## The sweeper state file (`orchestrator-state.json`)
+
+**One state file, four sections, read once and written once per tick.** This section is
+the **ONE canonical definition** of its shape — every other place in this file that
+touches `cadence`, `sessions`, `parks`, or `cards` **cross-references this section**
+rather than restating a partial version of it. Exactly one fenced block below defines
+the JSON shape; if a second one ever appears, that is drift.
+
+### Path
+
+```
+${VIBE_ORCH_STATE:-$HOME/.vibe-kanban/orchestrator-state.json}
+```
+
+Owned **solely by the sweeper agent** — no script reads or writes it (the delta gate's
+own state file, `orchestrator-delta.json`, is a **separate, sibling** file; see *The
+delta gate* → *State file*).
+
+### The shape
+
+```json
+{
+  "version": 1,
+  "cadence": {
+    "empty_streak": 0,
+    "mode": "active",
+    "active_interval": "5m",
+    "idle_interval": "30m"
+  },
+  "sessions": {
+    "<session_id>": {
+      "last_fingerprint": "<16-hex nudge digest>",
+      "no_progress_streak": 0,
+      "nudged_fingerprint": null
+    }
+  },
+  "parks": {
+    "<session_id>": "<16-hex digest of (execution_id, park summary) — NEVER the summary text>"
+  },
+  "cards": {
+    "<issue_id>": {
+      "updated_at": "<the stamp of the description this class was derived from>",
+      "class": "managed",
+      "executor_pin": "CODEX"
+    }
+  }
+}
+```
+
+### Section semantics
+
+- **`cadence`** — the adaptive loop-cadence counters: `empty_streak` (int), `mode` ∈
+  `active|idle`, `active_interval` / `idle_interval` (canonical interval strings). Only
+  the **storage location** moves from today's separate cadence state file; every
+  transition rule, the canonicalization function, the reconciliation, and the
+  wake-on-instruction rule are unchanged (see *Adaptive loop cadence…*).
+- **`sessions`** — the `nudge-stuck` per-session state, keyed by **coding** `session_id`.
+  *Semantically unchanged* from today's separate nudge state file: the two-tick trigger,
+  the fingerprint keying, Lemma N, the exclusions, and the first-observation baseline all
+  keep their behavior **verbatim**. Two things change: **where the map lives**, and **the
+  fingerprint's encoding is now pinned** (below) — an ENCODING change, not a SEMANTIC one.
+- **`parks`** — **NEW.** `{ <session_id>: <16-hex park digest> }` — see *Deciding the
+  column* → the park branch.
+- **`cards`** — **NEW.** `{ <issue_id>: { updated_at, class, executor_pin } }` — the
+  card-classification cache, see below.
+- **`version`** — write `1`. **Readers IGNORE it entirely** and never gate behavior on
+  it — a version check would turn a hand-edit into a full state wipe for zero benefit;
+  the validate-on-read and fresh-start rules below already cover every corruption case,
+  surgically.
+
+### THE CONSTRAINED-TOKENS INVARIANT
+
+> **No free-form agent text — ever — is written into `orchestrator-state.json`.** Every
+> value in the file is a **constrained token**: a **hex digest**, an **ISO-8601
+> timestamp**, a **UUID**, a **small integer**, a **fixed enum**, or a **canonicalized
+> interval string**.
+
+Two independent reasons this is an invariant, not a style note:
+
+1. **Shell-quoting safety.** You have **no `Write` tool** — you persist via
+   `printf '%s' '<json>' > "$FILE"`, i.e. **single-quoted shell interpolation**.
+   Agent-authored text is arbitrary: a park summary reading `don't merge yet` contains a
+   single quote and can **terminate the quoted string and alter the command.** This
+   feature is the first thing that would put agent prose into a state file, so this is
+   where the hazard would be introduced, and where it must be designed out.
+2. **It matches the existing design language.** The delta gate stores "fingerprints only
+   (CR-2)"; nudge stores `last_fingerprint` / `nudged_fingerprint`. Parks storing a digest
+   is consistent, not novel.
+
+**The audit table — every field of all four sections. This table IS the schema — it
+governs both the write path and the read path (validate-on-read, below):**
+
+| Value | Token class (the validation rule) |
+|---|---|
+| `version` | small integer — written, never read |
+| `cadence.empty_streak` | non-negative small integer |
+| `cadence.mode` | enum: exactly `active` or `idle` |
+| `cadence.active_interval` / `idle_interval` | canonical interval — `^(([1-9]\|[1-5][0-9])m\|([1-9]\|1[0-9]\|2[0-3])h)$` |
+| `sessions.<id>.last_fingerprint` | `^[0-9a-f]{16}$` |
+| `sessions.<id>.nudged_fingerprint` | `^[0-9a-f]{16}$` **or `null`** |
+| `sessions.<id>.no_progress_streak` | non-negative small integer |
+| `parks.<session_id>` | `^[0-9a-f]{16}$` |
+| `cards.<id>.updated_at` | ISO-8601 timestamp, verbatim from the API |
+| `cards.<id>.class` | enum: exactly `managed` or `plain` |
+| `cards.<id>.executor_pin` | a known `BaseCodingAgent` key **or `null`** |
+| every object key (`sessions`/`parks`/`cards`) | a UUID |
+
+### VALIDATE ON READ, DROP ON FAIL
+
+The invariant above constrains what you **write**. But the file is **its own input every
+tick**: a parsed-but-invalid value read back could be carried forward and re-emitted,
+silently breaking the guarantee. So it is enforced on **both** ends:
+
+> **Every value read back from `orchestrator-state.json` is re-validated against its
+> token class before use** — the audit table above **is the schema**. **Any entry whose
+> value fails its class is DROPPED — treated exactly as if it were absent — and the drop
+> is reported.** Never carry an unvalidated value forward; never write one back.
+
+Why DROP, not abort — **every drop is fail-safe**:
+
+| Dropped | Consequence |
+|---|---|
+| a `cards` entry | one extra `get_issue` — the card is simply a cache miss |
+| a `sessions` entry | that agent is a first observation ⇒ no nudge (a garbled entry can never cause a spurious one) |
+| a `parks` entry | the recovery rule (*Deciding the column* → the park branch) re-surfaces the park ⇒ one duplicate announcement, never a missed one |
+| a `cadence` field | the documented fresh-start default for that field ⇒ at most one idle-cadence reset |
+
+**Every drop degrades to more work, never to a missed event.** And the drop is
+**surgical**: one bad `cards` entry costs one `get_issue` — it does **not** wipe the
+other three sections. **Never crash the sweep over one bad entry.**
+
+#### Pinning the nudge fingerprint's encoding
+
+`sessions.<id>.last_fingerprint` and `nudged_fingerprint` are **16 lowercase hex chars**
+(`^[0-9a-f]{16}$`), computed with the **same recipe** as the park digest (*Deciding the
+column* → `park_fingerprint`) over the nudge fingerprint's existing terms (latest coding
+`execution_id` + `final_message` + the recency signal). Any **free-text** term (i.e.
+`final_message`) goes in on **stdin via the safe heredoc**, never interpolated. **This is
+an ENCODING change, not a SEMANTIC one** — the fingerprint is opaque by design; the nudge
+logic is, and remains, "changed ⇒ progress; unchanged ⇒ no progress", with the marker
+keyed on the fingerprint **value**. Every rule in *Two-tick trigger + idempotence*, Lemma
+N, and *First observation* stays byte-for-byte identical.
+
+#### The raw summary still appears in the report
+
+`<card/workspace>: awaiting operator approval — <summary>` is the model's **final
+message**, not a shell string, and it is what the operator actually needs to read.
+**Only the *stored* value is digested** — never the report line.
+
+### The `cards{}` cache — description-only facts, cache-gated
+
+`cards{}` caches **only facts that are a pure function of the card's DESCRIPTION** (plus
+the `updated_at` that description carried). Everything else — the card's **column**,
+whether it **has a workspace**, its **PR fields** — is read **fresh every tick** from
+`list_issues` / `list_workspaces` and is **NEVER cached.**
+
+- **`class: "managed" | "plain"`** — whether the description's `## Pipeline` carries the
+  **Orchestrate** opt-in.
+- **`executor_pin`** — the executor key pinned in the card's `## Pipeline`, else `null`.
+  **It is read out of agent/operator-authored card prose, so it must be validated into a
+  constrained token before it is stored — and re-validated when it is read back.** Accept
+  it **only** if it matches `^[A-Z][A-Z0-9_]*$` **and** is one of the known
+  `BaseCodingAgent` keys (`CLAUDE_CODE`, `CLAUDE_CODE_HEADED`, `CODEX`, `GEMINI`, `AMP`,
+  `OPENCODE`, `CURSOR_AGENT`, `QWEN_CODE`, `COPILOT`, `DROID`). **Otherwise store `null`**,
+  report the unrecognized pin loudly, and fall back to the config's last-used executor
+  exactly as today. **Never store the raw string.**
+
+**Cache hit** ⇔ `cards[I.id]` exists (and **survived validate-on-read**) **AND**
+`cards[I.id].updated_at == S.updated_at` — the **fresh** `list_issues` summary's
+`updated_at` — compared by **exact string equality** (never parsed, never ordered) ⇒ use
+the cached `class` / `executor_pin`; **do not call `get_issue`**.
+
+**Cache miss** (entry absent, dropped, or the stamps differ) ⇒ `get_issue(I.id)`, derive
+`class` and a **validated** `executor_pin` from the fresh description, and write
+`cards[I.id] = { updated_at: <the updated_at get_issue returned>, class, executor_pin }`.
+**Store `get_issue`'s `updated_at`, not the summary's** — the cached stamp must be the
+stamp of the *very description that produced the cached class*.
+
+**A DISPATCH ALWAYS `get_issue`s the card — the cache never eliminates this.** The
+classification `get_issue` is what the cache removes; the *dispatch* `get_issue` fills
+`{{TASK}}` with the card's real description, so it is **never** skipped, cache hit or
+not. A future reader who "optimizes" it away would dispatch a coding agent with an
+**invented** prompt.
+
+**Do NOT cache the description body itself** — it would defeat the entire token saving
+and violate the constrained-tokens invariant above.
+
+**Pruning `cards{}` — about file size, not correctness.** Drop entries for issues this
+tick's listing showed as **Done** (terminal). Drop entries for issues **not present** in
+this tick's enumeration — **but only when the tick actually enumerated the project's
+non-Done issues in full**; if the listing was partial, filtered, paginated short, or
+errored, **prune nothing** this tick. A pruned-then-reappearing card is a safe cache miss.
+
+### Tick lifecycle — read once, write once, and the ordering vs. the delta-gate `commit`
+
+You have **no `Write` tool.** All persistence is `Bash`.
+
+**Read — once, at tick start**, alongside resolving `${CLAUDE_PLUGIN_ROOT}`:
+
+```sh
+cat "${VIBE_ORCH_STATE:-$HOME/.vibe-kanban/orchestrator-state.json}" 2>/dev/null
+```
+
+Then **validate every entry against the schema above and drop what fails.** Reading is
+side-effect-free, so its position cannot violate any invariant. If the tick later aborts
+backend-down, the read is simply **discarded** and nothing is written.
+
+**Write — once, at the tick tail, ATOMICALLY — THE LAST TOOL CALL OF THE TICK:**
+
+```sh
+mkdir -p "$(dirname "$F")" && printf '%s' '<json>' > "$F.tmp" && mv "$F.tmp" "$F"
+```
+
+The temp-file + `mv` is a **MUST**: unification means one torn write would now reset
+cadence *and* nudge *and* parks *and* cards together, where before a torn nudge file left
+cadence intact. `mv` is atomic; the "garbled ⇒ fresh start" path below is only the
+backstop. (Per the invariant above, `<json>` contains **no** agent-authored text, so the
+single-quoted interpolation is safe by construction.)
+
+**The write is a FULL REWRITE, not a merge.** The in-memory state at the end of the tick
+*is* the file — which is what makes "one read + one write" literally true, and makes
+pruning trivial (a pruned entry is simply not written).
+
+**The tick tail, in order:** board work (steps 1-7) → **8. Compose the report** →
+**9. Adapt the cadence** → **10. `commit` the delta gate** → **11. Write
+`orchestrator-state.json` — the LAST TOOL CALL OF THE TICK** → emit the report (the
+final message).
+
+**The rule that decides the order:**
+
+> **All four sections of the unified state fail SAFE when unwritten. The delta-gate `commit`, when unwritten, merely costs an extra poll. The write whose absence is harmless goes LAST.**
+
+| Unwritten section | Cost on the next tick |
+|---|---|
+| `cadence` | one streak increment lost — harmless |
+| `sessions` | that agent becomes a first observation ⇒ no nudge — the documented safe direction |
+| `parks` | self-heals via the recovery rule below ⇒ the park is announced |
+| `cards` | one extra `get_issue` |
+| the delta gate's `commit` | the gate POLLs instead of SKIPping — an extra read |
+
+**Why CR-3 is untouched.** `commit`'s own rule (*The delta gate* → *Phase 2*) only ever
+required `commit` **after every `update_issue`**, so a fingerprint is never committed for
+a board decision that did not land. The unified state write is a **pure local file write
+that takes no board action** — it cannot cause a fingerprint to be committed for an
+unlanded decision. Sequencing it after `commit` does not violate CR-3 at all. `commit`
+must still come after all board writes and after *Adapt the cadence*; it simply no
+longer needs to be the final tool call.
+
+**The crash trace that settles it:**
+
+- **State-write-then-`commit` (the wrong order).** Crash after the state write, before
+  `commit`: `parks[S]` is **recorded**, the gate is **not** committed. Next tick the gate
+  POLLs (stale digest), reads `final_message`, computes the park digest, finds it
+  **equals `parks[S]`** ⇒ **stays silent.** **The park is lost forever.**
+- **`commit`-then-state-write (this ordering).** Crash after the commit, before the
+  state write: the gate is committed (next tick SKIPs), but `parks[S]` was **never
+  written** ⇒ next tick hits **SKIP + fresh `is_parked: true` + no `parks{}` entry** ⇒
+  the recovery rule below fires, forces one `get_execution`, and **surfaces the park.** ✓
+
+**The recovery rule (*Deciding the column* → the park branch) is precisely what makes
+state-write-last safe. They are a pair — do not implement one without the other.**
+
+**THE COMMIT-FAILURE RULE:**
+
+> **If the delta-gate `commit` fails, do NOT write the unified state file at all.**
+> Report the failure loudly; **change nothing on disk.**
+
+Why: a `parks{}` entry is the **suppressor**. Writing it while the gate is left **stale**
+⇒ next tick POLLs ⇒ the recomputed digest **matches** ⇒ **silent forever** — the same
+"state recorded before delivery" bug in a new costume. Suppressing the write makes the
+two writes **jointly all-or-nothing in the safe direction**; every section self-heals
+next tick exactly as the table above describes.
+
+**If the unified state write itself fails:** report the failure loudly and do nothing
+else. **NO ROLLBACK** — the next tick self-heals on every section; a rollback would be
+strictly more code and strictly more ways to be wrong.
+
+**Accepted residual (R8) — an at-most-once announcement gap that CANNOT be closed.** A
+crash **between the state write and the emission of the final message** still loses that
+one announcement: `parks[S]` says "surfaced", but the report never reached the loop
+manager. This window cannot be closed — a subagent's **report *is* its final message**,
+so there is no post-report tool call in which to record delivery. The ordering narrows
+the window to **zero tool calls**, and every crash *before* the state write self-heals.
+**Do not invent a delivery-acknowledgement mechanism** — the loop manager is out of scope
+for this feature.
+
+**Backend-down tick.** See *Backend-down short-circuit* — a backend-down tick writes
+**neither** `orchestrator-state.json` **nor** the delta gate's `commit`; it changes
+nothing, on disk or on the board.
+
+### "Missing or garbled ⇒ fresh start" — per section
+
+**Whole-file failures** (file absent, `cat` fails, content is not parseable JSON) ⇒
+**every section is fresh**:
+
+| Section | Fresh value | Consequence — always fails safe |
+|---|---|---|
+| `cadence` | `{ empty_streak: 0, mode: "active", idle_interval: "30m", active_interval: canonicalize(spawn prompt's `LOOP INTERVAL:`) ?? "5m" }` | Exactly today's rule. Costs at most one idle-cadence reset. |
+| `sessions` | `{}` | Every agent becomes a first observation (streak 0, no nudge). A garbled file can never cause a spurious nudge — only a one-tick delay. |
+| `parks` | `{}` | Every currently-parked card is un-surfaced ⇒ re-announced once. A garbled file can cause one duplicate announcement, never a missed one. |
+| `cards` | `{}` | Every candidate/managed card is a cache miss ⇒ one `get_issue` each — exactly the pre-cache behavior. Never a wrong classification, only a slower tick. |
+
+**Per-section / per-entry degradation — this is validate-on-read, applied.** If the file
+parses as JSON but a **section** is missing or is not an object, or an **individual
+entry** fails its token class in the schema above (wrong type, missing required key, a
+fingerprint that is not `^[0-9a-f]{16}$`, a non-ISO-8601 `updated_at`, an out-of-enum
+`class`/`mode`, a non-canonical interval, a non-UUID key, an unknown `executor_pin`),
+treat **that section (or that entry) as absent and keep the rest.** **Never discard the
+whole file over one bad entry. Never crash the sweep.** The drop is **surgical and
+reported**, and every drop is fail-safe (see the consequences table above).
+
+**Unknown keys** — top-level or inside an entry — are **ignored** and not written back.
+
+### No migration — and why none is needed
+
+The old separate cadence and nudge state files are **never read
+and never written again.** They linger on disk, inert. The cost of ignoring them is
+exactly the "missing file ⇒ fresh start" path above: one idle-cadence reset, one nudge
+baseline tick (no nudge fires), one duplicate announcement per already-parked card, one
+full classification pass. **Accepted, reviewed, and deliberate:** the first post-ship
+tick re-announces every already-parked card once and is classified ACTIVE. A one-time
+burst, entirely covered by the fresh-start rules above. Not a bug.
 
 ## The delta gate
 
@@ -512,8 +1121,8 @@ every non-archived workspace's coding session whenever **any** of `auto-unblock`
 `auto-answer-questions` / `auto-compact` / `nudge-stuck` is enabled — a probe that only
 expanded for `auto-compact` would starve the other three directives of a line to read from
 (see *Directives* → "extend the sweep"). Set `"force": true` on a session's element only
-per the one rule in *Directives* → `nudge-stuck` (a gate entry with no
-`orchestrator-nudge.json` entry). Card fields (`column`, `pull_request_count`,
+per the one rule in *Directives* → `nudge-stuck` (a gate entry with **no `sessions{}`
+entry in `orchestrator-state.json`**). Card fields (`column`, `pull_request_count`,
 `latest_pr_url`, `latest_pr_status`) come from the `list_issues` summary; `null` for a
 session with no card.
 
@@ -573,15 +1182,17 @@ path — it is the correct fail-open precisely because it needs nothing this gat
   leave it, **emit no report line**, and feed the line's fresh facts/handles to any enabled
   directive that wants them.
 
-### Phase 2 — commit, the LAST thing in the tick
+### Phase 2 — commit, after every board write
 
-Run this **after** every `update_issue` and **after** *Adapt the cadence* —
-`commit` is the genuinely **last tool call** you make this tick (CR-3),
-emitted **immediately before your final report**.
-(The rule used to read "after the report"; your report *is* your final message, so that ordering is not
-physically available to a subagent. `commit` being the last tool call is exactly the invariant CR-3 protects —
-and the cron re-arm that used to precede it now happens afterwards, in the loop manager, where it cannot affect
-a card's column.)
+Run this **after** every `update_issue` and **after** *Adapt the cadence* — **that, and
+only that, is what CR-3 protects.** It is **no longer the last tool call of the tick**:
+the sweeper's unified state write (*The sweeper state file* — sweep item 11) now follows
+`commit`, as the tick's actual last tool call. That is safe because the state write is a
+**pure local file write that takes no board action** — it cannot cause a fingerprint to
+be committed for a board decision that did not land, so this reordering does not touch
+CR-3 at all.
+**THE COMMIT-FAILURE RULE: if `commit` fails, the unified state file is NOT written at all** — report loudly and change nothing on disk (see *The sweeper state file* → *Tick
+lifecycle*).
 **On a backend-down tick, `commit` does not run at all.**
 
 ```
@@ -616,7 +1227,8 @@ the card already in its target column (idempotent no-op), and commits the settle
 ### State file
 
 `${VIBE_DELTA_STATE:-$HOME/.vibe-kanban/orchestrator-delta.json}` — a **sibling** of
-`orchestrator-cadence.json` and `orchestrator-nudge.json`, both unchanged:
+`orchestrator-state.json` — a **separate** file, written by the gate **script**, not by
+you; **not** part of the unified state:
 
 ```json
 {
@@ -639,6 +1251,12 @@ in no commit array, so it drops out of the state file on its own.
 `VIBE_DELTA_FORCE_MANAGED=1` ⇒ the gate returns `POLL … forced` for **every** session,
 unconditionally — an escape hatch if the gate is ever suspected of hiding a transition.
 Ships wired, off.
+
+While it is on, **every parked card re-announces every tick** (see *Deciding the column*
+→ clause (c)): with every line a `POLL`, every park is re-surfaced. That is **the
+valve's documented cost, and it is strictly preferable to the alternative** — excluding
+`forced` from clause (c) would make the valve **hide** a headed re-park for as long as it
+stayed on, which is precisely what the valve exists to prevent.
 
 ## Adaptive loop cadence and the CADENCE handshake (active 5 min ↔ idle 30 min)
 
@@ -680,23 +1298,50 @@ Worked: `300s → 5m` · `90s → 2m` · `30s → 1m` · `0m → 1m` · `60m →
 A canonical interval therefore always matches `^(([1-9]|[1-5][0-9])m|([1-9]|1[0-9]|2[0-3])h)$`, and maps to cron
 as `Nm` → `*/N * * * *`, `Nh` → `0 */N * * *`.
 
-**State file** — `${VIBE_CADENCE_STATE:-$HOME/.vibe-kanban/orchestrator-cadence.json}`:
-
-```json
-{ "empty_streak": 0, "mode": "active", "active_interval": "5m", "idle_interval": "30m" }
-```
-
-Read it at the **start** of every tick (`Bash` `cat "$FILE" 2>/dev/null`); a missing or unparseable file ⇒
-treat as `empty_streak=0`, `mode="active"`, `idle_interval="30m"`, and `active_interval` = the
-**canonicalized `LOOP INTERVAL:` value from your spawn prompt** (you have no cron-listing tool to read it from),
-**defaulting to `5m` when that line is absent**.
-Write it back **before you report** (`Bash` `printf '%s' '<json>' > "$FILE"`) —
-you have no `Write` tool, so persist via `Bash`.
+**State file** — the `cadence` section of the unified state file (*The sweeper state
+file* — `orchestrator-state.json`), **not** a separate cadence state file
+anymore: `empty_streak`, `mode`, `active_interval`, `idle_interval`. The tick's **single
+read** (tick start) and **single write** (the tick's **last tool call**) do this for
+you — there is no separate read/write pass for cadence. A missing/unparseable file, or a
+`cadence` field that **fails validate-on-read**, falls back to the same fresh-start
+default: `empty_streak=0`, `mode="active"`, `idle_interval="30m"`, and
+`active_interval` = the **canonicalized `LOOP INTERVAL:` value from your spawn prompt**
+(you have no cron-listing tool to read it from), **defaulting to `5m` when that line is
+absent**.
 
 **Classify each tick** once the sweep is done:
-- **ACTIVE** — you dispatched ≥1 card **or** advanced ≥1 managed card's status this tick.
-- **EMPTY** — neither happened. Quiescing a dead standby, an awaiting-approval surface line, and directive-only
-  housekeeping (`auto-compact`, `nudge-stuck`) do **not** count as active; only board work does.
+- **ACTIVE** — any of:
+  1. you **dispatched** ≥1 card; **or**
+  2. you **advanced** ≥1 managed card's column; **or**
+  3. **(NEW)** ≥1 **managed** card's coding session has **non-empty `pending_approvals`**
+     this tick; **or**
+  4. **(NEW)** ≥1 **managed** card was **newly parked** this tick — i.e. this tick
+     emitted its awaiting-approval **surface line** (*Deciding the column* → the
+     three-clause surface rule, **any** of clauses a/b/c).
+- **EMPTY** — none of the above. Quiescing a dead standby, a park that was **already
+  surfaced and is unchanged**, and directive-only housekeeping (`auto-compact`,
+  `nudge-stuck`) still do **not** count.
+
+**Why clause 3 is level-triggered but clause 4 is edge-triggered.** Clause 3
+(`pending_approvals`) is **LEVEL-triggered — ACTIVE every tick it holds**: a pending
+approval is actionable **by the sweeper itself** (`auto-unblock` clears tool-permission
+approvals, and `auto-answer-questions` answers a stale question once
+`age_seconds > 600` — a grace window keyed to ≈ two 5-minute ticks), and at 30m cadence
+that machinery would be **starved**. Clause 4 (park) is **EDGE-triggered — only the tick
+that SURFACES the park is ACTIVE**: a parked agent waits on a **human**, and if a
+still-parked card made every tick ACTIVE, a card parked overnight would pin the loop at
+5m forever waiting on someone asleep — exactly the pathology idle mode exists to
+prevent. **`parks{}` is what makes "newly" expressible at all** — a memory-less tick
+previously had no way to distinguish a new park from a week-old one — **and the
+three-clause surface rule is what makes it correct**: a digest-only key would have
+mis-classified a **headed re-park** as "not new" and dropped it out of the ACTIVE set
+entirely. Clauses 3 and 4 count **only orchestrator-managed cards** (`class: "managed"`)
+— a **plain**, human-driven agent's pending approval is the operator's business and must
+not drive the orchestrator's cadence. Clause 3 costs **zero extra tool calls**: a `SKIP`
+line already carries a freshly-derived `has_approvals` boolean, a `POLL` line means
+`get_execution` is being called anyway, and per **CR-6** the probe's union always
+includes every managed card with a workspace — so every managed session has a line to
+read `has_approvals` from.
 
 **Transitions** (you *request* the re-arm — you never perform it):
 - **ACTIVE** ⇒ set `empty_streak = 0`. If `mode == "idle"`, set `mode = "active"`,
@@ -884,13 +1529,13 @@ the line's own fresh fields instead of calling `get_execution`.
     session (state file deleted, or the directive enabled mid-run) it has no
     `last_fingerprint` to carry forward and needs a real `final_message`. **Rule:** when
     `nudge-stuck` is enabled, set **`"force": true`** on the probe input for any session
-    that has a gate entry but **no `orchestrator-nudge.json` entry** ⇒ `POLL … forced` ⇒
+    that has a gate entry but **no `sessions{}` entry in `orchestrator-state.json`** ⇒ `POLL … forced` ⇒
     nudge establishes its baseline (streak 0, no nudge — its documented "first
     observation" rule below). One extra poll per session, once.
 
     **Valve:** if Lemma N is ever contradicted in the field, `VIBE_DELTA_FORCE_MANAGED=1`.
   - **Progress fingerprint.** Decide "progress" from observable state alone (the tick is
-    memory-less). Build an **opaque fingerprint** of the agent's current coding execution
+    memory-less). Build a fingerprint of the agent's current coding execution
     combining at least the **latest coding execution id** + the execution's
     **`final_message`**, plus a **recency signal** — the execution's **`updated_at`**
     and/or, when the transcript is readable, the last-assistant-message `usage`/token count
@@ -900,6 +1545,16 @@ the line's own fresh fields instead of calling `get_execution`.
     never crash. (Accepted coarseness: an agent grinding inside one long execution without
     changing `final_message` could read as no-progress — err toward "progress" whenever any
     recency signal advances.)
+
+    **Pinning the encoding (§3.4 in *The sweeper state file*).** The fingerprint is
+    **16 lowercase hex chars** (`^[0-9a-f]{16}$`), computed with **the same recipe** as
+    the park digest (*Deciding the column* → `park_fingerprint`) over the terms above.
+    Any **free-text** term (i.e. `final_message`) goes in on **stdin via the safe
+    heredoc**, never interpolated. **This is an ENCODING change, not a SEMANTIC one** —
+    the fingerprint remains opaque by design: "changed ⇒ progress; unchanged ⇒ no
+    progress", with the marker keyed on the fingerprint **value**. *Two-tick trigger +
+    idempotence*, Lemma N, *First observation*, and the *Exclusions* below are
+    byte-for-byte unchanged.
   - **Exclusions — not stuck, so skip and reset the streak to 0.** An agent is **never** a
     nudge candidate when any of these holds: its `pending_approvals` is **non-empty** (it is
     correctly waiting on a tool/question — that is the canonical "waiting, not stuck" case);
@@ -935,14 +1590,16 @@ the line's own fresh fields instead of calling `get_execution`.
     Keying the marker on the **fingerprint** (not the streak) is load-bearing: it clears
     exactly when progress resumes, so a later *fresh* stall can be nudged again, while a
     still-unchanged fingerprint never re-fires.
-  - **State file (memory-less — derive from observable state).** Persist the per-session map
-    at `${VIBE_NUDGE_STATE:-$HOME/.vibe-kanban/orchestrator-nudge.json}`, keyed by session
-    id, each entry `{ last_fingerprint, no_progress_streak, nudged_fingerprint }`. **Read**
-    it at the start of this pass (`Bash` `cat "$FILE" 2>/dev/null`); a **missing or
-    unparseable** file ⇒ treat as an empty map (every agent becomes a first observation, so
-    a garbled file can never cause a spurious nudge — only a one-tick delay). **Write** the
-    updated map back at the end of the pass via `Bash` `printf '%s' '<json>' > "$FILE"` (you
-    have no `Write` tool). **Prune** entries for sessions no longer in the current inventory
+  - **State file (memory-less — derive from observable state).** The per-session map now
+    lives in the **`sessions{}` section of `orchestrator-state.json`** (*The sweeper
+    state file*), keyed by session id, **same entry shape**:
+    `{ last_fingerprint, no_progress_streak, nudged_fingerprint }`. The tick's **single
+    read** (tick start) and **single write** (the tick's last tool call) do this for
+    you — there is no separate read/write pass for nudge. A **missing or unparseable**
+    file, or an entry **dropped by validate-on-read**, lands in exactly the same safe
+    place: treat it as an empty map (every agent becomes a first observation, so
+    a garbled file can never cause a spurious nudge — only a one-tick delay). **Prune**
+    entries for sessions no longer in the current inventory
     so the file can't grow unbounded (a pruned-then-reappearing session is a safe fresh
     first observation).
   - **Channel + payload.** Send **only** via
@@ -1008,17 +1665,25 @@ manager handles both itself, by spawning `intake` or `decider`.
 
 ## Your report
 
-Your report is your **final message** for this tick — the only thing that enters the loop manager's
-long-running session. Keep it tight:
+Your report is your **final message** for this tick — composed in item 8 (*Compose the
+report*) but **emitted only after item 11**, the unified state write — the last thing
+you do (see *The sweep* → items 8–11). It is the only thing that enters the loop
+manager's long-running session. Keep it tight:
 
 - one short line per card you **dispatched** (`id/title + executor`);
 - one line per card whose **column** you advanced (`card + old→new`);
-- one line per managed card **newly** parked at a Wait-for-approval gate, or whose park summary changed since
-  you last surfaced it — `<card/workspace>: awaiting operator approval — <summary>`; a park you already surfaced
-  and that hasn't changed stays silent;
+- one line per managed card whose park **surfaces** this tick under the three-clause
+  surface rule recorded in `parks{}` (*Deciding the column* → the park branch, including
+  clause (c)'s **headed** re-park case) — `<card/workspace>: awaiting operator approval —
+  <summary>`, where `<summary>` is the **RAW** park summary, never the stored digest; a
+  park already recorded in `parks{}` and unchanged stays silent;
 - one line per **directive action** taken;
 - **nothing** per session the delta gate SKIPped — fold `(delta: N/M skipped)` into the same summary line when
-  ≥1 session was skipped this tick, rather than adding a new line;
+  ≥1 session was skipped this tick, rather than adding a new line; likewise fold
+  `(cards: N/M cached)` into that same line when ≥1 card was served from `cards{}` this
+  tick;
+- one short line for any **validate-on-read drop** (which section/entry) — it is real
+  news, not noise;
 - the human-readable `cadence → …` line **only** on a real mode transition;
 - if nothing happened at all, **one** line saying so;
 - on a backend-down tick, exactly **one** line: `backend down (Failed to connect to VK API) — tick aborted, nothing changed`.

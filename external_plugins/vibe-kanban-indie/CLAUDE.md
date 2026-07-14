@@ -176,7 +176,12 @@ AWAITING OPERATOR APPROVAL
 3. **Orchestrator surfaces.** It emits an awaiting-approval line (`<card/workspace>:
    awaiting operator approval — <summary>`) so the operator knows a decision is wanted;
    under `telegram-fanout` it mirrors that line to the operator topic. Surfacing is
-   once-per-distinct-park and does **not** count the tick as ACTIVE for adaptive cadence.
+   **once per distinct park** — the sweeper records each surfaced park's **fingerprint**
+   (a digest of the park's `execution_id` + its summary line) in the `parks{}` section of
+   its `orchestrator-state.json`, so an unchanged park is announced **once**, not once
+   per tick. **A re-park is a distinct park** — including a **headed** re-park with an
+   identical summary, which the sweeper detects from the delta gate's POLL. A **newly** surfaced park **does** count the tick as **ACTIVE** for adaptive cadence (blocked work
+   is work); a park already surfaced and unchanged does **not**.
 4. **Operator decides.** The decision/instructions are relayed to the parked agent as a
    prompt via `run_session_prompt(session_id, <decision>)` — the same sanctioned MCP
    channel `/compact` uses (or console / Telegram). This is **operator-initiated**: the
@@ -196,7 +201,8 @@ AWAITING OPERATOR APPROVAL
   **orchestrator loop manager**, which owns the timer and the relay, spawns one `sweeper`
   per tick, and routes card-creation to `intake` and a direct "answer that questionnaire"
   request to `decider` — it never reads a `final_message`, so it never matches the marker
-  itself.
+  itself. Owns the unified `orchestrator-state.json` (its four sections: `cadence`,
+  `sessions`, `parks`, `cards` — see *The sweeper state file* in `agents/sweeper.md`).
 - `scripts/orchestrator-delta.sh` — the delta-polling gate; second consumer of the marker
   (derives `is_parked` from the same literal, and hashes `final_message` into its
   fingerprint so a park transition is never invisible to it).
