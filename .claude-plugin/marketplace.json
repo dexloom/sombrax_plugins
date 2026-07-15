@@ -60,6 +60,24 @@
         "second-opinion",
         "sombrax"
       ]
+    },
+    {
+      "name": "vibecrew",
+      "source": "./external_plugins/vibecrew",
+      "description": "Orchestrate a VibeCrew board from Claude Code MCP-free over its REST API — vibecrew, product-manager, and answer-questions skills, orchestrator/product/planner/coder/decider agents, lifecycle prompts, looped-orchestrator launchers, and a bundled stdlib-only Python client",
+      "version": "0.1.0",
+      "author": {
+        "name": "dexloom"
+      },
+      "keywords": [
+        "vibecrew",
+        "kanban",
+        "orchestration",
+        "coding-agents",
+        "rest-api",
+        "product-manager",
+        "sombrax"
+      ]
     }
   ]
 }
