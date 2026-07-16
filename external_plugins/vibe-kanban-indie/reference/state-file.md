@@ -244,7 +244,8 @@ is never optional and a row is never anonymous.**
    (the `Card` column **is** the `simple_id`).
 2. **No card** — a workspace the workspace→card mapping resolved **no card** for: take the workspace
    **`name`** from `list_workspaces`.
-3. **Neither resolves** (no card, **or** `name` is null — it is an optional field — **or** nothing survives the
+3. **Neither resolves** (no card, **or** `name` is null/absent — it is an optional field the slim summary
+   omits when unset (VIBE-23) — **or** nothing survives the
    ASCII filter below): render the **letter alone**. **NEVER invent a nickname.**
 
 > **THE NICKNAME MUST BE ASCII-SAFE — it is the ONLY free-form text that reaches the table.**

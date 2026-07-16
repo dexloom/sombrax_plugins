@@ -169,7 +169,9 @@ one-line report — **< 10k marginal tokens**. That is the steady state; keep it
 ### Sweep mode (the triggered tick)
 
 1. **Inventory** — `list_workspaces` (non-archived). Map workspaces to their linked
-   cards; this rebuilds the active set's skeleton. The invariant it protects: **one
+   cards; this rebuilds the active set's skeleton. Each row carries the linked card's
+   **`issue_id`** directly (VIBE-23; the key is **omitted** for an unlinked workspace —
+   fall back to name/branch only then). The invariant it protects: **one
    coding agent per card/workspace — never double-dispatch**.
 2. **Quiesce the Orchestrator standby** — archive a repo-less standby workspace only
    once its orchestrator session is provably over; never while any live session
@@ -198,7 +200,9 @@ one-line report — **< 10k marginal tokens**. That is the steady state; keep it
 **Don't trust execution `status` alone** — headed agents read `running` after finishing
 a turn; the reliable done-with-this-turn signal is `pending_approvals` empty **and** a
 `final_message` describing a completed milestone. With `pending_approvals` empty, read
-`final_message` (corroborate with the card's PR fields) and pick the **furthest** state
+`final_message` (corroborate with the card's PR fields — the slim `list_issues` summary
+**omits** the PR keys when the card has no PRs, so a missing key means "no PRs",
+VIBE-23) and pick the **furthest** state
 it positively confirms:
 
 - **→ parked at a Wait-for-approval gate (check this FIRST).** `final_message` contains

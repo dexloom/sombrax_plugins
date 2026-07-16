@@ -56,7 +56,9 @@ re-fetches it. Set `"force": true` on a session's element only per the one rule 
 `latest_pr_url`, `latest_pr_status`) come from the freshest `list_issues` summary you
 hold — in monitor mode that is the retained value from the last sweep (an externally
 merged PR is therefore caught by the next sweep, not the monitor tick; the periodic
-sweep backstop bounds that delay). `null` for a session with no card.
+sweep backstop bounds that delay). `null` for a session with no card. The slim summary
+(VIBE-23) **omits** the PR keys when the card has no PRs — write `null` (or `0` for the
+count) for a key the summary did not carry; the script normalizes either spelling.
 
 ```
 printf '%s' '<the JSON array>' | bash "${CLAUDE_PLUGIN_ROOT}/scripts/orchestrator-delta.sh" probe
