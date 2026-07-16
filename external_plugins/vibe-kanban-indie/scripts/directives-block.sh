@@ -24,9 +24,9 @@
 #                                  progress across two consecutive ticks
 #
 # Add future directive toggles here the same way (one `case` per flag, appending a
-# `- <flag>` line). The `agents/sweeper.md` agent definition's *Directives* section
-# defines what each named flag actually does; this script only decides which flags are
-# listed.
+# `- <flag>` line). The `agents/orchestrator.md` agent definition (with the long-forms
+# in `reference/directives.md`) defines what each named flag actually does; this script
+# only decides which flags are listed.
 
 _directive_lines=""
 

@@ -1,29 +1,33 @@
 #!/usr/bin/env bash
 #
-# orchestrator.sh — launch the orchestrator LOOP MANAGER as the session agent
-# (`claude --agent vibe-kanban-indie:orchestrator`) and re-arm the `/loop` timer on an
-# interval. The loop manager owns the TIMER, not the tick: each tick it spawns ONE fresh
-# `sweeper` subagent to run the whole board sweep and relays its report, so the manager's
-# own session context stays flat. The launch interval is the "active" cadence; the
-# sweeper classifies each tick and requests re-arms ADAPTIVELY — backing the timer off to
-# 30m after two consecutive empty ticks and snapping back to the active interval when a
-# card needs work or an operator instruction arrives (see agents/sweeper.md's "Adaptive
-# loop cadence and the CADENCE handshake"). The loop manager re-arms its own cron only
-# when the sweeper's CADENCE: line asks it to.
+# orchestrator.sh — launch the SINGLE-LOOP orchestrator as the session agent
+# (`claude --agent vibe-kanban-indie:orchestrator`) on a `/loop` timer. One long-running
+# session owns both the timer AND the tick, with a MONITOR-FIRST two-mode tick: by
+# default each tick is a cheap monitor pass over the currently active cards (their
+# sessions/executions via the delta gate — no board-wide fetches); a full board sweep
+# (inventory, find READY cards — In-Progress or Orchestrate-opt-in — resolve the
+# executor: the card's pinned agent, else the operator's last-used/default config, start
+# ONE coding agent per card, mark it In Progress) runs ONLY when a dispatch trigger
+# fires: nothing active to monitor, an active card just shipped, an operator
+# instruction, or the periodic backstop. The agent arms and re-arms its own cron
+# ADAPTIVELY — backing off to 30m after two consecutive empty ticks and snapping back to
+# the active interval when work or an operator instruction returns (see
+# agents/orchestrator.md "Adaptive cadence"). The launch interval is the "active"
+# cadence.
 #
-# The loop manager's full behavior lives in its agent definition; launching it with
-# --agent (rather than as a Task subagent) makes it the session itself. `/loop
-# <interval> <prompt>` re-runs the per-tick brief in scripts/orchestrator.prompt.md every
-# <interval>: that brief just spawns ONE sweeper (which finds READY cards with no
-# workspace — In-Progress or Orchestrate-opt-in —, resolves the executor: the card's
-# pinned agent, else the operator's last-used/default config, starts ONE coding agent per
-# card via the MCP, marks it In Progress, applies whichever opt-in directives its spawn
-# prompt names — auto-unblock / auto-answer-questions / telegram-fanout / auto-compact /
-# nudge-stuck, whose logic lives in agents/sweeper.md — and reports) and relays its
-# report. The loop manager itself handles two always-on operator-instruction routes with
+# The agent's full behavior lives in its agent definition (agents/orchestrator.md, with
+# long-form procedure in reference/*.md it Reads on demand); launching it with --agent
+# (rather than as a Task subagent) makes it the session itself. `/loop <interval>
+# <prompt>` re-runs the SHORT per-tick pointer in scripts/orchestrator.prompt.md every
+# <interval> — the pointer stays tiny (well under the shell-command length cap) because
+# the behavior is in the agent definition, not the prompt. The agent applies whichever
+# opt-in directives its spawn prompt names — auto-unblock / auto-answer-questions /
+# telegram-fanout / auto-compact / nudge-stuck, whose logic lives in
+# reference/directives.md — and handles two always-on operator-instruction routes with
 # no flag: it routes "create a card / attach a pipeline" to the intake agent, and a
 # direct "answer that questionnaire" request to the decider agent; everything else it
-# forwards to the sweeper verbatim. Default (active) interval is 5m; idle backoff is 30m.
+# handles directly (it holds the board tools). Default (active) interval is 5m; idle
+# backoff is 30m.
 #
 # Usage:
 #   scripts/orchestrator.sh            # check every 5 minutes
@@ -82,11 +86,10 @@ if [[ ! -f "${PROMPT_FILE}" ]]; then
   exit 1
 fi
 
-# `PLUGIN ROOT:` lets the loop manager forward this path to the sweeper it spawns each
-# tick: a spawned subagent does not reliably inherit CLAUDE_PLUGIN_ROOT from the
-# environment, so the sweeper's plugin-root resolution order falls back to this line
-# when present (see agents/sweeper.md). Must precede the directives block below — the
-# directives block has to stay LAST in the prompt.
+# `PLUGIN ROOT:` gives the orchestrator its plugin root when CLAUDE_PLUGIN_ROOT is not
+# in its environment: the agent's plugin-root resolution order falls back to this line
+# when present (see agents/orchestrator.md "Arming the loop"). Must precede the
+# directives block below — the directives block has to stay LAST in the prompt.
 LOOP_BODY="$(cat "${PROMPT_FILE}")
 
 PLUGIN ROOT: ${PLUGIN_DIR}"
@@ -97,9 +100,8 @@ PLUGIN ROOT: ${PLUGIN_DIR}"
 . "$(dirname "$0")/directives-block.sh"
 LOOP_BODY="${LOOP_BODY}${DIRECTIVES_BLOCK}"
 
-# Launch the orchestrator LOOP MANAGER AGENT directly (not as a Task subagent). Its
-# full behavior lives in the agent definition; the looped prompt is just the per-tick
-# brief that spawns a fresh sweeper subagent.
+# Launch the orchestrator AGENT directly (not as a Task subagent). Its full behavior
+# lives in the agent definition; the looped prompt is just a short per-tick pointer.
 #
 # In this standalone/dev mode the plugin is NOT installed via the marketplace, so
 # `--plugin-dir` loads it from this checkout for the session — that's what makes the

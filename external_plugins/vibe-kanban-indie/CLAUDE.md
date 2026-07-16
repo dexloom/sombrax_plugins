@@ -4,7 +4,7 @@ This file records how the **vibe-kanban-indie** plugin interprets a card's pipel
 the canonical ordering of pipeline items, how the **Update documentation** stage is
 performed, and the full **Wait for approval** lifecycle. It is the single source of
 truth for the **park marker** literal that `prompts/pipeline.md` (the coding agent that
-*emits* it) and `agents/sweeper.md` (the sweeper that *matches* it) both
+*emits* it) and `agents/orchestrator.md` (the orchestrator that *matches* it) both
 reference — they must stay in sync with the definition here.
 
 ## Pipeline-item conventions
@@ -24,7 +24,7 @@ those stages).
   …) — not an exact app-emitted string — to know *how* to run each (delegate spec →
   `product`, plan → `planner`, reviews → `codex`) and to spot the `Orchestrate` opt-in.
   If the app ever emits different canonical phrasing for a stage, the matching language
-  in `pipeline.md` / `sweeper.md` must be realigned to it; the **park marker** below
+  in `pipeline.md` / `orchestrator.md` must be realigned to it; the **park marker** below
   is independent of that wording because the agent emits it.
 - A card lists **only the subset of stages the operator ticked**, in the file's order
   (which follows the canonical relative order below).
@@ -150,8 +150,8 @@ AWAITING OPERATOR APPROVAL
 - The orchestrator detects a parked agent by matching the **case-sensitive substring**
   `AWAITING OPERATOR APPROVAL` in `final_message`. The marker is the load-bearing,
   byte-identical literal referenced from `prompts/pipeline.md` (producer) and
-  `agents/sweeper.md` (consumer); change it in one place and you must change it in
-  all four.
+  `agents/orchestrator.md` (consumer, with the surfacing long-form in
+  `reference/parks.md`); change it in one place and you must change it in all of them.
 - **The marker now has a second consumer: `scripts/orchestrator-delta.sh`** (the
   orchestrator's delta-polling gate). It derives `is_parked` by testing `final_message`
   for the same case-sensitive literal, and it hashes `final_message` as one term of its
@@ -176,11 +176,11 @@ AWAITING OPERATOR APPROVAL
 3. **Orchestrator surfaces.** It emits an awaiting-approval line (`<card/workspace>:
    awaiting operator approval — <summary>`) so the operator knows a decision is wanted;
    under `telegram-fanout` it mirrors that line to the operator topic. Surfacing is
-   **once per distinct park** — the sweeper records each surfaced park's **fingerprint**
+   **once per distinct park** — the orchestrator records each surfaced park's **fingerprint**
    (a digest of the park's `execution_id` + its summary line) in the `parks{}` section of
    its `orchestrator-state.json`, so an unchanged park is announced **once**, not once
    per tick. **A re-park is a distinct park** — including a **headed** re-park with an
-   identical summary, which the sweeper detects from the delta gate's POLL. A **newly** surfaced park **does** count the tick as **ACTIVE** for adaptive cadence (blocked work
+   identical summary, which the orchestrator detects from the delta gate's POLL. A **newly** surfaced park **does** count the tick as **ACTIVE** for adaptive cadence (blocked work
    is work); a park already surfaced and unchanged does **not**.
 4. **Operator decides.** The decision/instructions are relayed to the parked agent as a
    prompt via `run_session_prompt(session_id, <decision>)` — the same sanctioned MCP
@@ -195,14 +195,14 @@ AWAITING OPERATOR APPROVAL
 
 - `prompts/pipeline.md` — the coding-agent kickoff; defines the Wait-for-approval and
   Update-documentation stage behaviors (producer of the park marker).
-- `agents/sweeper.md` — recognizes/holds/surfaces the gate (consumer of the marker);
-  `nudge-stuck` exclusion, status-reflection short-circuit, report + telegram-fanout
-  surfacing, and the no-auto-resume safety rule. Spawned fresh each tick by the
-  **orchestrator loop manager**, which owns the timer and the relay, spawns one `sweeper`
-  per tick, and routes card-creation to `intake` and a direct "answer that questionnaire"
-  request to `decider` — it never reads a `final_message`, so it never matches the marker
-  itself. Owns the unified `orchestrator-state.json` (its five sections: `cadence`,
-  `sessions`, `parks`, `cards`, `lanes` — see *The sweeper state file* in `agents/sweeper.md`).
+- `agents/orchestrator.md` — recognizes/holds/surfaces the gate (consumer of the
+  marker); `nudge-stuck` exclusion, status-reflection short-circuit, report +
+  telegram-fanout surfacing, and the no-auto-resume safety rule. One long-running
+  session that owns the timer AND the tick (monitor-first two-mode loop), routes
+  card-creation to `intake` and a direct "answer that questionnaire" request to
+  `decider`, and owns the unified `orchestrator-state.json` (its five sections:
+  `cadence`, `sessions`, `parks`, `cards`, `lanes` — see `reference/state-file.md`).
+  The park-surfacing long-form lives in `reference/parks.md`.
 - `scripts/orchestrator-delta.sh` — the delta-polling gate; second consumer of the marker
   (derives `is_parked` from the same literal, and hashes `final_message` into its
   fingerprint so a park transition is never invisible to it).

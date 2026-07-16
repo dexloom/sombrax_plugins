@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 #
-# orchestrate_tg.sh — the orchestrator LOOP MANAGER (orchestrator.sh) PLUS the
+# orchestrate_tg.sh — the single-loop orchestrator (orchestrator.sh) PLUS the
 # sombrax-telegram channel, so it talks to humans and dev agents over Telegram.
 #
-# Same per-tick brief (spawn ONE fresh sweeper subagent, relay its report) + backend
-# auto-resolve as orchestrator.sh, but it additionally:
+# Same short per-tick pointer (monitor-first two-mode tick — see
+# agents/orchestrator.md) + backend auto-resolve as orchestrator.sh, but it additionally:
 #   • loads the sombrax-telegram channel into the session, and
 #   • runs in the PROJECT-MANAGER role, SUBSCRIBED TO ALL TOPICS — interacting
 #     with the human operator in the "Orchestrate" topic and with each dev agent
@@ -163,9 +163,9 @@ operator with two equally valid surfaces:
     operator's free-text reply from EITHER surface and act on it. Never stall on one
     channel.
 
-Everywhere the sweep above says "me", "surface to me", "report", or "let me say go",
-that means the OPERATOR ON BOTH surfaces — console output plus a channel_send to the
-Orchestrate topic.
+Everywhere your agent definition says "the operator", "surface", "report", or "let me
+say go", that means the OPERATOR ON BOTH surfaces — console output plus a channel_send
+to the Orchestrate topic.
 
 SENDING ON TELEGRAM — route by NUMERIC thread id (a topic NAME does not work as
 `to`). Resolve names -> ids from the listener registry
@@ -197,14 +197,13 @@ TG_EOF
 # after the Telegram addendum and after the `PLUGIN ROOT:` line, below.
 . "$(dirname "$0")/directives-block.sh"
 
-# `PLUGIN ROOT:` lets the loop manager forward this path to the sweeper it spawns each
-# tick: a spawned subagent does not reliably inherit CLAUDE_PLUGIN_ROOT from the
-# environment, so the sweeper's plugin-root resolution order falls back to this line
-# when present (see agents/sweeper.md). Must precede the directives block — the
-# directives block has to stay LAST in the prompt.
+# `PLUGIN ROOT:` gives the orchestrator its plugin root when CLAUDE_PLUGIN_ROOT is not
+# in its environment: the agent's plugin-root resolution order falls back to this line
+# when present (see agents/orchestrator.md "Arming the loop"). Must precede the
+# directives block — the directives block has to stay LAST in the prompt.
 #
-# Loop body = shared sweep + the Telegram addendum + PLUGIN ROOT + any enabled
-# directives block.
+# Loop body = shared per-tick pointer + the Telegram addendum + PLUGIN ROOT + any
+# enabled directives block.
 LOOP_BODY="$(cat "${PROMPT_FILE}")
 ${TG_ADDENDUM}
 PLUGIN ROOT: ${PLUGIN_DIR}${DIRECTIVES_BLOCK}"
@@ -215,9 +214,9 @@ PLUGIN ROOT: ${PLUGIN_DIR}${DIRECTIVES_BLOCK}"
 # CLAUDE_CHANNEL_REF for ad-hoc testing.
 CHANNEL_REF="${CLAUDE_CHANNEL_REF:-plugin:sombrax-telegram:sombrax-telegram}"
 
-# Launch the orchestrator LOOP MANAGER AGENT directly (not as a Task subagent) — its
-# full behavior lives in the agent definition; each tick it spawns a fresh sweeper
-# subagent. `--plugin-dir` loads this checkout for the
+# Launch the orchestrator AGENT directly (not as a Task subagent) — its full behavior
+# lives in the agent definition; the looped prompt is just a short per-tick pointer.
+# `--plugin-dir` loads this checkout for the
 # session so the `vibe-kanban-indie:orchestrator` agent name resolves (cd-ing here
 # does not load it); it also loads the bundled `.mcp.json`, so don't ALSO have the
 # plugin installed via the marketplace (double MCP — see ../README.md "pick one

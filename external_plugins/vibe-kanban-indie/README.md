@@ -15,15 +15,15 @@ sessions, poll executions, and unblock them when they ask for approval.
 | **`compose-pipeline` skill** | Composes the byte-exact `## Pipeline` block for a card that should run itself — discover the pipeline TOML → select stages (`orchestrate` only on an explicit ask) → render the block + the report facts, which the caller places on the card. The single source of truth for the block format. |
 | **`answer-questions` skill** | The method for answering an agent's stale question prompt (questionnaire) on the operator's behalf — ground it in the card/spec/plan, pick, submit. |
 | **`release` skill** | The self-discovering method for cutting a vibe-kanban version-bump release: anchor on `npx-cli/package.json`, discover every version location by glob (no hardcoded counts), verify/dry-run (read-only) or bump (bump npm/Cargo, refresh every `Cargo.lock` bump-only, promote the changelog, gate on a bump-only diff, commit, tag `v<target>`). |
-| **`orchestrator` agent** | The **loop manager** (`model: sonnet`; launched as the session agent via `claude --agent`, on an **adaptive** `/loop` timer — the agent arms `/loop` itself, so its tool allowlist includes `Skill` + `CronCreate`; the loop runs every 5m while there is work and backs off to every 30m after two consecutive empty ticks, snapping back to 5m when a card needs work or an operator instruction arrives). It owns the **timer and the relay only**, and holds **no board tools at all**: each tick it spawns ONE fresh **`sweeper`** subagent to run the whole board sweep, relays its report verbatim, and re-arms the loop only when the sweeper's `CADENCE:` line asks. Beyond that it handles two **always-on** operator-instruction routes itself — a "create a card…" / "attach a pipeline…" instruction is routed to the **`intake`** agent (the orchestrator never creates issues itself), and a direct "answer that questionnaire" request is routed to **`decider`** — everything else is forwarded to the sweeper verbatim. |
-| **`sweeper` agent** | The **per-tick worker** — a fresh subagent the orchestrator spawns each tick to run one full board sweep and return a short report, so the loop manager's own context never grows with board data. In one pass it: checks backend reachability, quiesces a dead standby, finds and dispatches READY cards (resolving the executor: the card's pinned agent, else the operator's last-used/default config via `/api/config`) via **one** `start_workspace` per card, and **reflects** managed-card status — for cards it owns (the `## Pipeline` Orchestrate opt-in) it reads the coding agent's state through the delta gate and advances the card to **In Review** when dev is finished + reviewed, **Done** once the merge/PR has landed (read-only — it never merges). A card's move to **Done is reported once** and the card is then dropped — Done cards are terminal and never tracked or re-announced. It applies whichever opt-in directives its spawn prompt names (`auto-unblock`, `auto-answer-questions`, `telegram-fanout`, `auto-compact`, `nudge-stuck`), then ends its report with a machine-readable `CADENCE:` line asking the loop manager to re-arm (or not). Has no `Cron*` tools and spawns no agents — it can also be run directly to force a sweep now. |
+| **`orchestrator` agent** | The **single-loop orchestrator** (`model: sonnet`; launched as the session agent via `claude --agent`, on an **adaptive** `/loop` timer — the agent arms and re-arms `/loop` itself, so its tool allowlist includes `Skill` + `CronCreate`; the loop runs every 5m while there is work and backs off to every 30m after two consecutive empty ticks, snapping back to 5m when a card needs work or an operator instruction arrives). One long-running session owns both the **timer and the tick**, with a **monitor-first two-mode tick**: by default each tick is a cheap **monitor** pass over the currently active cards — their sessions/executions through the delta gate, no board-wide fetches — and a full board **sweep** (backend reachability, quiesce a dead standby, find READY cards, resolve the executor — the card's pinned agent, else the operator's last-used/default config via `/api/config` — and dispatch **one** `start_workspace` per ready card) runs ONLY when a dispatch trigger fires: nothing active to monitor, an active card just shipped, an operator instruction, or the periodic backstop. Both modes **reflect** managed-card status — for cards it owns (the `## Pipeline` Orchestrate opt-in) it advances the card to **In Review** when the pipeline is complete but nothing landed, **Done** once the merge/PR has landed (read-only — it never merges); a card's move to **Done is reported once** and the card is then dropped. It applies whichever opt-in directives its spawn prompt names (`auto-unblock`, `auto-answer-questions`, `telegram-fanout`, `auto-compact`, `nudge-stuck`), and handles two **always-on** operator-instruction routes — a "create a card…" / "attach a pipeline…" instruction is routed to the **`intake`** agent (the orchestrator never creates issues itself), and a direct "answer that questionnaire" request is routed to **`decider`**; everything else (approve/resume a parked agent, "sweep now") it handles directly. Decision rules live inline in `agents/orchestrator.md`; long-form procedure in `reference/*.md`, Read on demand. |
 | **`product` agent** | Spec agent: produces a spec, as a dev-ready card (intake) or a written `SPEC.md` (when a coding agent spawns it for the spec stage). |
-| **`intake` agent** | Headless card creator — an operator brief in, real card(s) on the board out, no questions asked. Composes the `## Pipeline` block via `compose-pipeline` (and attaches one to an **existing** card, idempotently). Spawned by the **orchestrator** loop manager on an operator "create a card…" instruction; also usable directly. Never asks, never dispatches, never writes files. Contrast: `product` is the interactive/deep path, `intake` is the fast headless one. |
+| **`intake` agent** | Headless card creator — an operator brief in, real card(s) on the board out, no questions asked. Composes the `## Pipeline` block via `compose-pipeline` (and attaches one to an **existing** card, idempotently). Spawned by the **orchestrator** on an operator "create a card…" instruction; also usable directly. Never asks, never dispatches, never writes files. Contrast: `product` is the interactive/deep path, `intake` is the fast headless one. |
 | **`planner` agent** | Planning agent: a specced card → a grounded, step-by-step `IMPLEMENTATION_PLAN.md` written at the workspace root. A coding agent spawns it for the plan stage. |
-| **`decider` agent** | Answers an agent's stale question prompt on the operator's behalf (runs `answer-questions`). The **orchestrator** loop manager spawns it directly when an operator asks it to "answer that questionnaire"; the **`sweeper`** runs the same method inline (it cannot spawn a subagent) after a grace window when the `auto-answer-questions` directive is enabled; you can also run `decider` directly to clear a stuck questionnaire. |
+| **`decider` agent** | Answers an agent's stale question prompt on the operator's behalf (runs `answer-questions`). The **orchestrator** spawns it directly when an operator asks it to "answer that questionnaire", and after a grace window when the `auto-answer-questions` directive is enabled; you can also run `decider` directly to clear a stuck questionnaire. |
 | **`release` agent** | Cuts a vibe-kanban version-bump release as an ordinary card (runs the `release` skill): verify/dry-run the current version state, or bump + refresh locks + promote the changelog + gate + commit + tag. Run it directly, or dispatch a release-flavored card to it. Stops at a correct local commit + tag — it never pushes the tag or publishes. |
 | **`prompts/`** | Prompts for the self-driving coding agent: `pipeline.md` (the kickoff — work your pipeline to completion, delegating spec→`product`, plan→`planner`, reviews→`codex`), `plan.md` (the plan shape), `codex-review.md` (the codex review method). |
-| **`scripts/`** | Launchers for a looped orchestrator loop manager (with optional Telegram), plus backend auto-resolution. |
+| **`reference/`** | The orchestrator's read-on-demand long-form contracts (kept out of the agent definition so the loop stays cheap): `delta-gate.md`, `parks.md`, `state-file.md`, `sweep.md`, `directives.md`, `report.md`. |
+| **`scripts/`** | Launchers for the looped orchestrator (with optional Telegram), plus backend auto-resolution. |
 | **bundled MCP server** | Registers the `vibe-kanban` MCP server (tools appear as `mcp__plugin_vibe-kanban-indie_vibe-kanban__*`). |
 
 ## Install
@@ -39,7 +39,7 @@ sessions, poll executions, and unblock them when they ask for approval.
 ### Skill / agent names once installed
 
 - Skills: `vibe-kanban-indie:vibe-kanban`, `vibe-kanban-indie:product-manager`, `vibe-kanban-indie:compose-pipeline`, `vibe-kanban-indie:answer-questions`, `vibe-kanban-indie:release`
-- Agents: `orchestrator`, `sweeper`, `product`, `planner`, `decider`, `intake`, `release`. The `orchestrator` is meant to be launched as the session agent (`claude --agent vibe-kanban-indie:orchestrator`, as the `scripts/` do) — it is a lean loop manager and holds no board tools; `sweeper` is spawned by the orchestrator once per tick to run the actual board sweep (and is usable directly to force a sweep now); `product`/`planner` are spawned by the coding agent (and usable directly via the Task/Agent tool); `decider` is spawned by the orchestrator directly on an operator's "answer that questionnaire" request, and its method is run inline by the sweeper under the `auto-answer-questions` directive (and usable directly to clear a stale questionnaire); `intake` is spawned by the orchestrator on an operator "create a card…" instruction (and usable directly for fast headless capture); `release` is invoked directly (or dispatched to) to cut or verify a version-bump release.
+- Agents: `orchestrator`, `product`, `planner`, `decider`, `intake`, `release`. The `orchestrator` is meant to be launched as the session agent (`claude --agent vibe-kanban-indie:orchestrator`, as the `scripts/` do) — one long-running loop that holds the board tools and monitors/sweeps inline (a manual sweep = telling it "sweep now"); `product`/`planner` are spawned by the coding agent (and usable directly via the Task/Agent tool); `decider` is spawned by the orchestrator on an operator's "answer that questionnaire" request and under the `auto-answer-questions` directive (and usable directly to clear a stale questionnaire); `intake` is spawned by the orchestrator on an operator "create a card…" instruction (and usable directly for fast headless capture); `release` is invoked directly (or dispatched to) to cut or verify a version-bump release.
 - MCP tools: `mcp__plugin_vibe-kanban-indie_vibe-kanban__<tool>`
 
 ## Prerequisites
@@ -149,7 +149,7 @@ workspace and starts its first coding-agent session; returns `workspace_id`,
 
 ## The per-tick progress digest
 
-Every sweeper tick with activity renders one fixed-width table — one row per card that moved:
+Every tick with activity renders one fixed-width table — one row per card that moved:
 
 ```
 ┌────────┬───────────┬─────────────────────────────────────────────────────────────────────────────┐
@@ -177,16 +177,16 @@ Every sweeper tick with activity renders one fixed-width table — one row per c
 
 ## Orchestrator directives (opt-in)
 
-Beyond dispatch + status reflection — done every tick by the **`sweeper`** the orchestrator
-spawns — and the **always-on** operator-instruction routes the orchestrator loop manager
-handles itself (a "create a card…" / "attach a pipeline…" instruction is handled by spawning
-the **`intake`** agent, and a direct "answer that questionnaire" request by spawning
-**`decider`**; no flag, no env toggle for either) — the sweeper does **nothing more**
-**unless a directive is turned on at spawn time**. Directives are named as flags in the spawn
-prompt's `Directives enabled for this run:` block (the `scripts/` launchers inject it
-from env toggles — see [`scripts/README.md`](scripts/README.md), and the orchestrator
-forwards it to the sweeper byte-for-byte each tick); their logic lives in
-the `sweeper` agent definition. All five are available, each with its env toggle:
+Beyond dispatch + status reflection — the orchestrator's core per-tick job — and the
+**always-on** operator-instruction routes it handles itself (a "create a card…" /
+"attach a pipeline…" instruction is handled by spawning the **`intake`** agent, and a
+direct "answer that questionnaire" request by spawning **`decider`**; no flag, no env
+toggle for either) — the orchestrator does **nothing more** **unless a directive is
+turned on at spawn time**. Directives are named as flags in the spawn prompt's
+`Directives enabled for this run:` block (the `scripts/` launchers inject it from env
+toggles — see [`scripts/README.md`](scripts/README.md)); their logic lives in the
+orchestrator's agent definition and `reference/directives.md`. All five are available,
+each with its env toggle:
 
 - **`auto-unblock`** — `ORCH_AUTO_UNBLOCK=1` — approves **routine, plan-sanctioned
   tool-permission** requests via `respond_to_approval(decision='approve')`; escalates
@@ -200,7 +200,7 @@ the `sweeper` agent definition. All five are available, each with its env toggle
   useful with `orchestrate_tg.sh`.
 - **`auto-compact`** — `ORCH_AUTO_COMPACT=1` (+ `ORCH_COMPACT_THRESHOLD`) — keeps
   long-running **headed** Claude Code agents (`CLAUDE_CODE_HEADED`) healthy. Each
-  sweep tick the sweeper measures every running headed agent's context-window usage
+  tick the orchestrator measures every running headed agent's context-window usage
   from its Claude Code transcript (`get_execution` → `claude_transcript_path`; usage ≈
   the last assistant message's `input + cache_creation + cache_read` tokens) and, when
   it exceeds a configurable threshold (**default 300000 tokens**), sends `/compact` to
@@ -263,7 +263,7 @@ placement above is what protects every other repo the orchestrator drives.
   tool-permission requests (escalating anything destructive/expensive/off-plan) and
   answer only stale questionnaires — and **neither ever clears the Wait-for-approval
   operator gate**.
-- **The orchestrator/sweeper never merges and never opens a PR.** The **coding
+- **The orchestrator never merges and never opens a PR.** The **coding
   agent** performs delivery itself, and the operator authorizes it **up front** by
   ticking the default-off `merge` / `pr` stage on the card — there is no separate
   merge go-ahead to wait for.
