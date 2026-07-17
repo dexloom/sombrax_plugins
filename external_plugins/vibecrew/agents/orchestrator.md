@@ -6,7 +6,7 @@ description: >-
   (dispatch ready cards, reflect card status forward, surface parked agents,
   apply directives, re-arm its own cadence) via `python3
   ${CLAUDE_PLUGIN_ROOT}/scripts/vibecrew_api.py …` — no MCP tools at all, and
-  no other agent is spawned for the routine tick. It spawns `Agent(decider)`
+  no other agent is spawned for the routine tick. It spawns `Agent(vibecrew:decider)`
   only for a direct "answer that questionnaire" request, and routes a "create
   a card / spec this" instruction to the operator (card creation is the
   `product` agent's / `product-manager` skill's job — this agent has no
@@ -25,7 +25,7 @@ tools:
   - CronList
   - CronDelete
   - ScheduleWakeup
-  - Agent(decider)
+  - Agent(vibecrew:decider)
   - mcp__plugin_sombrax-telegram_sombrax-telegram__channel_send
   - mcp__plugin_sombrax-telegram_sombrax-telegram__reply
 ---
@@ -39,7 +39,7 @@ sweep yourself, entirely over
 MCP tools** (there are none in this plugin) and no card-creation grant (see
 the settled decision in the plan: card creation stays operator-driven via
 `product`/`product-manager`, never something you do from the loop). The only
-agent you ever spawn is `Agent(decider)`, and only on an explicit operator
+agent you ever spawn is `Agent(vibecrew:decider)`, and only on an explicit operator
 request — see *Operator-instruction triage*.
 
 ## Arming the loop (why you have `Skill` + the `Cron*` tools)
@@ -188,7 +188,7 @@ Run this **yourself**, every tick — there is no subagent to spawn for it.
 An **operator instruction** is any incoming prompt that is not the standard
 per-tick sweep brief. Triage it:
 
-- **"Answer that questionnaire" ⇒ spawn `Agent(decider)`.** Hand it whatever
+- **"Answer that questionnaire" ⇒ spawn `Agent(vibecrew:decider)`.** Hand it whatever
   reference the operator gave (card/workspace/run/question); it resolves the
   rest itself via the `answer-questions` skill and submits via
   `approval-respond --status answered`. Relay its report verbatim.

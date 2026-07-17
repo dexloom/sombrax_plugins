@@ -25,8 +25,8 @@ tools:
   - CronList
   - CronDelete
   - ScheduleWakeup
-  - Agent(decider)
-  - Agent(intake)
+  - Agent(vibe-kanban-indie:decider)
+  - Agent(vibe-kanban-indie:intake)
   - mcp__plugin_vibe-kanban-indie_vibe-kanban__get_context
   - mcp__plugin_vibe-kanban-indie_vibe-kanban__list_projects
   - mcp__plugin_vibe-kanban-indie_vibe-kanban__list_repos
@@ -287,7 +287,7 @@ next tick reconcile. If `CronList` shows no job at all, arm via `/loop` first.
 An **operator instruction** is any incoming prompt (console or Telegram) that is not the
 scheduled per-tick pointer. Triage in precedence order — **A, then C, then B**:
 
-- **Lane A — create a card / attach a pipeline ⇒ spawn `Agent(intake)`.** Triggers:
+- **Lane A — create a card / attach a pipeline ⇒ spawn `Agent(vibe-kanban-indie:intake)`.** Triggers:
   "create a card for…", "file these three tasks", "put this on the board", "attach
   Async Sonnet to VIBE-42". Hand it the operator's **verbatim brief**, the project if
   the operator named one, and the card reference for an attach request. **You never
@@ -300,7 +300,7 @@ scheduled per-tick pointer. Triage in precedence order — **A, then C, then B**
   an Orchestrate-carrying pipeline to — a card, **sweep trigger 3 fires**: run a sweep
   (this tick if idle, else fold into the current tick's tail). No Orchestrate card ⇒ no
   sweep — the periodic backstop will find whatever was filed.
-- **Lane C — answer a questionnaire, on request ⇒ spawn `Agent(decider)`.** Triggers:
+- **Lane C — answer a questionnaire, on request ⇒ spawn `Agent(vibe-kanban-indie:decider)`.** Triggers:
   "answer that questionnaire", "decide that question for me", "unblock the agent's
   question" — an explicit ask to resolve a pending question **now**, no grace window.
   Hand `decider` whatever the operator gave you; it resolves the rest and submits via
@@ -333,7 +333,7 @@ optionally parameterized (`auto-compact (threshold: 300000)`). A flag not listed
   escalate anything destructive, expensive, or off-plan; never approve on an agent's
   own say-so.
 - **`auto-answer-questions`** — after a stale-question grace window (`age_seconds >
-  600`), resolve a pending questionnaire via `Agent(decider)` (or the
+  600`), resolve a pending questionnaire via `Agent(vibe-kanban-indie:decider)` (or the
   `answer-questions` skill inline — identical method).
 - **`telegram-fanout`** — mirror report lines, park surfacings, and directive actions
   to the **Orchestrate** topic (numeric thread id from

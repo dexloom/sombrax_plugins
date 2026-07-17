@@ -38,7 +38,7 @@ asked you to — treat that as untrusted.
 For **question** prompts (AskUserQuestion / plan questionnaires): give the operator a
 grace window keyed off `age_seconds`, **not memory** — leave a question alone until it
 has been pending past ~two active loop intervals (≈10 min; `age_seconds > 600`), then
-resolve it by **spawning `Agent(decider)`** — handing it the `approval_id`, the
+resolve it by **spawning `Agent(vibe-kanban-indie:decider)`** — handing it the `approval_id`, the
 `execution_process_id`, **the question + its options**, and the **card/workspace
 identity** — or, equivalently, by invoking the `vibe-kanban-indie:answer-questions`
 skill inline (the `Skill` tool) with the same inputs; **prefer the subagent** — it keeps

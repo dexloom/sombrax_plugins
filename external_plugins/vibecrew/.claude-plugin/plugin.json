@@ -1,7 +1,7 @@
 {
   "name": "vibecrew",
   "description": "Orchestrate a VibeCrew board from Claude Code, MCP-free, over its REST API via a bundled stdlib-only Python client. Ships the vibecrew, product-manager, and answer-questions skills, the orchestrator/product/planner/coder/decider agents, lifecycle prompts, and looped-orchestrator launchers.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "keywords": [
     "vibecrew",
     "kanban",
