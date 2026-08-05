@@ -132,15 +132,25 @@ vibe-kanban-indie's layout and was false here; it is corrected everywhere.
 
 ## 7. Follow-ups (file as cards on the VibeCrew board)
 
-1. **Upstream the TOML changes** into
-   `CrewKit/Sources/CrewPipeline/Resources/DefaultPipelines/` (+
-   `BundledPipelineTests`) so fresh installs get merge-on + the gates without
-   the plugin's overrides; until then the deployed `~/.vibecrew/pipelines/`
-   copies are authoritative and shadow the bundled set by name.
-2. **Rename the bundled Claude pipelines** to match the `async-claude-*`
-   file convention (and, if wanted, display names "Async Claude …") — an
-   app-side rename; the overrides keep the current `name =` values until
-   then, because that is the shadowing key.
+1. ~~**Upstream the TOML changes**~~ — **done** (same day). The app's
+   `CrewKit/Sources/CrewPipeline/Resources/DefaultPipelines/` now carries the
+   edits directly: Claude files renamed `async-claude-*.toml` (display `name =`
+   unchanged, which is the registry's shadowing key), merge default-on, the
+   PLAN-FACTS / PLAN-GATE / CODER-MODEL late binding, review caps, and the
+   artifact gate; all 136 `CrewPipelineTests` pass, including the byte-identity
+   check across the Async six. The bundled agent payloads
+   (`CrewPlugins/Resources/Plugins/payloads/`) gained the same rules in **both**
+   their `claude/` and `opencode/` variants — planner (plan facts +
+   `VK-ESCALATE` envelope), coder (`VK-ESCALATE` + paperwork hygiene), product
+   (worktree truth) — and `manifest.json` bumps those three to `1.1.0` so the
+   Plugin Manager offers them as updates. **The app bundle is now canonical**;
+   the deployed `~/.vibecrew/pipelines/` copies shadow it by name and can be
+   deleted once the app is rebuilt (`rm ~/.vibecrew/pipelines/*.toml`), with
+   the plugin's `pipelines/` + generator kept as the upstreaming tool.
+2. **Rename the display names too** (`name = "Async Claude Sonnet"`) — not done
+   deliberately: the registry shadows bundled pipelines *by name*, and cards
+   record `pipeline.name` in `extension_metadata`, so a display rename orphans
+   existing cards' labels and needs the deployed overrides renamed in lockstep.
 3. **`extension_metadata` over REST** (accept it in `CreateCardBody`) so
    plugin-filed cards get first-class pipeline labels in the UI instead of
    description-only blocks.

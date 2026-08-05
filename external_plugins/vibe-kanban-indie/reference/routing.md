@@ -262,6 +262,21 @@ design record with the full numbers is the **vibecrew** plugin's
   `GET /api/issue-relationships?issue_id=` (outgoing rows only) — see
   `reference/sweep.md` and the *Lanes* sections in `product-manager` /
   `intake`.
-- **Follow-ups:** upstream the TOML edits + `async-opencode-glm.toml` into the
-  app's `BUNDLED` list; a relationships *read* MCP tool (the gate currently
-  rides REST via curl); rename the bundled files to match `async-claude-*`.
+- **Upstreamed into the app the same day** (`~/VibeCoding/vibe-kanban-indie`):
+  `assets/pipelines/` now holds the renamed `async-claude-*.toml`, the new
+  `async-opencode-glm.toml`, and `quick.toml`, all registered in `BUNDLED`
+  (`crates/services/src/services/pipelines/mod.rs`); the three old filenames
+  are listed in `RETIRED` with two preserved shipped versions each, so a
+  pristine copy is swept from an existing install instead of showing the same
+  pipeline twice. The Settings **Reset** button now covers every bundled id
+  (its frontend list had drifted), the bundled OpenCode subagents (`vk-intake`,
+  `vk-sweeper`) learned routing + lanes + `VK-ESCALATE`, and the docs and
+  CHANGELOG record the family split. **The app assets are now canonical** —
+  the live `~/.vibe-kanban/pipelines/` copies are a rebuilt-app-independent
+  fallback, and `scripts/update_pipelines_routing.py` was the one-shot
+  migration, not an ongoing source of truth. Note the app never overwrites an
+  existing pipeline file: picking up a changed bundled pipeline needs Settings
+  → Reset (or deleting the file).
+- **Remaining follow-ups:** a relationships *read* MCP tool (the dependency
+  gate currently rides the REST route via curl); calibrate the 40 KB gate and
+  the tier thresholds after ~20 routed cards.

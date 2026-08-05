@@ -201,15 +201,24 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--source", required=True, type=pathlib.Path)
     ap.add_argument("--out", required=True, type=pathlib.Path)
+    ap.add_argument(
+        "--header",
+        choices=["plugin", "none"],
+        default="plugin",
+        help="'plugin' stamps the override banner (files that shadow the app's "
+        "bundled set); 'none' writes bare files, for regenerating the app's OWN "
+        "canonical DefaultPipelines in place.",
+    )
     args = ap.parse_args()
     args.out.mkdir(parents=True, exist_ok=True)
+    header = HEADER if args.header == "plugin" else ""
 
     outputs = dict(ASYNC_FILES)
     outputs["basic.toml"] = "basic.toml"
     for src_name, out_name in outputs.items():
         src = (args.source / src_name).read_text(encoding="utf-8")
         edits = BASIC_EDITS if src_name == "basic.toml" else ASYNC_EDITS
-        (args.out / out_name).write_text(HEADER + apply(src, edits, src_name), encoding="utf-8")
+        (args.out / out_name).write_text(header + apply(src, edits, src_name), encoding="utf-8")
         print(f"generated {out_name}  (from {src_name})")
 
 
