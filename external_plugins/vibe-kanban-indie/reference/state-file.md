@@ -46,7 +46,8 @@ gate's own state file, `orchestrator-delta.json`, is a **separate, sibling** fil
     "<issue_id>": {
       "updated_at": "<the stamp of the description this class was derived from>",
       "class": "managed",
-      "executor_pin": "CODEX"
+      "executor_pin": "CODEX",
+      "routing": "medium"
     }
   },
   "lanes": {
@@ -66,8 +67,10 @@ gate's own state file, `orchestrator-delta.json`, is a **separate, sibling** fil
   first-observation baseline (see `reference/directives.md` → `nudge-stuck`). The
   fingerprint's encoding is pinned (below).
 - **`parks`** — `{ <session_id>: <16-hex park digest> }` — see `reference/parks.md`.
-- **`cards`** — `{ <issue_id>: { updated_at, class, executor_pin } }` — the
-  card-classification cache, see below.
+- **`cards`** — `{ <issue_id>: { updated_at, class, executor_pin, routing } }` — the
+  card-classification cache, see below. `routing` is the complexity tier the
+  `classify-task` skill stamped on the card's description as a `**Routing:**` line
+  (`reference/sweep.md` → *Deriving `routing`*); `null` when the card carries none.
 - **`lanes`** — `{ <workspace_id>: "<A–Z, 1–2 letters>" }` — the per-workspace **lane letter** shown
   in the progress digest's `Lane` column, keyed by **`workspace_id`** (not issue id, not session id: a lane is
   a property of the *workspace*, and outlives any one session). **The value is ONLY the letter.** The
@@ -113,6 +116,7 @@ governs both the write path and the read path (validate-on-read, below):**
 | `cards.<id>.updated_at` | ISO-8601 timestamp, verbatim from the API |
 | `cards.<id>.class` | enum: exactly `managed` or `plain` |
 | `cards.<id>.executor_pin` | a known `BaseCodingAgent` key **or `null`** |
+| `cards.<id>.routing` | enum: exactly `trivial`, `light`, `medium`, or `heavy` — **or `null`** |
 | `lanes.<workspace_id>` | `^[A-Z]{1,2}$` — a bare letter, nothing else |
 | every object key (`sessions`/`parks`/`cards`/`lanes`) | a UUID |
 
@@ -187,15 +191,22 @@ whether it **has a workspace**, its **PR fields** — is read **fresh every swee
   `OPENCODE`, `CURSOR_AGENT`, `QWEN_CODE`, `COPILOT`, `DROID`). **Otherwise store `null`**,
   report the unrecognized pin loudly, and fall back to the config's last-used executor.
   **Never store the raw string.**
+- **`routing`** — the complexity tier the `classify-task` skill stamped on the card as
+  a `**Routing:** <tier> → …` description line. Same discipline as `executor_pin`: it
+  is read out of card prose, so validate into a constrained token — accept **only** an
+  exact `trivial` / `light` / `medium` / `heavy`, **otherwise store `null`** (no such
+  line, i.e. a pre-routing card, is also `null` — normal, not an error). **Never store
+  the raw line.** Derivation details: `reference/sweep.md` → *Deriving `routing`*.
 
 **Cache hit** ⇔ `cards[I.id]` exists (and **survived validate-on-read**) **AND**
 `cards[I.id].updated_at == S.updated_at` — the **fresh** `list_issues` summary's
 `updated_at` — compared by **exact string equality** (never parsed, never ordered) ⇒ use
-the cached `class` / `executor_pin`; **do not call `get_issue`**.
+the cached `class` / `executor_pin` / `routing`; **do not call `get_issue`**.
 
 **Cache miss** (entry absent, dropped, or the stamps differ) ⇒ `get_issue(I.id)`, derive
-`class` and a **validated** `executor_pin` from the fresh description, and write
-`cards[I.id] = { updated_at: <the updated_at get_issue returned>, class, executor_pin }`.
+`class`, a **validated** `executor_pin`, and a **validated** `routing` from the fresh
+description, and write `cards[I.id] = { updated_at: <the updated_at get_issue
+returned>, class, executor_pin, routing }`.
 **Store `get_issue`'s `updated_at`, not the summary's** — the cached stamp must be the
 stamp of the *very description that produced the cached class*.
 

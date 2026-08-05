@@ -100,14 +100,20 @@ directly — they are the source of truth:
 - **Set priority only when warranted** (`urgent`/`high`/`medium`/`low`), when the
   brief implies urgency or the user said so; otherwise omit and let the board
   default stand. Add tags via `add_issue_tag` only when they add real signal.
-- **When the user names a pipeline, embed it — don't dispatch it.** Invoke the
-  `compose-pipeline` skill (`vibe-kanban-indie:compose-pipeline`) — it reads the
-  actual configs from `~/.vibe-kanban/pipelines/*.toml` (never invents stages) and
-  composes the `## Pipeline` block; append the block it hands back to the card's
-  description. That skill is the format source of truth, not this summary. Stages
-  default to every stage with `default_enabled = true` unless the user names ones
-  to add or drop; the `orchestrate` stage is added only on an explicit ask to
-  execute/auto-drive, never by default. "Execute Async Fable" means embedding
+- **Classify every card, attach the routed pipeline by default — embed, don't
+  dispatch.** After the spec is drafted, invoke the `classify-task` skill
+  (`vibe-kanban-indie:classify-task`): five-axis rubric → complexity tier
+  (trivial / light / medium / heavy) → routed pipeline + stage toggles + the
+  one-line `**Routing:**` record. Then invoke the `compose-pipeline` skill
+  (`vibe-kanban-indie:compose-pipeline`) with the user's phrasing plus that
+  output — it reads the actual configs from `~/.vibe-kanban/pipelines/*.toml`
+  (never invents stages) and composes the `## Pipeline` block; place the Routing
+  line, then the block it hands back, at the end of the card's description. Those
+  skills are the source of truth for the rubric and the format, not this summary.
+  A pipeline/tier/model the **user names** beats the routed choice (note the
+  disagreement); "no pipeline" files the card bare with routing still reported;
+  the `orchestrate` stage is added only on an explicit ask to execute/auto-drive,
+  never by default and never by routing. "Execute Async Fable" means embedding
   that pipeline block into the card's description — it never means starting a
   workspace or dispatching an agent yourself.
 - **Never dispatch or destroy.** You cannot and must not start workspaces, run

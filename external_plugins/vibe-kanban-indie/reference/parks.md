@@ -205,7 +205,14 @@ without the others; do not weaken this rule into "best effort".
    - **Outer fail-open** ⇒ no trustworthy line; `get_execution` for every session as
      the fallback dictates; treat as "no trusted-POLL signal available" (clause (c)
      unavailable — see the accepted residual above).
-2. `is_parked == false` ⇒ `delete parks[session_id]`; no surface line. **Done.**
+2. `is_parked == false` ⇒ **on a POLL** (you hold the fresh `final_message`): test it
+   yourself for `VK-ESCALATE:` at the start of its first line — if present, this is an
+   **escalation park** the script cannot see: proceed to step 3 as if `is_parked` were
+   `true` (summary = that first line, verbatim). If it carries neither the approval
+   marker nor `VK-ESCALATE:`, `delete parks[session_id]`; no surface line. **Done.**
+   **On a SKIP with an entry present: do NOT delete, carry it forward silently** — the
+   script's `is_parked` never reflects escalation parks; see *Escalation parks* →
+   Amendments 1–2 at the end of this file. (SKIP with no entry ⇒ nothing to do.)
 3. `is_parked == true`:
    - **SKIP** and `parks[session_id]` **present** ⇒ every digest input provably
      unchanged and **no re-park possible** ⇒ **silent**, carry the entry forward.
@@ -228,3 +235,42 @@ without the others; do not weaken this rule into "best effort".
 - **Delete** when the session is no longer in this tick's non-archived
   workspace/session inventory (workspace archived, card Done). A re-created session gets
   a fresh UUID, so it is correctly a fresh, un-surfaced park.
+
+## Escalation parks — `VK-ESCALATE:` rides the same store
+
+A second park kind flows through this exact machinery: a coding agent that found its
+card **misclassified below its real size** stops and makes the **first line** of its
+`final_message` the case-sensitive marker **`VK-ESCALATE:`** (producer + format defined
+once, in the plugin's `CLAUDE.md`; routed cards carry a `**Routing:**` tier from the
+`classify-task` skill, and this marker is that tier's runtime tripwire).
+
+Everything above applies unchanged, with two definitions and two amendments:
+
+- **Summary extraction:** for an escalation park, `park_summary` is the **first line of
+  `final_message`, verbatim** (it starts with `VK-ESCALATE:`). Detection is **your**
+  substring test on `final_message` — run it whenever you actually hold a
+  `final_message` (a POLL, or the recovery rule's `get_execution`), right where you test
+  for the approval marker.
+- **Fingerprint & surfacing:** identical — `park_fingerprint(execution_id, summary)`,
+  same `parks{}` section, same three-clause surface rule, same heredoc safety recipe.
+  The report line reads `<card/workspace>: escalation requested — <the line>` (plus the
+  re-route hint — see `agents/orchestrator.md`).
+- **Amendment 1 — the gate's `is_parked` NEVER reflects escalation parks.**
+  `scripts/orchestrator-delta.sh` derives `is_parked` from the approval literal only, so
+  an escalated session reads `is_parked: false` on its gate lines. Therefore, on a
+  **SKIP** line with a `parks{}` entry **present**, carry the entry forward silently
+  **regardless of the line's `is_parked`** — an unchanged digest means an unchanged
+  `final_message`, so whichever park produced the entry is still in force. (For
+  approval parks this changes nothing: unchanged `final_message` ⇒ the literal is still
+  there ⇒ the script reports `true` anyway. `is_parked: false` on a SKIP with an entry
+  present can only mean the entry is an escalation park the script cannot see.)
+- **Amendment 2 — deletion needs the message, not the boolean.** Delete a `parks{}`
+  entry only when you hold a **fresh `final_message` that carries neither marker** (a
+  POLL after resume/re-dispatch), or when the session leaves the non-archived inventory
+  (the pruning rule above, unchanged). Never delete an entry off a SKIP line's
+  `is_parked: false` alone.
+
+The delta gate still guarantees an escalation is never missed for the same reason the
+approval gate is never missed: the marker lives in `final_message`, the gate hashes
+`final_message` into its fingerprint, so the transition into (or out of) the escalated
+state always forces a POLL.

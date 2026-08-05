@@ -88,11 +88,21 @@ excluded by the filter), then classify each candidate from its description —
 - **Cache hit** ⇔ `cards[I.id]` exists (and **survived validate-on-read**) **AND**
   `cards[I.id].updated_at` equals the candidate's **fresh** `list_issues.updated_at`,
   compared by **exact string equality** (never parsed, never ordered) ⇒ use the cached
-  `class` / `executor_pin`; **do not call `get_issue`**.
+  `class` / `executor_pin` / `routing`; **do not call `get_issue`**.
 - **Cache miss** — entry absent, **DROPPED** by validate-on-read, or the stamps differ
-  ⇒ `get_issue(I.id)`, derive `class` and a **validated** `executor_pin` from the fresh
-  description, and store `cards[I.id] = { updated_at: <get_issue's stamp>, class,
-  executor_pin }`.
+  ⇒ `get_issue(I.id)`, derive `class`, a **validated** `executor_pin`, and a
+  **validated** `routing` from the fresh description, and store `cards[I.id] =
+  { updated_at: <get_issue's stamp>, class, executor_pin, routing }`.
+- **Deriving `routing`** (the classification the `classify-task` skill stamped on the
+  card at intake): find a description line beginning `**Routing:** ` — the card's
+  routing record, placed directly **above** the `## Pipeline` block by
+  `product`/`intake`. Take the first word after `**Routing:** ` and accept it **only**
+  if it is exactly one of `trivial`, `light`, `medium`, `heavy`; anything else (or no
+  such line — normal for pre-routing cards) ⇒ store **`null`**. Never store the raw
+  line. Routing is **read-only context for you**: the tier explains which pipeline the
+  card carries, and you name it in the dispatch report — you never re-route, re-tier,
+  or edit the card's pipeline because of it (re-routing is `intake`'s job, on an
+  operator instruction or after a surfaced `VK-ESCALATE` park).
 
 Do **not** conclude a Todo card has no opt-in because the list summary doesn't show
 one — the summary *never* shows one; you must open the card (`get_issue`, or a cache
@@ -170,12 +180,13 @@ you resolved above. Build the call:
   — `cards{}` never supplies the `{{TASK}}` description**, cache hit or not (the cache
   only ever eliminates the *classification* `get_issue`, never this one). Read
   `${CLAUDE_PLUGIN_ROOT}/prompts/pipeline.md`, fill `{{TASK}}` with the card's title +
-  description (the description already carries the `## Pipeline` block, so the coding
-  agent reads its own stage list from there) and `{{BASE_BRANCH}}` with the base
-  branch (default `main`). Pass that filled text as `prompt`. Putting the kickoff in
-  this initial `start_workspace` prompt is what makes the agent self-drive — do **not**
-  follow it with any separate prompt (that would launch a second concurrent agent in
-  the same worktree).
+  description (the description already carries the `## Pipeline` block **and the
+  `**Routing:**` line when the card was classified at intake** — passing it through
+  verbatim IS how the coding agent reads its classification; never strip or rewrite
+  either) and `{{BASE_BRANCH}}` with the base branch (default `main`). Pass that
+  filled text as `prompt`. Putting the kickoff in this initial `start_workspace`
+  prompt is what makes the agent self-drive — do **not** follow it with any separate
+  prompt (that would launch a second concurrent agent in the same worktree).
 - **`executor`** — the resolved key (card pin → last-used config); **`variant`** if
   the config provided one.
 - **`issue_id`** — the card id, so the workspace is linked to the card.
@@ -183,6 +194,14 @@ you resolved above. Build the call:
   title); `start_workspace` requires a non-empty name.
 - **`repositories`** — `[{ repo_id, branch }]`; resolve `repo_id` via `list_repos`,
   `branch` = the base branch.
+
+When several cards are ready in one sweep, dispatch the **lighter tiers first**
+(`trivial` → `light` → `medium` → `heavy`, unrouted last within their column order) —
+quick wins clear the board's WIP fastest and a heavy card's long run never delays
+them. Name each card's tier in the dispatch report line (e.g. `dispatched AQUA-31
+(light → Async Sonnet, CLAUDE_CODE)`); say `unrouted` when `routing` is `null` — an
+unrouted card with an Orchestrate opt-in dispatches exactly as before, routing is
+never a dispatch precondition.
 
 `start_workspace` returns `workspace_id`, `session_id`, and `execution_id` — record them
 in the retained active set (they are also re-derivable from the API at any time). After

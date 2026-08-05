@@ -267,6 +267,18 @@ the exact order given, around the implementation.
   (an Async Fable card pinned on sonnet spawns its subagents with `model: 'sonnet'`,
   even though the stage prompts say `model: 'fable'`). **Absent a pin, nothing changes:**
   spawn with whatever model the stage prompt names.
+- **Routing line (if the card carries one):** a description line
+  `**Routing:** <tier> → <pipeline> — …` (above the Pipeline block) is the record of
+  the card's complexity classification — why *this* pipeline with *these* stages was
+  chosen. It is **informational, not a directive**: the stage list already reflects it,
+  so do not re-classify, add, or drop stages because of it. Its one runtime effect is
+  the **escalation tripwire**: if a `planner`/`coder` subagent's report **leads with a
+  line starting `VK-ESCALATE:`** — or you yourself hit a stage's inline tripwire — the
+  card is misclassified below its real size. **Do not push through and do not
+  re-route yourself:** commit any safe work, then STOP and make the **first line of
+  your final message** that exact `VK-ESCALATE: <tier>-><proposed-tier> — <evidence>`
+  line (park semantics, same as the approval gate: advance no later stage, wait). The
+  orchestrator surfaces it and the operator re-routes the card.
 - **Fallback:** if you **can't** spawn the `product`/`planner` subagents — e.g. you're
   not a Claude Code agent, or have no Task/Agent tool or those subagents aren't
   available — then **write `SPEC.md` / `IMPLEMENTATION_PLAN.md` yourself** (follow the
@@ -283,6 +295,9 @@ Keep going on your own through the whole pipeline. Stop and surface only when:
 - you reach a **Wait for approval** stage your card lists — park at the operator gate
   (commit first, emit the `AWAITING OPERATOR APPROVAL` marker, then wait for the
   operator's prompt), or
+- the **escalation tripwire** fires (a subagent report or an inline stage tripwire
+  leads with `VK-ESCALATE:`) — commit safe work, emit that line as the **first line of
+  your final message**, then wait for the re-route (see *Routing line* above), or
 - the pipeline is **complete** — report done. (A card listing `merge`/`pr` has already had
   you perform it by this point; a card listing neither ends here, and the operator
   delivers.)

@@ -100,6 +100,25 @@ Follow the structure in `${CLAUDE_PLUGIN_ROOT}/prompts/plan.md`:
 
 Keep each step small enough to be one focused coding turn.
 
+## The escalation tripwire — say it, don't absorb it
+
+The card may carry a `**Routing:**` line (from the `classify-task` skill): its
+complexity tier — trivial / light / medium / heavy — is the **size envelope** your
+grounded plan is expected to fit. Envelopes: **light** ≤ ~6 steps touching ≤ ~5
+files; **medium** ≤ ~12 steps / ≤ ~12 files; **heavy** is unbounded. If grounding
+blows the envelope — more steps/files than the tier prices, an open **design
+decision** the spec never settled, or a spec assumption the repo contradicts at the
+approach level — **do not silently absorb it into a bigger plan.** Still write the
+best grounded plan you can (the exploration is paid for), but make the **first line
+of your report** exactly:
+
+`VK-ESCALATE: <tier>-><proposed-tier> — <one-line evidence, e.g. "grounded plan needs 19 steps across 3 crates">`
+
+so your caller stops before coding and the card is re-routed to a fuller pipeline
+(more review, a stronger coding model). A card with no Routing line has no
+envelope — plan normally and skip the tripwire. Never emit the marker for mere
+uncertainty; it is for *the task is bigger than its tier*, with evidence.
+
 ## Write the plan to the workspace — don't just reply
 
 A plan that only lives in your reply is the failure mode you exist to prevent.

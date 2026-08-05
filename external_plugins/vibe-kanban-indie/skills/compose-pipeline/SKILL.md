@@ -84,15 +84,33 @@ you never invent one:
 - If nothing matches, don't guess and don't invent stages. List the real
   pipeline names you found on disk and ask which one via `AskUserQuestion`.
 
-## Which pipeline? — the stage-selection heuristic
+## Which pipeline? — routing comes from `classify-task`
 
-Size the card before you pick. **Cite the row you applied** in your report:
+Pipeline choice is owned by the **`classify-task`** skill
+(`vibe-kanban-indie:classify-task`) — the single source of truth for the five-axis
+rubric (S scope, D decisions, R risk, N novelty, V verification), the tier
+thresholds, the tier→pipeline map, the stage toggles, and the `**Routing:**` line
+format. Precedence, highest first: **an operator-named pipeline → classify-task's
+routing**. Your caller (`product-manager`, `intake`) normally hands you the
+classification output — tier, toggles, Routing line — alongside the request
+phrasing. When you're invoked with **no named pipeline and no caller-supplied
+tier**, invoke `classify-task` yourself on the card text before composing.
 
-| The card looks like… | Reach for | Why |
+The map, for orientation (the skill's own table governs):
+
+| Tier | Pipeline | Toggle overrides you apply |
 |---|---|---|
-| **Trivial / mechanical** — typo, version bump, one-line fix, rename, doc tweak | **Quick** (or no pipeline at all) | A spec and a plan cost more than the change. Implement, merge. |
-| **Already a full PM spec** — the description carries `### Outcome`, `### Scope` **and** `### Testing & acceptance criteria` | **Basic** or an **Async** pipeline — its `spec` stage copies the card through, then `plan` runs | The decisions are settled; re-speccing re-opens them. (Same three-heading, start-of-line test the `spec` stage prompt itself applies.) |
-| **Rough, multi-step, risky, or spanning several files/repos** | Full **spec + plan**, and add **plan-review** | The decisions are *not* settled yet; a wrong plan is the expensive failure. |
+| **trivial** | **Quick** | defaults (implement + merge) |
+| **light** | **Async Sonnet** | drop `plan-review-codex` unless R ≥ 1; add `merge` |
+| **medium** | **Async Opus** | add `code-review` when R ≥ 1 |
+| **heavy** | **Async Fable** | add `code-review`; drop `merge`, add `pr` |
+
+The spec adopt-vs-write toggle needs **no** stage add/drop — every Async spec stage
+detects a full-spec description itself and copies it through instead of spawning a
+subagent. Place the `**Routing:**` line the classifier composed directly **above**
+the block you hand back (outside the delimiters — nothing is ever added inside
+them). When the operator named a pipeline that disagrees with the classifier's
+verdict, attach what was named and note the disagreement in the report.
 
 ## Select the stages
 
@@ -231,4 +249,7 @@ would be dropped and the rest renumbered 1–5.
 - State whether `orchestrate` was included, and why (explicit ask vs. not
   requested).
 - State the executor pin, if any, or note that none was set.
-- State the **heuristic row** you applied, and state the **model pin**, or note that none was set.
+- State the **routing** you applied — the tier and Routing line from `classify-task`,
+  or "operator-named" when the pipeline was named explicitly (noting any disagreement
+  with the classifier's verdict) — and state the **model pin**, or note that none was
+  set.

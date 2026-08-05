@@ -191,6 +191,36 @@ AWAITING OPERATOR APPROVAL
    decision — proceed as approved (carrying out any instructions) or revise as instructed
    — then continues the remaining pipeline stages.
 
+## `VK-ESCALATE` — the misclassification tripwire (second park marker)
+
+Cards routed by the **`classify-task`** skill carry a `**Routing:**` line (their
+complexity tier — `trivial` / `light` / `medium` / `heavy` — and the pipeline it chose;
+see `skills/classify-task/SKILL.md` and `reference/routing.md`). When **grounding
+contradicts the tier** — a plan blows past its size envelope, a "trivial" fix turns out
+to have a deeper root cause, an unpriced design decision appears — the coding agent
+**stops instead of pushing through** and parks on the second marker:
+
+```
+VK-ESCALATE: <tier>-><proposed-tier> — <one-line evidence>
+```
+
+- **Producer:** the coding agent makes this the **first line of its `final_message`**
+  (committing safe work first, same discipline as the approval gate). The `planner` /
+  `coder` subagents emit the same line at the top of their *reports*; the main-loop
+  agent relays it into its `final_message` rather than advancing stages.
+- **Consumers:** `agents/orchestrator.md` (status reflection: hold the column, surface
+  once per distinct park through the same `parks{}` store) and `reference/parks.md`
+  (→ *Escalation parks*: summary = that first line verbatim; the delta-gate script does
+  **not** recognize this marker, so detection is the orchestrator's own substring test
+  on `final_message` — transitions still force a POLL because the gate hashes
+  `final_message`).
+- **Resolution is an operator/orchestrator re-route, never an auto-resume:** `attach
+  <proposed pipeline> to <CARD-ID>` (routed to `intake`, idempotent block replacement),
+  then resume the parked session with a "re-routed — re-read the card and continue"
+  prompt, or archive the workspace so the next sweep re-dispatches fresh.
+- The marker is **case-sensitive** and matched as a **first-line prefix**; keep it
+  byte-identical everywhere, same discipline as the approval marker above.
+
 ## Cross-references
 
 - `prompts/pipeline.md` — the coding-agent kickoff; defines the Wait-for-approval and

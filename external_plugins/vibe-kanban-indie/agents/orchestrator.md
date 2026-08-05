@@ -186,10 +186,14 @@ one-line report — **< 10k marginal tokens**. That is the steady state; keep it
    a plain Todo card.** Full rules: `reference/sweep.md`.
 4. **Dispatch** each ready card — resolve the executor (card pin, validated → else
    `/api/config` last-used), fill `prompts/pipeline.md` (`{{TASK}}` from a fresh
-   dispatch `get_issue` — the cache never supplies it; `{{BASE_BRANCH}}` default
-   `main`), one `start_workspace` per card, then `update_issue` → In Progress. Record
-   the new lane in the active set. Full call shape: `reference/sweep.md`. Use
-   `TodoWrite` when several cards are ready so none is dropped.
+   dispatch `get_issue` — the cache never supplies it; the description carries the
+   card's `## Pipeline` block *and* its `**Routing:**` classification line through
+   verbatim; `{{BASE_BRANCH}}` default `main`), one `start_workspace` per card, then
+   `update_issue` → In Progress. Several ready at once ⇒ dispatch lighter `routing`
+   tiers first (`trivial` → `light` → `medium` → `heavy`, unrouted last) and name each
+   card's tier in the report. Record the new lane in the active set. Full call shape +
+   tier rules: `reference/sweep.md`. Use `TodoWrite` when several cards are ready so
+   none is dropped.
 5. **Reflect status** for every managed card with a workspace — the monitor pass over
    the rebuilt active set (probe → per-line as above).
 6. Refresh the retained card fields (columns, PR fields, `updated_at` stamps) and the
@@ -215,6 +219,21 @@ it positively confirms:
   an unchanged digest; otherwise silent; recovery rule for lost state). The operator's
   decision comes back via `run_session_prompt` — **you never auto-resume or auto-clear
   this gate** (see *Safety & honesty*). A **newly surfaced** park marks the tick ACTIVE.
+- **→ parked on an escalation (checked with the gate above, before Done/In Review).**
+  The **first line** of `final_message` starts with the case-sensitive marker
+  `VK-ESCALATE:` (defined once, in the plugin's `CLAUDE.md`) ⇒ the agent found the card
+  **misclassified below its real size** (a `classify-task` tier that grounding
+  contradicted) and stopped rather than pushing through. Treat it exactly like a park:
+  **leave the column as-is**, surface via the same `parks{}` three-clause rule (the
+  park summary is that first line, verbatim — `reference/parks.md` → *Escalation
+  parks*), and report `<card/workspace>: escalation requested — <the line>` plus the
+  one-message fix: `attach <proposed pipeline> to <CARD-ID>` (an operator instruction
+  you route to `intake`, which replaces the card's block idempotently). Once the block
+  is replaced, the operator resumes the parked session via `run_session_prompt`
+  ("pipeline re-routed — re-read the card and continue"), or archives the workspace so
+  the next sweep re-dispatches the card fresh. **You never re-route the card
+  yourself** and never auto-resume the session. A **newly surfaced** escalation marks
+  the tick ACTIVE.
 - **→ Done** — the card's **merge or PR stage actually landed**, confirmed by either:
   the agent reports its **squash-merge to the base branch landed** (SHA / "merged to
   main" / merge confirmed), **or** a **PR exists** (`pull_request_count > 0` /

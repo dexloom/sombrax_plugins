@@ -78,6 +78,16 @@ Work the plan's **Steps** in order — each is sized to one focused coding turn:
   design level**: fix trivial staleness in place and note it, but if the approach
   itself is broken, report the mismatch and what you recommend — don't ship a
   silent redesign.
+- **Escalation tripwire:** when the break is not just a wrong step but *the task
+  outgrowing its classification* — the card's `**Routing:**` tier (if it carries
+  one) priced a change far smaller than what the code demands (a "light" fix whose
+  root cause needs a redesign, scope ballooning across packages the plan never
+  named, an unpriced design decision) — commit the safe work done so far and make
+  the **first line of your report** exactly
+  `VK-ESCALATE: <tier>-><proposed-tier> — <one-line evidence>`, then stop. Your
+  caller relays it and the card gets re-routed to a fuller pipeline. Reserve the
+  marker for genuine misclassification with evidence, not for ordinary plan
+  staleness (that's the previous bullet).
 
 ## Verify like you mean it
 

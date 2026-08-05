@@ -82,7 +82,7 @@ this skill exists to catch. Look specifically for:
 - **Bundled concerns.** A brief that mixes a refactor + a new feature + a bug
   fix needs them separated and prioritized, or at least explicitly acknowledged
   as one unit. (If they're genuinely separate deliverables, it's fine to file
-  more than one card — see step 6.)
+  more than one card — see step 7.)
 - **Integration assumptions.** Names of files, flags, endpoints, jobs, tables,
   config keys — the things most likely to be slightly wrong. These are your
   candidates for a quick verification lookup.
@@ -120,14 +120,28 @@ language plain — the user should be able to skim it and immediately spot anyth
 wrong. This inline render is the review surface: it's the user's chance to correct
 the spec *before* it lands on the board.
 
-### 5. Resolve the project, then create the card
+### 5. Classify and route the card
+
+With the spec drafted, invoke the **`classify-task`** skill
+(`vibe-kanban-indie:classify-task`) on it — it scores five bounded axes (scope,
+decisions, risk, novelty, verification), returns the complexity tier
+(trivial / light / medium / heavy), the routed pipeline (Quick / Async Sonnet /
+Async Opus / Async Fable), the stage toggles, and the one-line `**Routing:**`
+record. Render that line under the spec in the same inline review — the user
+corrects a wrong tier with one word, the same way they correct a wrong scope
+bullet. Two overrides, and only these: a pipeline/tier/model the **user named**
+wins outright (note the disagreement if the rubric says otherwise), and "just the
+spec, don't file it" skips routing along with the card. See **Attaching a
+pipeline** below for how the routed pipeline lands on the card.
+
+### 6. Resolve the project, then create the card
 
 Once the spec reads right, file it as a vibe-kanban card. See **Creating the
 card** below for the project-resolution ladder (resolve from context first, ask
 only as a last resort) and the field mapping. Report back the created card's
 human-readable ID and URL so the user can spot a wrong project pick.
 
-### 6. Multiple deliverables (only when warranted)
+### 7. Multiple deliverables (only when warranted)
 
 If the brief genuinely contains separate deliverables that shouldn't share one
 card, say so, file the primary card, and offer to file the others (or nest them
@@ -237,20 +251,26 @@ card is the expected end of this skill, so just do it and report back. But never
 `delete_issue`, reassign, or restructure existing cards as a side effect — if the
 brief implies touching other cards, surface that and let the user decide.
 
-## Attaching a pipeline (execute "like the UI")
+## Attaching a pipeline (routed by default, named by exception)
 
-Some briefs don't stop at "spec it" — the user also wants the card to **run itself**
-("create a card and execute Async Fable", "run it through Async Sonnet", "use the
-basic pipeline"). When you see that, invoke the **`compose-pipeline`** skill
-(`vibe-kanban-indie:compose-pipeline`): it owns pipeline discovery, stage selection
-(including the `orchestrate` opt-in), the byte-exact block, and the report facts —
-it is the single source of truth for the format, which is why none of it is repeated
-here. You still own the card: place the block it hands back per that skill's
-placement rule, create the card as usual, and fold its report facts into your report.
-The same applies when the user asks for a **Quick** card or names a **model** ("on
-sonnet", "with opus", "use fable"): pass the phrasing straight through to
-`compose-pipeline` — it owns the model pin, its allowed values, and the
-stage-selection heuristic.
+Every card you file carries a pipeline by default — the one `classify-task` routed
+in step 5 — so a roadmap can flow onto the board and ship without a human naming a
+pipeline per card. Invoke the **`compose-pipeline`** skill
+(`vibe-kanban-indie:compose-pipeline`), passing the user's phrasing verbatim plus
+the classification output (tier, toggles, Routing line): it owns pipeline
+discovery, stage selection (including the `orchestrate` opt-in — still granted
+ONLY on an explicit ask to execute/auto-drive, never by routing), the byte-exact
+block, and the report facts — it is the single source of truth for the format,
+which is why none of it is repeated here. You still own the card: place the
+`**Routing:**` line and then the block it hands back per that skill's placement
+rule, create the card as usual, and fold its report facts into your report.
+
+Precedence: a pipeline the **user named** ("execute Async Fable", "use the basic
+pipeline", a "Quick card", a model pin "on sonnet") passes straight through to
+`compose-pipeline` and beats the routed choice — note the disagreement in your
+report if the rubric scored differently. The user saying **"no pipeline"** (or
+"just the spec") files the card bare — routing still runs and is reported, so the
+tier is on record for whoever attaches a pipeline later.
 
 ## Examples of the transformation
 

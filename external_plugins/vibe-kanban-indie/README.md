@@ -11,7 +11,8 @@ sessions, poll executions, and unblock them when they ask for approval.
 | Component | What it is |
 |---|---|
 | **`vibe-kanban` skill** | The orchestration playbook — board/workspace/session/execution control. |
-| **`product-manager` skill** | Turns a rough brief into a dev-ready vibe-kanban card (spec → issue). |
+| **`product-manager` skill** | Turns a rough brief into a dev-ready vibe-kanban card (spec → issue), classifies it via `classify-task`, and attaches the routed pipeline by default. |
+| **`classify-task` skill** | Sizes a task once, at card creation: a five-axis rubric (scope, decisions, risk, novelty, verification) → complexity tier **trivial / light / medium / heavy** → routed pipeline (**Quick / Async Sonnet / Async Opus / Async Fable**), per-stage toggles (spec adopt-vs-write, plan-review, code-review, merge-vs-PR), and the one-line `**Routing:**` record stamped on the card. Single source of truth for the rubric and the tier→pipeline map; an operator-named pipeline always overrides it. Design record + evidence: `reference/routing.md`; the runtime tripwire is the `VK-ESCALATE` park marker (`CLAUDE.md`). |
 | **`compose-pipeline` skill** | Composes the byte-exact `## Pipeline` block for a card that should run itself — discover the pipeline TOML → select stages (`orchestrate` only on an explicit ask) → render the block + the report facts, which the caller places on the card. The single source of truth for the block format. |
 | **`answer-questions` skill** | The method for answering an agent's stale question prompt (questionnaire) on the operator's behalf — ground it in the card/spec/plan, pick, submit. |
 | **`release` skill** | The self-discovering method for cutting a vibe-kanban version-bump release: anchor on `npx-cli/package.json`, discover every version location by glob (no hardcoded counts), verify/dry-run (read-only) or bump (bump npm/Cargo, refresh every `Cargo.lock` bump-only, promote the changelog, gate on a bump-only diff, commit, tag `v<target>`). |
@@ -38,7 +39,7 @@ sessions, poll executions, and unblock them when they ask for approval.
 
 ### Skill / agent names once installed
 
-- Skills: `vibe-kanban-indie:vibe-kanban`, `vibe-kanban-indie:product-manager`, `vibe-kanban-indie:compose-pipeline`, `vibe-kanban-indie:answer-questions`, `vibe-kanban-indie:release`
+- Skills: `vibe-kanban-indie:vibe-kanban`, `vibe-kanban-indie:product-manager`, `vibe-kanban-indie:classify-task`, `vibe-kanban-indie:compose-pipeline`, `vibe-kanban-indie:answer-questions`, `vibe-kanban-indie:release`
 - Agents: `orchestrator`, `product`, `planner`, `decider`, `intake`, `release`. The `orchestrator` is meant to be launched as the session agent (`claude --agent vibe-kanban-indie:orchestrator`, as the `scripts/` do) — one long-running loop that holds the board tools and monitors/sweeps inline (a manual sweep = telling it "sweep now"); `product`/`planner` are spawned by the coding agent (and usable directly via the Task/Agent tool); `decider` is spawned by the orchestrator on an operator's "answer that questionnaire" request and under the `auto-answer-questions` directive (and usable directly to clear a stale questionnaire); `intake` is spawned by the orchestrator on an operator "create a card…" instruction (and usable directly for fast headless capture); `release` is invoked directly (or dispatched to) to cut or verify a version-bump release.
 - MCP tools: `mcp__plugin_vibe-kanban-indie_vibe-kanban__<tool>`
 
