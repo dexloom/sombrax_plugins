@@ -6,7 +6,7 @@
   },
   "metadata": {
     "description": "SombraX plugins for Claude Code",
-    "version": "1.0.0"
+    "version": "1.1.0"
   },
   "plugins": [
     {
@@ -29,8 +29,8 @@
     {
       "name": "vibe-kanban-indie",
       "source": "./external_plugins/vibe-kanban-indie",
-      "description": "Orchestrate vibe-kanban-indie from Claude Code — drive the kanban board and a crew of coding agents via a bundled MCP server, with vibe-kanban, product-manager, compose-pipeline, answer-questions, knowledge-recall, knowledge-enrich, and release skills, the single-loop orchestrator (monitor-first two-mode tick), product, planner, decider, intake, and release agents, lifecycle prompts, and looped-orchestrator launchers",
-      "version": "0.4.1",
+      "description": "Orchestrate vibe-kanban-indie from Claude Code — drive the kanban board and a crew of coding agents via a bundled MCP server. Family-first pipeline routing (OpenCode vs Claude Code, never mixed; Codex reviews both) via the classify-task skill, lane-aware parallel dispatch with a blocking-edge dependency gate, and the VK-ESCALATE misclassification tripwire. Ships the vibe-kanban, product-manager, classify-task, compose-pipeline, answer-questions, knowledge-recall, knowledge-enrich, and release skills, the single-loop orchestrator (monitor-first two-mode tick), product, planner, decider, intake, and release agents, lifecycle prompts, and looped-orchestrator launchers",
+      "version": "0.5.0",
       "author": {
         "name": "dexloom"
       },
@@ -41,7 +41,9 @@
         "coding-agents",
         "mcp",
         "product-manager",
-        "sombrax"
+        "sombrax",
+        "routing",
+        "pipelines"
       ]
     },
     {
@@ -64,8 +66,8 @@
     {
       "name": "vibecrew",
       "source": "./external_plugins/vibecrew",
-      "description": "Orchestrate a VibeCrew board from Claude Code MCP-free over its REST API — vibecrew, product-manager, and answer-questions skills, orchestrator/product/planner/coder/decider agents, lifecycle prompts, looped-orchestrator launchers, and a bundled stdlib-only Python client",
-      "version": "0.1.0",
+      "description": "Orchestrate a VibeCrew board from Claude Code, MCP-free, over its REST API via a bundled stdlib-only Python client. Family-first pipeline routing (OpenCode vs Claude Code, never mixed; Codex reviews both) via the classify-task skill, lanes (epic + sub-cards + blocking edges) for parallel dispatch, and pipeline overrides with merge-on delivery and post-plan gates. Ships the vibecrew, product-manager, classify-task, and answer-questions skills, the orchestrator/product/planner/coder/decider agents, lifecycle prompts, and looped-orchestrator launchers",
+      "version": "0.2.0",
       "author": {
         "name": "dexloom"
       },
@@ -76,7 +78,9 @@
         "coding-agents",
         "rest-api",
         "product-manager",
-        "sombrax"
+        "sombrax",
+        "routing",
+        "pipelines"
       ]
     }
   ]
