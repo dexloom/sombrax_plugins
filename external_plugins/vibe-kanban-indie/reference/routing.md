@@ -226,3 +226,42 @@ Not done here, by design: bundling the pipeline changes into
 `vibe-kanban-indie` assets (§5 follow-up card), orchestrator-side automatic
 re-route on `VK-ESCALATE` (manual/operator re-route first; automate once the
 escalation rate is known), and any UI for the Routing line.
+
+## 9. Amendment 2026-08-05 — families, late binding, lanes, merge-on
+
+Driven by the measured VibeCrew board telemetry
+(`~/Documents/ObsidianKB/projects/vibecrew/telemetry/`, passes 1–2; the sister
+design record with the full numbers is the **vibecrew** plugin's
+`reference/routing.md`). What changed on top of §§1–8:
+
+- **Family first, never mixed.** Routing now resolves the pipeline FAMILY
+  before the tier: OpenCode executor → OpenCode pipelines (MiniMax / GLM /
+  Kimi build models), Claude Code executor → Claude pipelines (Sonnet / Opus /
+  Fable). Codex is the shared reviewer in both. No stage, pin, or advice may
+  cross families. New `async-opencode-glm.toml` (self-drive — an OpenCode
+  session cannot spawn the plugin's Claude subagents) deployed; Claude files
+  renamed `async-claude-*` (display names unchanged; the seed manifest keys on
+  the original filenames, which stay listed, so nothing re-seeds).
+- **Tier map revised by telemetry.** Heavy → **Async Opus** (+ code-review,
+  pr): Async Fable has zero completed-card data on either board and becomes an
+  explicit-ask arm. Medium/light on OpenCode → Async OpenCode GLM (full
+  ceremony at ~507K fresh; the §1 "ceremony tax" was a model-price artifact).
+- **Late binding.** Plan size ≥ ~40 KB is the strongest measured blowup
+  predictor — knowable only *after* planning. The plan stage emits
+  `PLAN-FACTS:`; plan-review becomes a gated stage (`plan-review: gate` — the
+  runtime PLAN-GATE skips small closed plans, forces on `yes`/R = 2, caps two
+  passes; codex plan review median 2.05M tokens vs 507K for a whole GLM main
+  loop); the coder model binds post-plan via `CODER-MODEL` (sonnet→opus
+  step-up within family). Literals defined in `CLAUDE.md`.
+- **Merge default-on.** Every deployed pipeline now ticks `merge` (squash
+  wording aligned everywhere); `completion: pr` is the opt-out swap for
+  heavy / R = 2. Applied by `scripts/update_pipelines_routing.py`
+  (assert-fired edits; idempotent).
+- **Lanes.** Multi-card briefs file as epic + sub-issues + `blocking` edges
+  (blocker → blocked); the sweep gained a dependency gate reading
+  `GET /api/issue-relationships?issue_id=` (outgoing rows only) — see
+  `reference/sweep.md` and the *Lanes* sections in `product-manager` /
+  `intake`.
+- **Follow-ups:** upstream the TOML edits + `async-opencode-glm.toml` into the
+  app's `BUNDLED` list; a relationships *read* MCP tool (the gate currently
+  rides REST via curl); rename the bundled files to match `async-claude-*`.

@@ -141,12 +141,14 @@ card** below for the project-resolution ladder (resolve from context first, ask
 only as a last resort) and the field mapping. Report back the created card's
 human-readable ID and URL so the user can spot a wrong project pick.
 
-### 7. Multiple deliverables (only when warranted)
+### 7. Multiple deliverables → lanes (only when warranted)
 
 If the brief genuinely contains separate deliverables that shouldn't share one
-card, say so, file the primary card, and offer to file the others (or nest them
-as sub-issues via `parent_issue_id`). Don't fragment a single coherent task into
-many cards — default to one card per spec.
+card, say so and decompose — see **Lanes** below for how the cards are filed
+(parent epic, sub-issues, `blocking` edges) so the orchestrator can run
+independent chains in parallel and always knows what to pick up next. Don't
+fragment a single coherent task into many cards — default to one card per
+spec.
 
 ## Spec template
 
@@ -271,6 +273,38 @@ pipeline", a "Quick card", a model pin "on sonnet") passes straight through to
 report if the rubric scored differently. The user saying **"no pipeline"** (or
 "just the spec") files the card bare — routing still runs and is reported, so the
 tier is on record for whoever attaches a pipeline later.
+
+## Lanes — decompose big work so it can run in parallel
+
+When a brief or roadmap genuinely decomposes into several cards (step 7), file
+it as **lanes** so the orchestrator can run independent chains concurrently
+and always knows what to pick up when a card finishes:
+
+- **One parent epic card** — a plain tracking card (short summary; **no**
+  pipeline block, **no** orchestrate) so the sweep never dispatches it. File
+  it first; its id is the `parent_issue_id` for every sub-issue.
+- **One sub-issue per deliverable**, each a full self-contained spec, each
+  classified and routed in its own right (step 5 per card — tiers and even
+  families may differ), created with `parent_issue_id: <epic-id>`.
+- **Dependencies are `blocking` relationships**, created on the **blocker**
+  (direction is blocker → blocked): `create_issue_relationship(issue_id:
+  <blocker>, related_issue_id: <blocked>, relationship_type: 'blocking')`.
+  Chain the cards *within* a lane; leave cards in different lanes unlinked —
+  the absence of an edge IS the parallelism. Never create a cycle (A→B→A
+  deadlocks both lanes; the orchestrator surfaces it as a filing error, it
+  never resolves one).
+- **A lane map in the epic's description** — a short human-readable list
+  (`Lane A: VIBE-1 → VIBE-2; Lane B: VIBE-3`) so the operator sees the
+  structure at a glance; the machine-readable truth is the relationships.
+- **Auto-drive:** when the user asked for execution, the `orchestrate` stage
+  goes on the **sub-issues** (they are what gets dispatched), never on the
+  epic. The orchestrator's dependency gate (`reference/sweep.md`) holds a
+  blocked card until every blocker is Done — ticking orchestrate on a whole
+  lane up front is safe and is exactly how "file a roadmap and let it ship"
+  works.
+
+Report the epic id, each sub-issue id with its lane and tier, and the edges
+you created.
 
 ## Examples of the transformation
 

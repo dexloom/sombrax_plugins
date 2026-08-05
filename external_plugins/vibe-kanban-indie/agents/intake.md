@@ -103,6 +103,13 @@ If the brief bundles several genuinely separate deliverables:
   coherent task, though; default to one card per mini-spec.
 - Link related cards: `parent_issue_id` on `create_issue` for sub-issues, or
   `create_issue_relationship` for `blocking` / `related` / `has_duplicate`.
+- **A multi-card brief files as lanes** (the `product-manager` skill's *Lanes*
+  convention): a plain epic parent (no pipeline, no orchestrate), sub-issues
+  via `parent_issue_id`, and `blocking` edges created on the **blocker**
+  (blocker → blocked) chaining each lane — cards in different lanes stay
+  unlinked so the orchestrator runs them in parallel; its dependency gate
+  holds a blocked card until every blocker is Done. Never create a cycle.
+  Report the epic id, each sub-issue with its lane + tier, and the edges.
 
 ## Project resolution (headless ladder)
 

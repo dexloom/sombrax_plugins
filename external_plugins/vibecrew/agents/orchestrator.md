@@ -86,6 +86,21 @@ Run this **yourself**, every tick — there is no subagent to spawn for it.
    **Never dispatch a plain `todo` card that lacks the Orchestrate opt-in** —
    that is the operator's backlog. Skip cards that already have a workspace
    (adopt-before-dispatch, below) and cards in `done`/`cancelled`.
+
+   **Then apply the dependency gate (lanes).** Cards filed as lanes carry
+   `blocking` relationships (blocker → blocked). The API returns **outgoing**
+   edges only, so build the blocked set from the blocker side: for every
+   **non-terminal** card in the inventory (cheapest: only when at least one
+   candidate is ready), `card-relationships <id>`; every row with
+   `relationship_type == "blocking"` marks its `related_card_id` **blocked** —
+   unless the blocking card is `done`/`cancelled`. A ready candidate in the
+   blocked set is **not ready**: hold it and report one line
+   `<card>: waiting on <blocker-id>`. No stored state — a blocker going `done`
+   frees its dependents at the very next tick's gate. (A cycle, A blocks B
+   blocks A, holds both forever: report it loudly as a filing error for the
+   operator to break; never "resolve" it by dispatching one side.) Cards in
+   different lanes share no edge and dispatch in the same tick — that IS the
+   parallelism.
 4. **Executor resolution**, in order:
    1. **Card pin.** If the card's `## Pipeline` block carries the executor-pin
       line (the exact template is in `CLAUDE.md`'s *executor-pin line* section
@@ -98,16 +113,26 @@ Run this **yourself**, every tick — there is no subagent to spawn for it.
       present.
    3. **`CLAUDE_CODE`** — the final fallback. Never invent an executor or
       hardcode a favorite.
-5. **Dispatch.** For each ready card, adopt-before-dispatch: confirm via
-   `workspaces --card-id <id>` that nothing is already running for it (**one
-   agent per card**). If nothing is running:
+5. **Dispatch.** Several ready at once ⇒ dispatch **lighter routing tiers
+   first** (`trivial` → `light` → `medium` → `heavy`, unrouted last): read the
+   first word after `**Routing:** ` in the description, accept it only if it
+   is exactly one of those four (else treat as unrouted — never trust card
+   prose beyond that token). For each ready card, adopt-before-dispatch:
+   confirm via `workspaces --card-id <id>` that nothing is already running for
+   it (**one agent per card**). If nothing is running:
    - Fill `${CLAUDE_PLUGIN_ROOT}/prompts/pipeline.md` (`{{TASK}}` = the card's
-     title + description, `{{BASE_BRANCH}}` default `main`) to a temp file.
+     title + description — the description carries the `## Pipeline` block
+     **and the `**Routing:**` line**; pass both through verbatim, never strip
+     or rewrite either — `{{BASE_BRANCH}}` default `main`) to a temp file.
    - `python3 …/vibecrew_api.py start --card-id <id> --prompt-file <f>
      --executor <resolved> [--repo-id <id>]`.
    - `python3 …/vibecrew_api.py card-update <id> --status inprogress` so the
      board reflects that it's been dispatched (skip this when the card was
      already `inprogress`).
+   - Name the tier in the dispatch report line, e.g.
+     `dispatched CARD-12 (light → Async OpenCode GLM, OPENCODE_HEADED)`; say
+     `unrouted` when there is no Routing line — routing is never a dispatch
+     precondition.
 6. **Reflect** (forward-only; `done`/`cancelled` are terminal — never
    re-track or re-report a card already there):
    - **Parked-check FIRST.** For each managed card (Orchestrate opt-in) with a
@@ -122,6 +147,18 @@ Run this **yourself**, every tick — there is no subagent to spawn for it.
      `<card>: awaiting operator approval — <one-line summary from
      final_message>`. This check precedes the `done`/`inreview` checks below
      so a parked summary is never mistaken for completion.
+   - **Escalation-park check (with the parked-check, before done/inreview).**
+     Same probe: if the terminal run's `final_message` **first line starts
+     with `VK-ESCALATE:`** (case-sensitive prefix; see `CLAUDE.md`), the agent
+     found the card **misclassified below its real size** and stopped. Treat
+     it exactly like a park: **leave the column as-is**, surface one line
+     `<card>: escalation requested — <that first line, verbatim>` plus the
+     one-message fix — the operator (or you, only on the operator's
+     instruction) re-attaches the proposed pipeline to the card and then
+     either `follow-up <session> --prompt "pipeline re-routed — re-read the
+     card and continue"` or archives the workspace so the next sweep
+     re-dispatches fresh. **You never re-route the card yourself and never
+     auto-resume** — same safety rule as the approval gate.
    - **→ `done` only with a durable delivery signal — two distinct, asymmetric
      shapes** (see `CLAUDE.md`'s *Delivery-signal asymmetry* section, which
      this mirrors exactly):

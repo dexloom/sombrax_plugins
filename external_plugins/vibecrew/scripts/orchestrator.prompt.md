@@ -19,19 +19,30 @@ ONE SWEEP, IN ORDER:
 
 3. READY CARDS — a card is ready when its description carries the Orchestrate opt-in sentence
    (quoted verbatim in CLAUDE.md) and it sits in any non-terminal column, OR it is `inprogress`
-   with no workspace. NEVER dispatch a plain `todo` card without the opt-in.
+   with no workspace. NEVER dispatch a plain `todo` card without the opt-in. Then the DEPENDENCY
+   GATE (lanes): when any candidate is ready, `card-relationships <id>` over the non-terminal
+   cards; a `blocking` row from a not-done card marks its `related_card_id` blocked (outgoing
+   rows only — you must look from the blocker side). A blocked candidate is NOT ready: hold it,
+   report `<card>: waiting on <blocker>`. A blocking cycle = filing error: report, never dispatch.
 
 4. EXECUTOR — resolve in order: the card's executor-pin line (validate `^[A-Z][A-Z0-9_]*$`, else
    report + fall through) → `config`'s `executor_profile` → `CLAUDE_CODE`.
 
-5. DISPATCH — adopt-before-dispatch (`workspaces --card-id <id>` first; one agent per card). Fill
-   `${CLAUDE_PLUGIN_ROOT}/prompts/pipeline.md` (`{{TASK}}` = title + description, `{{BASE_BRANCH}}`
-   default `main`) to a temp file, `start --card-id … --prompt-file … --executor …`, then
-   `card-update <id> --status inprogress`.
+5. DISPATCH — lighter routing tiers first when several are ready (`trivial`→`light`→`medium`→
+   `heavy`, unrouted last; the tier = first word after `**Routing:** `, accepted only if exactly
+   one of the four). Adopt-before-dispatch (`workspaces --card-id <id>` first; one agent per
+   card). Fill `${CLAUDE_PLUGIN_ROOT}/prompts/pipeline.md` (`{{TASK}}` = title + description,
+   Routing line and Pipeline block passed through verbatim, `{{BASE_BRANCH}}` default `main`) to
+   a temp file, `start --card-id … --prompt-file … --executor …`, then
+   `card-update <id> --status inprogress`. Name each card's tier in the report line.
 
 6. REFLECT (forward-only; `done`/`cancelled` terminal, reported once) — parked-marker check FIRST:
    latest run terminal + `final_message` contains `AWAITING OPERATOR APPROVAL` ⇒ leave the column,
-   surface one line. Then the delivery-signal gate from your agent definition: PR delivery ⇒ `done`
+   surface one line. Same probe, escalation park: `final_message` first line starts with
+   `VK-ESCALATE:` ⇒ leave the column, surface `<card>: escalation requested — <line>`; the fix is
+   an operator re-route (re-attach the proposed pipeline, then follow-up "re-routed — re-read the
+   card and continue", or archive the workspace) — never re-route or resume on your own. Then the
+   delivery-signal gate from your agent definition: PR delivery ⇒ `done`
    ONLY on a `card-prs` PR with `status == "merged"` (`open` and `closed` both stay `inreview`);
    direct-merge delivery ⇒ `done` ONLY on a terminal completion report carrying a concrete
    `merge_commit: <sha>` line (no merge record is queryable server-side; a SHA-less prose claim

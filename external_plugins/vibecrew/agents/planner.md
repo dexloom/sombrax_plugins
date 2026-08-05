@@ -90,8 +90,30 @@ Follow the structure in `${CLAUDE_PLUGIN_ROOT}/prompts/plan.md`:
   checks; concrete commands where you know them).
 - **Risks / open questions** — unknowns, ordering constraints, unconfirmed
   assumptions, anything needing a decision before/while building.
+- **Plan facts** — the last section, three data lines the pipeline's gates
+  read: `Steps: <n>`, `Files: <n distinct files named across steps>`,
+  `Open decisions: <n, from Risks / open questions>`.
 
 Keep each step small enough to be one focused coding turn.
+
+## The escalation tripwire — say it, don't absorb it
+
+The card may carry a `**Routing:**` line (from the `classify-task` skill): its
+tier — trivial / light / medium / heavy — is the **size envelope** your grounded
+plan is expected to fit. Envelopes: **light** ≤ ~6 steps touching ≤ ~5 files;
+**medium** ≤ ~12 steps / ≤ ~12 files; **heavy** is unbounded. If grounding blows
+the envelope — more steps/files than the tier prices, an open **design
+decision** the spec never settled, or a spec assumption the repo contradicts at
+the approach level — **do not silently absorb it into a bigger plan.** Still
+write the best grounded plan you can (the exploration is paid for), but make
+the **first line of your report** exactly:
+
+`VK-ESCALATE: <tier>-><proposed-tier> — <one-line evidence, e.g. "grounded plan needs 19 steps across 3 packages">`
+
+so your caller stops before coding and the card is re-routed to a fuller
+pipeline. A card with no Routing line has no envelope — plan normally and skip
+the tripwire. Never emit the marker for mere uncertainty; it is for *the task
+is bigger than its tier*, with evidence.
 
 ## Write the plan to the workspace — don't just reply
 
@@ -99,14 +121,13 @@ A plan that only lives in your reply is the failure mode you exist to prevent.
 `Write` it to **`IMPLEMENTATION_PLAN.md` at the workspace root** so the coding agent
 picks it up as a file:
 
-- The workspace root is the directory that holds `CLAUDE.md`, one level *above* the
-  repo worktrees — the same place `SPEC.md` lives. That location is outside every
-  repo worktree, so the file is never committed and needs no gitignore entry.
 - Use the **workspace-root path your caller gives you** and write
-  `<workspace_root>/IMPLEMENTATION_PLAN.md`. Do **not** write it in your current
-  working directory: your cwd is a repo worktree, and a plan file there would get
-  committed. If you weren't given a path, write it one level above your repo root
-  (its parent).
+  `<workspace_root>/IMPLEMENTATION_PLAN.md` — the same place `SPEC.md` lives.
+  **In VibeCrew the workspace root IS the git worktree**, so the plan lands
+  inside the repo: it is pipeline paperwork, not a deliverable — immediately
+  after writing it, ensure it can never be committed by appending
+  `IMPLEMENTATION_PLAN.md` to the repo's exclude file (the path printed by
+  `git rev-parse --git-path info/exclude`), and never `git add` it.
 - Overwrite any existing `IMPLEMENTATION_PLAN.md` with the plan you actually
   grounded — don't leave a stale or stub plan behind.
 

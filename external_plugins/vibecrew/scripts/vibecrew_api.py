@@ -282,6 +282,37 @@ def build_parser():
     )
     p.add_argument("card_id")
 
+    p = sub.add_parser(
+        "card-relationships",
+        help="GET /api/cards/:id/relationships — OUTGOING rows only "
+        "(WHERE card_id = :id): a card's own list shows who IT blocks, never "
+        "who blocks it. Build incoming views by fanning out over the blockers.",
+    )
+    p.add_argument("card_id")
+
+    p = sub.add_parser(
+        "card-relate",
+        help="POST /api/cards/:id/relationships — create an edge FROM card_id "
+        "TO --related-card-id. For blocking, direction is blocker -> blocked: "
+        "call this on the BLOCKER.",
+    )
+    p.add_argument("card_id")
+    p.add_argument("--related-card-id", required=True)
+    p.add_argument(
+        "--type",
+        default="blocking",
+        choices=["blocking", "related", "has_duplicate"],
+        help="relationship_type (default: blocking)",
+    )
+
+    p = sub.add_parser(
+        "card-unrelate",
+        help="DELETE /api/cards/:id/relationships/:relId — scoped to the "
+        "owning card (the one the edge points FROM).",
+    )
+    p.add_argument("card_id")
+    p.add_argument("--relationship-id", required=True)
+
     # -- workspaces / launch / runs (slice 3) --------------------------------
     p = sub.add_parser("workspaces", help="GET /api/workspaces[?card_id=<id>]")
     p.add_argument("--card-id")
@@ -473,6 +504,25 @@ def main(argv=None):
 
     if cmd == "card-prs":
         call(base, "GET", build_path("api", "cards", args.card_id, "pull-requests"))
+        return
+
+    if cmd == "card-relationships":
+        call(base, "GET", build_path("api", "cards", args.card_id, "relationships"))
+        return
+
+    if cmd == "card-relate":
+        body = {
+            "related_card_id": args.related_card_id,
+            "relationship_type": args.type,
+        }
+        call(base, "POST", build_path("api", "cards", args.card_id, "relationships"),
+             body=body)
+        return
+
+    if cmd == "card-unrelate":
+        call(base, "DELETE",
+             build_path("api", "cards", args.card_id, "relationships",
+                        args.relationship_id))
         return
 
     if cmd == "workspaces":

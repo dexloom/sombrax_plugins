@@ -14,7 +14,12 @@ description: >-
   clearly want scope and requirements confirmed before diving into code. Also
   use it proactively when a build request is vague, bundles several concerns,
   or leaves design decisions open — surface and resolve those gaps here, then
-  capture the result as a card. Do NOT use it to write the implementation plan
+  capture the result as a card. Every card is classified via the
+  `classify-task` skill (family + complexity tier) and carries the routed
+  pipeline by default; a multi-deliverable brief or roadmap is decomposed into
+  LANES — a parent epic, sub-cards, and `blocking` relationships — so the
+  orchestrator can run independent chains in parallel. Do NOT use it to write
+  the implementation plan
   itself (the step-by-step "how/which files"); this produces the WHAT and
   acceptance criteria a later planning step consumes. For raw board/agent
   operations with no speccing involved (listing cards, starting a workspace,
@@ -83,7 +88,7 @@ this skill exists to catch. Look specifically for:
 - **Bundled concerns.** A brief that mixes a refactor + a new feature + a bug
   fix needs them separated and prioritized, or at least explicitly acknowledged
   as one unit. (If they're genuinely separate deliverables, it's fine to file
-  more than one card — see step 6.)
+  more than one card — see step 7.)
 - **Integration assumptions.** Names of files, flags, endpoints, jobs, tables,
   config keys — the things most likely to be slightly wrong. These are your
   candidates for a quick verification lookup.
@@ -119,19 +124,35 @@ language plain — the user should be able to skim it and immediately spot anyth
 wrong. This inline render is the review surface: it's the user's chance to correct
 the spec *before* it lands on the board.
 
-### 5. Resolve the project, then create the card
+### 5. Classify and route the card
+
+With the spec drafted, invoke the **`classify-task`** skill
+(`vibecrew:classify-task`): it resolves the pipeline **family** first (OpenCode
+vs Claude Code, from the executor ladder — never mixed), scores five bounded
+axes to a complexity tier (trivial / light / medium / heavy), and returns the
+routed pipeline, the stage toggles, and the one-line `**Routing:**` record.
+Render that line under the spec in the same inline review — the user corrects
+a wrong tier or family with one word, the same way they correct a wrong scope
+bullet. Overrides, and only these: a pipeline / executor / model / tier the
+**user named** wins outright (note the disagreement if the rubric says
+otherwise), and "just the spec, don't file it" skips routing along with the
+card.
+
+### 6. Resolve the project, then create the card
 
 Once the spec reads right, file it as a VibeCrew card. See **Creating the
 card** below for the project-resolution ladder (resolve from context first, ask
 only as a last resort) and the field mapping. Report back the created card's
 id so the user can spot a wrong project pick.
 
-### 6. Multiple deliverables (only when warranted)
+### 7. Multiple deliverables → lanes (only when warranted)
 
 If the brief genuinely contains separate deliverables that shouldn't share one
-card, say so, file the primary card, and offer to file the others (or nest them
-as sub-cards via `--parent-card-id`). Don't fragment a single coherent task into
-many cards — default to one card per spec.
+card, say so and decompose — see **Lanes** below for how the cards are filed
+(parent epic, sub-cards, blocking edges) so the orchestrator can run
+independent lanes in parallel and always knows what to pick up next. Don't
+fragment a single coherent task into many cards — default to one card per
+spec.
 
 ## Spec template
 
@@ -246,44 +267,82 @@ restructure existing cards as a side effect — if the brief implies touching
 other cards, surface that and let the user decide. (This client has no
 delete-card subcommand at all.)
 
-## Attaching a pipeline (compose it inline — no `compose-pipeline` skill here)
+## Attaching a pipeline (routed by default, composed from the TOML)
 
-Some briefs don't stop at "spec it" — the user also wants the card to **run
-itself** ("create a card and execute it", "run it with the orchestrator",
-"auto-drive this"). Unlike `vibe-kanban-indie`, this plugin has **no
-`compose-pipeline` skill** and no pipeline TOML files — the stage catalog is
-built into VibeCrew's own app (`Pipeline.swift`) and mirrored, byte-exact, in
-`${CLAUDE_PLUGIN_ROOT}/CLAUDE.md`. Compose the block **from that catalog**,
-inline, here:
+**Every card you file carries a pipeline by default** — the one `classify-task`
+routed in step 5 — so a roadmap can flow onto the board and ship without a
+human naming a pipeline per card. Only an explicit "no pipeline" / "just the
+spec" files a card bare (routing still runs and is reported, so the tier is on
+record). An operator-named pipeline ("run it with Async Fable", "use Basic")
+beats the routed choice — note the disagreement if the rubric scored
+differently.
 
-- **Block shape.** Wrapped between `<!-- vk:pipeline:start -->` /
-  `<!-- vk:pipeline:end -->`; a `## Pipeline` heading, a blank line, then one
-  `- <promptFragment>` bullet per selected stage **in catalog order**, with the
-  executor-pin line (if any) listed **first**. Copy the fragments and the
-  executor-pin template **verbatim** from `CLAUDE.md` — never retype them from
-  memory; a paraphrase silently breaks the shared parser.
-- **Named tick-set presets** (apply the one the user's phrasing implies, or ask
-  if it's ambiguous which they want):
-  - **Quick** — no stages (implement only; optionally still carry an executor
-    pin if the user named an executor).
-  - **Standard** — `spec`, `plan`, `plan-review`, `code-review`, `update-docs`.
-  - **Deliver** — Standard + `merge`.
-  - **Auto** — `orchestrate` + Deliver. **Only** on an explicit auto-drive ask
-    ("execute this", "auto-drive it", "have the orchestrator run it") — never
-    add `orchestrate` by default, even under Deliver.
-- **Model pin.** If the user names a model ("on sonnet", "with opus", "use
-  fable"), add the block-level model-pin line
-  `- Use the **<MODEL>** model for this card: pass model: "<MODEL>" to every
-  subagent spawn.` above the stage bullets (after the executor-pin line, if
-  any) — this is a directive, not a catalog stage.
-- **Executor pin.** If the user names an executor ("with Claude Code",
-  "headed"), use the executor-pin template from `CLAUDE.md`.
-- **Placement.** Append the composed block to the end of the rendered spec
-  (after the last section, e.g. Risks) before writing the description file —
-  same placement VibeCrew's own UI uses.
+Compose the block **from the pipeline's TOML file**, inline:
 
-Report which preset (and any pin) you applied, so the user can see the block
-matches what they asked for in one glance.
+- **Source of truth.** `~/.vibecrew/pipelines/*.toml` — the plugin's deployed
+  overrides (`async-claude-*`, `async-opencode-*`, `basic`; user files shadow
+  the app's bundled pipelines by `name =`). Read the routed pipeline's file;
+  never invent or paraphrase stage text.
+- **Stage selection.** Start from the file's `default_enabled = true` set
+  (which already includes `merge` — squash-merge is the default delivery),
+  then apply `classify-task`'s toggles: tick `code-review` when the toggle
+  says `yes`; for `completion: pr` un-tick `merge` and tick `pr`. The
+  `orchestrate` stage is added **only** on an explicit auto-drive ask
+  ("execute this", "auto-drive it") — never by default, never by routing.
+- **Block shape** (the grammar lives in `CLAUDE.md` — follow it exactly):
+  start/end markers, `## Pipeline` heading, the order-instruction line, the
+  pin bullets (executor pin first, then model pin, both only when pinned),
+  then one **numbered** item `N. <stage prompt>` per selected stage in the
+  file's order, with `{{DELEGATE}}` / `{{model_name}}` rendered from the
+  TOML's `subagent` / `[models]` values.
+- **Executor pin.** Basic has no executor binding — always add the executor-pin
+  line for the resolved family (`CLAUDE_CODE_HEADED` / `OPENCODE_HEADED`) on a
+  Basic card. Async pipelines carry their family in the TOML's `agent =`; add
+  the pin line when the user named an executor explicitly.
+- **Model pin.** Only when the user names a model — and it must belong to the
+  card's pipeline family (OpenCode: MiniMax / GLM / Kimi; Claude Code: Sonnet /
+  Opus / Fable — **never mixed**; Codex is only ever the reviewer). Use the
+  model-pin template from `CLAUDE.md`. A family contradiction is surfaced, not
+  composed.
+- **Placement.** The `**Routing:**` line from step 5, then the composed block,
+  appended to the end of the rendered spec (after the last section, e.g.
+  Risks) before writing the description file — the Routing line sits directly
+  **above** the block, outside the delimiters.
+
+Report the routed (or operator-named) pipeline, the family, the ticked stages,
+and any pins, so the user can see the block matches the routing in one glance.
+
+## Lanes — decompose big work so it can run in parallel
+
+When a brief or roadmap genuinely decomposes into several cards (step 7), file
+it as **lanes** so the orchestrator can run independent chains concurrently
+and always knows what to pick up when a card finishes:
+
+- **One parent epic card** — a plain tracking card (short summary description;
+  **no** pipeline block, **no** orchestrate) so it is never dispatched. File
+  it first; its id is the `--parent-card-id` for every sub-card.
+- **One sub-card per deliverable**, each a full self-contained spec, each
+  classified and routed in its own right (step 5 per card — tiers may
+  differ), created with `--parent-card-id <epic-id>`.
+- **Dependencies are `blocking` relationships**, created on the **blocker**
+  (direction is blocker → blocked):
+  `python3 …/vibecrew_api.py card-relate <blocker-id> --related-card-id
+  <blocked-id> --type blocking`. Chain the cards *within* a lane; leave cards
+  in different lanes unlinked — the absence of an edge IS the parallelism.
+  Never create a cycle (A→B→A deadlocks both lanes; the orchestrator will
+  park them, not resolve them).
+- **A lane map in the epic's description** — a short human-readable list
+  (`Lane A: CARD-1 → CARD-2; Lane B: CARD-3`) so the operator sees the
+  structure at a glance; the machine-readable truth is the relationships, and
+  the app's board draws them as a dependency forest.
+- **Auto-drive**: when the user asked for execution, the `orchestrate` stage
+  goes on the **sub-cards** (they are what gets dispatched), never on the
+  epic. The orchestrator's dependency gate holds a blocked card back until
+  every card blocking it is `done` — so ticking orchestrate on the whole lane
+  up front is safe and is exactly how "file a roadmap and let it ship" works.
+
+Report the epic id, each sub-card id with its lane and tier, and the edges you
+created.
 
 ## Examples of the transformation
 

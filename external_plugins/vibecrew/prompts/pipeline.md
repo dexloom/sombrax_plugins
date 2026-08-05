@@ -31,21 +31,39 @@ subagent/tool and act on what it produces.
 ## Always implement — plus the stages your card's pipeline lists
 **Implementing the task is unconditional** — do it whether or not your card lists
 any stages. On top of that, your card's description carries a **`## Pipeline`**
-block (delimited by `<!-- vk:pipeline:start -->` / `<!-- vk:pipeline:end -->`) that
-**VibeCrew's own New-Card UI has composed for you**: a list of stages, in catalog
-order. **Execute those stages in the exact order given — do not add, skip, or
-reorder them, and do not decide for yourself which apply.** The stage text says
-*what* to do; the notes below say *how* (which subagent/tool to delegate each stage
-to). (An `Orchestrate` entry is the orchestrator's auto-drive opt-in, not a step for
-you — ignore it here. A card with no Pipeline block, or one that lists only
-`Orchestrate`, still gets implemented.)
+block (delimited by `<!-- vk:pipeline:start -->` / `<!-- vk:pipeline:end -->`),
+composed for you from a pipeline TOML — by VibeCrew's New-Card UI or by the
+`product` intake agent: **numbered** stages `1.`, `2.`, … in the pipeline's
+order, below an order-instruction line and any pin bullets. **Execute those
+stages in the exact order given — do not add, skip, or reorder them, and do not
+decide for yourself which apply.** As you begin numbered stage N, output the
+single line `VK-PIPELINE-STAGE: N` so progress is tracked. The stage text says
+*what* to do; the notes below say *how* (which subagent/tool to delegate each
+stage to). (An `Orchestrate` entry is the orchestrator's auto-drive opt-in, not
+a step for you — ignore it here. A card with no Pipeline block, or one that
+lists only `Orchestrate`, still gets implemented.)
 
-The **workspace root** for the optional spec/plan files: `SPEC.md` and
-`IMPLEMENTATION_PLAN.md` belong **one level above your repo** — your current working
-directory is your repo worktree, and the workspace root is its parent (it holds
-`CLAUDE.md` and sits outside every repo, so files there are never committed). Resolve
-that absolute path once (the parent of your repo root) and **pass it to the spec/plan
-subagents** so they write there, not inside the repo.
+**The workspace root IS your git worktree** in VibeCrew — `SPEC.md`,
+`IMPLEMENTATION_PLAN.md`, and `PRIOR_KNOWLEDGE.md` are written at the worktree
+root, **inside the repo**. They are **pipeline paperwork, not deliverables**:
+right after each is written, ensure it can never be committed — append its name
+to the repo's exclude file (the path printed by
+`git rev-parse --git-path info/exclude`) — and stage your own changes by
+**named path**, never a blanket `git add -A` from the worktree root. The merge
+stage re-checks this with an artifact gate (below); paperwork must never land
+on the base branch.
+
+**Routing line (if the card carries one):** a description line
+`**Routing:** <tier> → <pipeline> [<family>] — …` directly above the Pipeline
+block records the card's complexity classification — why *this* pipeline with
+*these* stages. It is **informational, not a directive**: the stage list
+already reflects it, so never re-classify or add/drop stages because of it. It
+has exactly three runtime effects: `plan-review: yes` forces the PLAN-GATE
+open (below), the tier is the plan-size envelope the escalation tripwire
+checks, and the family bounds every model decision — **OpenCode pipelines run
+MiniMax / GLM / Kimi models only; Claude Code pipelines run Sonnet / Opus /
+Fable models only; never mix them** (Codex appears in both families, but only
+ever as the reviewer).
 
 **Board access — the bundled client, with a curl fallback.** Every board operation in
 this prompt is `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/vibecrew_api.py <subcommand> …`
@@ -87,11 +105,27 @@ hand — the skill's curl-fallback section has the full recipe.
   yourself — wait for it, then build on it.
 - **plan** (if listed) — **spawn the `planner` subagent**, telling it the card and the
   **workspace root path**, to write `<workspace_root>/IMPLEMENTATION_PLAN.md`,
-  grounded in `SPEC.md` and the real repo. Don't write the plan yourself.
-- **plan-review** (if listed) — **have codex review the plan** (run codex as the
-  reviewer — `codex exec --sandbox read-only "<review prompt>" < /dev/null` over
-  `IMPLEMENTATION_PLAN.md`, or the `codex-review-plan` skill if available). Do **not**
-  review it yourself. Resolve any blockers and revise the plan before writing code.
+  grounded in `SPEC.md` and the real repo. Don't write the plan yourself. When
+  the plan is verified, **measure it and report the single line**
+  `PLAN-FACTS: <size> KB, <n> steps, <n> files, <n> open decisions` (byte size
+  of the file; steps/files/open decisions from its Plan facts section, or count
+  them yourself) — the next two stages read this line. If the planner's report
+  **leads with `VK-ESCALATE:`**, relay it and stop (see *When to stop*).
+- **plan-review / plan-review-codex** (if listed) — **GATE FIRST**: if the plan
+  is under **40 KB** AND has **0 open decisions** AND the card's Routing line
+  does not force it with `plan-review: yes`, **skip this stage** — report the
+  single line `PLAN-GATE: plan-review skipped (<size> KB, <n> open decisions)`
+  and move on; a small, closed plan does not repay an independent review, which
+  routinely costs more than the plan itself. Otherwise report
+  `PLAN-GATE: plan-review running (…)` and **have codex review the plan** (run
+  codex as the reviewer — `codex exec --sandbox read-only "<review prompt>"
+  < /dev/null` over `IMPLEMENTATION_PLAN.md`, or the `codex-review-plan` skill
+  if available). Do **not** review it yourself. Resolve blockers and revise the
+  plan before writing code, **capped at TWO review passes** — findings still
+  open after the second pass mean the plan (or spec) is mis-scoped: revise the
+  plan or escalate, never pay a third pass. While codex runs, **wait cheaply**
+  — don't re-read the plan or narrate; babysitting a review is a measured
+  token sink.
   **Never leave codex's stdin open:** `codex exec` reads stdin *in addition to* its prompt
   argument, so without `< /dev/null` it prints "Reading additional input from stdin…" and
   **blocks forever** waiting for an EOF your shell never sends. Run it from **inside your
@@ -102,15 +136,28 @@ hand — the skill's curl-fallback section has the full recipe.
   approval** stage, if your card lists one — see below). **Commit as you go** — a commit at the end
   of each step (or whenever a meaningful chunk is done) so progress is checkpointed
   and never lost; don't let a large amount of work pile up uncommitted.
-  **If a stage delegates the coding to a subagent** (e.g. the `coder` agent), that
+  **If a stage delegates the coding to a subagent** (e.g. the `coder` agent /
+  `code-subagent` stage), run the **MODEL CHECK first**: bind the coder model
+  **within your pipeline's own family** — if the plan blew its envelope
+  (PLAN-FACTS ≥ 40 KB, or open design decisions surfaced during planning), step
+  the coder up one tier inside the family (Claude Code: sonnet → opus;
+  OpenCode: MiniMax-M3 → glm-5.2; a coder already at its family ceiling stays
+  put), **never** a model from the other family; an operator's card-level model
+  pin always wins. Report the single line
+  `CODER-MODEL: <model> — <one-phrase reason>`, then spawn. That
   subagent **leaves the worktree dirty on purpose** — it never commits, because the
   calling agent owns the git ceremony. **You are that caller:** when it reports back,
   **verify its work yourself** (read the diff, run the checks) and then **commit it**
   before you advance to the next stage. Never move on with a delegated subagent's work
-  sitting uncommitted.
+  sitting uncommitted. If the coder's report **leads with `VK-ESCALATE:`**,
+  commit the safe work, relay the line, and stop (see *When to stop*).
 - **code-review** (if listed) — when the work is done, **have codex review the diff**
   (`echo "<what to look for>" | codex review --base {{BASE_BRANCH}}`, or the `codex-review`
-  skill). Do **not** review it yourself. Address its findings and re-run until it passes.
+  skill). Do **not** review it yourself. Address its findings and re-run, **capped at
+  TWO passes** — findings still open after the second pass are a scope problem, not a
+  review problem: fix what is confirmed, report what remains, and move on rather than
+  paying a third pass. While codex runs, wait cheaply — don't narrate or re-read the
+  diff alongside it.
   Piping the instructions in is what closes codex's stdin here — the pipe sends EOF, so this
   form needs no `< /dev/null` (and adding one would throw the piped instructions away).
 - **Update documentation** (if listed) — once the change exists (and is code-reviewed,
@@ -188,8 +235,13 @@ hand — the skill's curl-fallback section has the full recipe.
   2. **Pin the base, then rebase onto exactly that commit** —
      `OLD=$(git rev-parse "{{BASE_BRANCH}}")`, then `git rebase "$OLD"`. Another card may
      have landed while you worked. Pinning the OID is what makes step 4 safe.
-  3. **Re-run the build/tests after the rebase.** **A clean rebase is not a passing build.**
-     If it now fails, fix it, commit, and redo step 2.
+  3. **Re-run the build/tests after the rebase, and run the artifact gate.**
+     **A clean rebase is not a passing build.** If it now fails, fix it, commit, and
+     redo step 2. The artifact gate: `git diff --name-only "$OLD"..HEAD` must not
+     list `SPEC.md`, `IMPLEMENTATION_PLAN.md`, or `PRIOR_KNOWLEDGE.md` (unless the
+     card's task is explicitly about those files) — pipeline paperwork never lands
+     on the base branch. If any appear, remove them from the branch (restore the
+     base version or delete, commit) before proceeding.
   4. **Squash without checkout, and compare-and-swap the ref.** **Never
      `git checkout {{BASE_BRANCH}}`** — you are in a **linked git worktree**, the base is
      normally checked out in another one, and the checkout fails outright with *"'…' is
@@ -276,10 +328,13 @@ implementation.
 - **You delegate (when the stage is listed):** spec → `product`; plan → `planner`;
   reviews → `codex`.
 - **Model pin (if the card's `## Pipeline` block carries one):** a line
-  `- Use the **<MODEL>** model for this card: …` is a **block-level directive, not a
-  stage**. Pass that `model:` on **every** Agent/subagent spawn — `product`, `planner`,
-  `coder`, and any other — and it **overrides any model named inside a stage prompt**.
-  **Absent a pin, nothing changes:** spawn with whatever model the stage prompt names.
+  `- Use the **<model>** model for this card unless a stage below names its own.` is a
+  **block-level directive, not a stage**. Pass that `model:` on **every** Agent/subagent
+  spawn — `product`, `planner`, `coder`, and any other — and it **overrides any model
+  named inside a stage prompt** and the CODER-MODEL advice. **Absent a pin, nothing
+  changes:** spawn with whatever the stage prompt (or the MODEL CHECK) names. A pin
+  must belong to your pipeline's family (never mix OpenCode and Claude Code models);
+  if it doesn't, surface the contradiction instead of applying it.
 - **Fallback:** if you **can't** spawn the `product`/`planner` subagents — e.g. you're
   not a Claude Code agent, or have no Task/Agent tool or those subagents aren't
   available — then **write `SPEC.md` / `IMPLEMENTATION_PLAN.md` yourself** (follow the
@@ -296,6 +351,14 @@ Keep going on your own through the whole pipeline. Stop and surface only when:
 - you reach a **Wait for approval** stage your card lists — park at the operator gate
   (commit first, emit the `AWAITING OPERATOR APPROVAL` marker as the first line of your
   final message, then let your process exit), or
+- the **escalation tripwire** fires — a `planner`/`coder` report leads with
+  `VK-ESCALATE:`, or you yourself find the task has outgrown the card's Routing tier
+  (an unpriced design decision, scope far beyond what the tier bought): **commit safe
+  work, then make the first line of your final message that exact
+  `VK-ESCALATE: <tier>-><proposed-tier> — <evidence>` line and let your process exit**
+  (park semantics, same as the approval gate — advance no later stage; the operator
+  re-routes the card and resumes or re-dispatches you). Do **not** re-route or push
+  through yourself, or
 - the pipeline is **complete** — report done. (A card listing `merge`/`pr` has already had
   you perform it by this point; a card listing neither ends here, and the operator
   delivers.)

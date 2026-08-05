@@ -7,10 +7,12 @@ planner step is run. Fill {{TASK}} with the card's title + spec before sending.
 -->
 You are planning the task below for this repository. **Before any code is
 written**, produce an implementation plan and save it as `IMPLEMENTATION_PLAN.md`
-at the **workspace root** (next to `CLAUDE.md`, one level above the git repos —
-that location is outside every repo worktree, so the file is never committed and
-needs no gitignore entry). It guides this job and is left behind when the branch
-merges.
+at the **workspace root**. In VibeCrew the workspace root IS the git worktree,
+so the plan lands inside the repo: it is pipeline paperwork, not a deliverable —
+right after writing it, append `IMPLEMENTATION_PLAN.md` (and `SPEC.md`) to the
+repo's exclude file (the path printed by `git rev-parse --git-path info/exclude`)
+so it can never be committed. It guides this job and is discarded when the
+branch merges.
 
 If `SPEC.md` exists at the workspace root, it is the authoritative spec for this
 task — read it first and ground the plan in it.

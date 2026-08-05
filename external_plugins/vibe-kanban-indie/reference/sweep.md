@@ -122,6 +122,20 @@ opt-in) — that is the operator's backlog. But you only know a Todo card is "pl
 *after* you've read its description; **never skip reading it**. Do nothing for cards
 that already have a workspace.
 
+**Then apply the dependency gate (lanes).** Cards filed as lanes carry `blocking`
+relationships (blocker → blocked). The MCP has no relationship *read* tool; read them
+over the backend's REST route — the same `$VIBE_BACKEND_URL` the delta-gate script
+uses: `curl -sf "$VIBE_BACKEND_URL/api/issue-relationships?issue_id=<id>"`, which
+returns **outgoing rows only** (`WHERE issue_id = ?`), so blockers are discovered from
+the blocker side. Run it only when at least one candidate is otherwise ready, over the
+**non-terminal** cards of the project: every row with
+`relationship_type == "blocking"` whose issue is not Done/Cancelled marks its
+`related_issue_id` **blocked**. A blocked candidate is **not ready**: hold it and
+report one line `<card>: waiting on <blocker-id>`. No stored state — a blocker going
+Done frees its dependents on the next sweep. A blocking **cycle** (A blocks B blocks
+A) is a filing error: report it loudly for the operator to break; never dispatch
+either side of it.
+
 **A dispatch always `get_issue`s the card, cache hit or not** — see *Starting a coding
 agent* → `prompt`; the cache never supplies the `{{TASK}}` description.
 

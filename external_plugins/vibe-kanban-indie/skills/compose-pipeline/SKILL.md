@@ -78,9 +78,11 @@ you never invent one:
   has `id`, `label`, `prompt`, `default_enabled` (bool, defaults to `false` if
   absent), and `heavy` (bool, defaults to `false` if absent).
 - Match the pipeline the user named against each file's `name` field,
-  case-insensitively, or against the file stem (`async-fable.toml` →
-  `async-fable`). "Async Fable", "async fable", and "async-fable" should all
-  resolve to the same file.
+  case-insensitively, or against the file stem (`async-claude-fable.toml` →
+  `async-claude-fable`). "Async Fable", "async fable", and "async-claude-fable"
+  should all resolve to the same file — the Claude-family files are named
+  `async-claude-*` on disk while their `name` fields keep the original
+  display names.
 - If nothing matches, don't guess and don't invent stages. List the real
   pipeline names you found on disk and ask which one via `AskUserQuestion`.
 
@@ -96,14 +98,25 @@ classification output — tier, toggles, Routing line — alongside the request
 phrasing. When you're invoked with **no named pipeline and no caller-supplied
 tier**, invoke `classify-task` yourself on the card text before composing.
 
-The map, for orientation (the skill's own table governs):
+The map, for orientation (the skill's own table governs). **Family first** —
+OpenCode executor → OpenCode pipelines (MiniMax/GLM/Kimi models), Claude Code
+executor → Claude pipelines (Sonnet/Opus/Fable), never mixed; Codex reviews on
+both; on a family-neutral pipeline (Quick/Basic) an OpenCode card carries the
+`OPENCODE` executor pin:
 
-| Tier | Pipeline | Toggle overrides you apply |
-|---|---|---|
-| **trivial** | **Quick** | defaults (implement + merge) |
-| **light** | **Async Sonnet** | drop `plan-review-codex` unless R ≥ 1; add `merge` |
-| **medium** | **Async Opus** | add `code-review` when R ≥ 1 |
-| **heavy** | **Async Fable** | add `code-review`; drop `merge`, add `pr` |
+| Tier | Claude Code | OpenCode | Toggle overrides you apply |
+|---|---|---|---|
+| **trivial** | **Quick** | **Quick** + `OPENCODE` pin | defaults (implement + merge) |
+| **light** | **Async Sonnet** | **Async OpenCode GLM** | defaults (plan-review stays listed — the runtime PLAN-GATE decides) |
+| **medium** | **Async Opus** | **Async OpenCode GLM** | add `code-review` when R ≥ 1 |
+| **heavy** | **Async Opus** | **Async OpenCode GLM** | add `code-review`; drop `merge`, add `pr` |
+
+`merge` is **default-on** in every deployed pipeline (squash-merge is the
+default delivery), so `completion: merge` needs no add — only `completion: pr`
+changes anything (drop `merge`, add `pr`). **Async Fable** is an explicit-ask
+arm only (uncalibrated) — never route to it, only honor it when named. The
+Claude family files are `async-claude-*.toml` on disk; display names are
+unchanged.
 
 The spec adopt-vs-write toggle needs **no** stage add/drop — every Async spec stage
 detects a full-spec description itself and copies it through instead of spawning a
@@ -198,10 +211,14 @@ Rules, all of them load-bearing:
 
   **The pin OVERRIDES any model named inside a stage prompt.** An Async Fable card
   pinned "on sonnet" spawns its `product` / `planner` / `coder` subagents on
-  **sonnet**, even though `async-fable.toml`'s stage prompts say `model: 'fable'`.
-  So: do **not** "fix" a stage prompt to agree with the pin, and do **not** refuse a
-  pin that disagrees with the pipeline's own model — stage prompts stay **verbatim
-  from the TOML**; the pin wins at *execution* time, not at *compose* time. It is a
+  **sonnet**, even though `async-claude-fable.toml`'s stage prompts say
+  `model: 'fable'`. So: do **not** "fix" a stage prompt to agree with the pin, and
+  do **not** refuse a pin that disagrees with the pipeline's own model **within the
+  same family** — stage prompts stay **verbatim from the TOML**; the pin wins at
+  *execution* time, not at *compose* time. The one pin you DO refuse is a
+  **cross-family** one (a GLM/MiniMax/Kimi pin on a Claude Code pipeline, or a
+  Sonnet/Opus/Fable pin on an OpenCode pipeline): surface the contradiction
+  instead of composing it — families never mix. It is a
   composer-added line, like the executor pin: **exactly one model pin per block**
   (and, as always, exactly one block per card — a recompose strips the old block
   whole, so a stale pin can never survive into the new one).

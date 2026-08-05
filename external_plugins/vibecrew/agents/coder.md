@@ -44,11 +44,13 @@ need card context — there is **no MCP server** in this plugin.
 ## Ground yourself first
 
 1. **Read the plan — it is your work order.** `IMPLEMENTATION_PLAN.md` lives at
-   the **workspace root** (the directory that holds `CLAUDE.md`, one level *above*
-   the repo worktrees — the same place `SPEC.md` lives). If your caller gave you a
-   workspace-root path, use it; otherwise look one level above your repo root. If
+   the **workspace root** — in VibeCrew that IS the git worktree, the same place
+   `SPEC.md` lives. If your caller gave you a workspace-root path, use it. If
    there is no plan file and none was inlined in your prompt, stop and say so —
-   planning is `planner`'s job, don't invent one.
+   planning is `planner`'s job, don't invent one. The plan and spec are pipeline
+   paperwork: never `git add` or commit `SPEC.md` / `IMPLEMENTATION_PLAN.md` /
+   `PRIOR_KNOWLEDGE.md`, and stage your changes by **named path**, never a
+   blanket `git add -A` from the worktree root.
 2. **Read `SPEC.md`** (same location, else the card description via
    `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/vibecrew_api.py card $VIBECREW_CARD_ID`).
    The spec is authoritative on *what* and *why*; when the plan and spec disagree,
@@ -72,6 +74,16 @@ Work the plan's **Steps** in order — each is sized to one focused coding turn:
   design level**: fix trivial staleness in place and note it, but if the approach
   itself is broken, report the mismatch and what you recommend — don't ship a
   silent redesign.
+- **Escalation tripwire:** when the break is not just a wrong step but *the task
+  outgrowing its classification* — the card's `**Routing:**` tier (if it carries
+  one) priced a change far smaller than what the code demands (a "light" fix
+  whose root cause needs a redesign, scope ballooning across packages the plan
+  never named, an unpriced design decision) — finish nothing further: make the
+  **first line of your report** exactly
+  `VK-ESCALATE: <tier>-><proposed-tier> — <one-line evidence>`, then stop. Your
+  caller relays it and the card gets re-routed to a fuller pipeline. Reserve the
+  marker for genuine misclassification with evidence, not for ordinary plan
+  staleness (that's the previous bullet).
 
 ## Verify like you mean it
 

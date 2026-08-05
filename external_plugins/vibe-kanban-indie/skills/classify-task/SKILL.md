@@ -1,11 +1,16 @@
 ---
 name: classify-task
 description: >-
-  Score a task (a rough brief, an intake mini-spec, or a full card spec) on five
-  bounded axes and return its complexity tier — trivial / light / medium /
-  heavy — plus the routed pipeline (Quick / Async Sonnet / Async Opus / Async
-  Fable), the per-stage toggles (spec adopt-vs-write, plan-review, code-review,
-  merge-vs-PR), and the one-line `**Routing:**` record that goes on the card.
+  Route a vibe-kanban card: resolve the pipeline FAMILY first (OpenCode vs
+  Claude Code — decided by the executor, never mixed: OpenCode pipelines run
+  MiniMax/GLM/Kimi models, Claude Code pipelines run Sonnet/Opus/Fable, Codex
+  is the shared reviewer for both), then score the task (a rough brief, an
+  intake mini-spec, or a full card spec) on five bounded axes to a complexity
+  tier — trivial / light / medium / heavy — and map tier → pipeline within
+  that family (Quick / Basic / Async Sonnet / Async Opus / Async OpenCode
+  GLM), plus the per-stage toggles (spec adopt-vs-write, plan-review
+  yes-vs-gate, code-review, merge-vs-PR) and the one-line `**Routing:**`
+  record that goes on the card.
   Use this skill WHENEVER a vibe-kanban card is being created or a pipeline is
   being attached and the operator did NOT explicitly name a pipeline — the
   `product-manager` skill and the `intake` agent invoke it right after the
@@ -44,6 +49,31 @@ line back to your caller.
   template for this exist; is the named file real). Never start a code
   exploration session just to classify — if an axis can't be scored from the
   text, score it 1 and say so in the report.
+
+## Step 1 — resolve the FAMILY (before any scoring)
+
+Pipelines come in two families, split by executor, **never mixed**:
+
+| Family | Executor pin | Build models (spec/plan/code) | Pipelines |
+|---|---|---|---|
+| **Claude Code** | `CLAUDE_CODE` | Sonnet / Opus / Fable — only these | Async Sonnet, Async Opus, Async Fable |
+| **OpenCode** | `OPENCODE` | MiniMax / GLM / Kimi — only these | Async OpenCode GLM (self-drive) |
+
+**Quick** and **Basic** are family-neutral (no baked-in models); on an
+OpenCode card they carry the `OPENCODE` executor pin. **Codex is the shared
+reviewer** — plan/diff review stages run Codex in BOTH families, never as a
+build model. **The never-mix invariant:** no stage, pin, or advice may name a
+model from the other family; if the operator's words contradict the family
+(an OpenCode pipeline *and* an Opus model), surface the contradiction and
+follow the pipeline's family — never compose a mixed binding.
+
+Resolution ladder, first hit wins:
+
+1. **Operator names a pipeline** → that pipeline's family, done.
+2. **Operator names an executor or a family model** ("on opencode", "with
+   glm", "on sonnet") → that family; a model name implies its family.
+3. **The config's last-used/default executor** (`/api/config`) → its family.
+4. Nothing resolvable → **Claude Code**.
 
 ## The five axes — score each 0 / 1 / 2
 
@@ -111,21 +141,32 @@ Total = S + D + R + N + V (0–10).
 | 4 – 6 | **medium** |
 | ≥ 7 | **heavy** |
 
-## Tier → pipeline and models
+## Tier → pipeline, within the family
 
-| Tier | Pipeline | Spec / plan model | Code model | Reviews |
-|---|---|---|---|---|
-| **trivial** | **Quick** | — (none) | main loop, direct | none |
-| **light** | **Async Sonnet** | sonnet | sonnet | plan-review only if R ≥ 1 |
-| **medium** | **Async Opus** | opus | sonnet | plan-review always; code-review if R ≥ 1 |
-| **heavy** | **Async Fable** | fable | opus | plan-review + code-review always |
+Telemetry-revised 2026-08-05 (evidence in `reference/routing.md` §9): full
+ceremony on GLM costs ~507K fresh tokens — the "ceremony tax" that made
+mid-size cards avoid async pipelines was a model-price artifact; the strongest
+blowup predictor is plan size (~40 KB), which is why plan-review and the coder
+model now bind **after the plan exists** (the PLAN-GATE / CODER-MODEL runtime
+checks), not here.
 
-The pipeline files in `~/.vibe-kanban/pipelines/*.toml` are the source of truth
-for stage prompts; you name the pipeline and the toggles, and
-`compose-pipeline` reads the files and renders the block. If the routed
-pipeline file is missing on disk (e.g. `quick.toml` was never seeded), report
-that and route one tier **up** to the nearest existing pipeline — never invent
-stages.
+| Tier | Claude Code family | OpenCode family |
+|---|---|---|
+| **trivial** | **Quick** | **Quick** + `OPENCODE` executor pin |
+| **light** | **Async Sonnet** | **Async OpenCode GLM** |
+| **medium** | **Async Opus** (opus spec/plan, sonnet coder) | **Async OpenCode GLM** |
+| **heavy** | **Async Opus** + code-review, `pr` instead of `merge` | **Async OpenCode GLM** + code-review, `pr` instead of `merge` |
+
+- **Async Fable is an explicit-ask arm only** (zero completed-card telemetry;
+  heavy routes to Async Opus until Fable is calibrated). Likewise the
+  OpenCode MiniMax/Kimi arms exist only in VibeCrew and are measured-weak /
+  uncalibrated — route to them only when the operator names them, and say so.
+- The pipeline files in `~/.vibe-kanban/pipelines/*.toml` are the source of
+  truth for stage prompts (Claude family files are named `async-claude-*`;
+  the display `name =` values are unchanged); you name the pipeline and the
+  toggles, and `compose-pipeline` reads the files and renders the block. If
+  the routed pipeline file is missing on disk, report that and route one tier
+  **up** to the nearest existing pipeline — never invent stages.
 
 ## Stage toggles — orthogonal to tier
 
@@ -143,14 +184,21 @@ as overrides against the pipeline's `default_enabled` set.
   `adopt`: never pay a spec subagent to rewrite a spec that exists.
 - **plan:** `skip` for trivial (Quick has no plan stage); `yes` for everything
   else.
-- **plan-review (Codex):** `yes` for medium and heavy, and for light when
-  R ≥ 1; otherwise `no` — drop the stage. A light plan is one screen, and the
-  coder's `done-when` checks catch what a review would.
+- **plan-review (Codex):** `yes` (forced) when R = 2; otherwise **`gate`** —
+  keep the stage listed and let the runtime PLAN-GATE decide after the plan
+  exists (it skips the review when the plan is under ~40 KB with 0 open
+  decisions, and caps it at two passes). Never drop the stage outright: that
+  would blind the gate. Plan size after grounding, not tier before it, is the
+  measured blowup predictor.
 - **code-review (Codex):** `yes` (add the stage) for heavy, and for medium when
-  R ≥ 1; otherwise `no`.
-- **completion:** `merge` (add the merge stage where it isn't default) for
-  trivial / light / medium with R ≤ 1; `pr` (drop merge, add the PR stage — a
-  human gate) for heavy or R = 2.
+  R ≥ 1; otherwise `no`. The runtime caps it at two passes either way.
+- **completion:** `merge` — the default; every deployed pipeline now ticks it
+  (squash-merge is the default delivery) — for R ≤ 1; **`pr`** (un-tick
+  merge, tick the PR stage — a human gate) for heavy or R = 2.
+- **coder model:** not decided here — the runtime CODER-MODEL check binds it
+  after the plan, within the family (sonnet→opus step-up on a blown plan; the
+  OpenCode self-drive pipeline is single-model by construction). Record the
+  family default in the Routing line as `coder: post-plan(<default>)`.
 - **orchestrate:** not yours — the explicit-execute gate belongs to
   `compose-pipeline` and its caller, unchanged by classification.
 
@@ -161,13 +209,13 @@ Hand back exactly one line, to be placed in the card description directly
 added inside them):
 
 ```
-**Routing:** <tier> → <pipeline> — S<s> D<d> R<r> N<n> V<v> = <total><; forced by <trigger|operator>>; spec: <adopt|write|skip>; plan: <yes|skip>; plan-review: <yes|no>; code-review: <yes|no>; completion: <merge|pr>
+**Routing:** <tier> → <pipeline> [<Claude Code|OpenCode>] — S<s> D<d> R<r> N<n> V<v> = <total><; forced by <trigger|operator>>; spec: <adopt|write|skip>; plan: <yes|skip>; plan-review: <yes|gate>; code-review: <yes|no>; completion: <merge|pr>; coder: post-plan(<default model>)
 ```
 
 Example:
 
 ```
-**Routing:** medium → Async Opus — S2 D1 R0 N0 V1 = 4; spec: adopt; plan: yes; plan-review: yes; code-review: no; completion: merge
+**Routing:** medium → Async Opus [Claude Code] — S2 D1 R0 N0 V1 = 4; spec: adopt; plan: yes; plan-review: gate; code-review: no; completion: merge; coder: post-plan(sonnet)
 ```
 
 This line is what makes routing auditable and tunable: when the card is done,
@@ -188,6 +236,9 @@ so; trust the tripwire.
 
 ## Report facts (hand these to your caller)
 
+- The **family** and which ladder rung resolved it (named pipeline / named
+  executor-or-model / config default / fallback), plus any operator/family
+  contradiction you surfaced.
 - The tier, the five axis scores and total, and any override that fired
   (operator / force-trivial / force-heavy), with one-phrase evidence.
 - The routed pipeline and every stage toggle.
@@ -200,9 +251,12 @@ so; trust the tripwire.
   → S0 D0 R0 N0 V0 = 0 → **trivial → Quick**. (Historically this card ran a
   spec stage plus a coder subagent — pure overhead.)
 - *"Markets page doesn't render content"* → S0 D1 (cause unknown) R0 N0 V0 =
-  1, D ≠ 0 → **light → Async Sonnet**, spec: write, plan-review: no.
+  1, D ≠ 0 → **light**; Claude executor → **Async Sonnet**, spec: write,
+  plan-review: gate.
 - *"Add Limitless as a fourth venue, cloning the `polymarket/` package; L0
-  probe first"* → S2 D1 R0 N0 V1 = 4 → **medium → Async Opus**, spec: adopt
-  (full PM spec already on the card), code-review: no.
+  probe first"* → S2 D1 R0 N0 V1 = 4 → **medium**; OpenCode default executor
+  → **Async OpenCode GLM [OpenCode]**, spec: adopt (full PM spec already on
+  the card), code-review: no.
 - *"Backtest replay engine + depth-aware fill sim + reports/CLI"* → S2 D2 R1
-  N2 V2 = 9 → **heavy → Async Fable**, all reviews on, completion: pr.
+  N2 V2 = 9 → **heavy → Async Opus [Claude Code]** + code-review, completion:
+  pr. (Async Fable only if the operator names it — uncalibrated.)

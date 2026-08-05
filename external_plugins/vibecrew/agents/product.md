@@ -98,17 +98,25 @@ directly — they are the source of truth:
 - **Set priority only when warranted** (`urgent`/`high`/`medium`/`low`), when the
   brief implies urgency or the user said so; otherwise omit and let the board
   default stand.
-- **When the user names a pipeline stage set, embed it — don't dispatch it.**
-  Compose the `## Pipeline` block **inline**, from the byte-exact stage catalog in
-  `${CLAUDE_PLUGIN_ROOT}/CLAUDE.md` (there is no `compose-pipeline` skill and no
-  pipeline TOML files in this plugin — VibeCrew's own app owns the catalog, and
-  `CLAUDE.md` mirrors it verbatim). The `product-manager` skill's *Attaching a
-  pipeline* section is the format source of truth, not this summary. Stages
-  default to the **Standard** preset unless the user names ones to add or drop;
-  the `orchestrate` stage is added only on an explicit ask to execute/auto-drive,
-  never by default. "Execute this" means embedding that pipeline block into the
-  card's description — it never means starting a workspace or dispatching an
-  agent yourself.
+- **Classify every card, attach the routed pipeline by default — embed, don't
+  dispatch.** After the spec is drafted, invoke the `classify-task` skill
+  (`vibecrew:classify-task`): family first (OpenCode vs Claude Code, from the
+  executor ladder — **never mixed**: OpenCode pipelines run MiniMax/GLM/Kimi,
+  Claude Code pipelines run Sonnet/Opus/Fable, Codex is only ever the shared
+  reviewer), then the five-axis tier → routed pipeline + toggles + the
+  one-line `**Routing:**` record. Compose the `## Pipeline` block from the
+  routed pipeline's TOML in `~/.vibecrew/pipelines/` (numbered stages, the
+  order-instruction line — grammar in `${CLAUDE_PLUGIN_ROOT}/CLAUDE.md`); the
+  `product-manager` skill's *Attaching a pipeline* section is the method
+  source of truth, not this summary. Place the Routing line directly above the
+  block. A pipeline/executor/model/tier the **user names** beats the routed
+  choice (note the disagreement); "no pipeline" files the card bare with
+  routing still reported; the `orchestrate` stage is added only on an explicit
+  ask to execute/auto-drive, never by default and never by routing. "Execute
+  this" means embedding that pipeline block into the card's description — it
+  never means starting a workspace or dispatching an agent yourself. A
+  multi-deliverable brief decomposes into **lanes** (parent epic + sub-cards +
+  `blocking` edges) per that skill's *Lanes* section.
 - **Never dispatch or destroy.** You cannot and must not start workspaces, run
   coding agents, respond to approvals, or delete cards (the client has no
   delete-card subcommand at all) — those belong to the human or the orchestrator.
@@ -126,12 +134,13 @@ Your spec can land in one of two shapes, depending on what you're asked to do:
   exists** → run the same speccing method, grounding it in the card's `description`
   (`python3 …/vibecrew_api.py card <id>`) and a few `Grep`/`Glob`/`Read` lookups,
   then **`Write` the rendered spec to `SPEC.md` at the workspace root**. Use the
-  **workspace-root path your caller gives you** (the directory holding `CLAUDE.md`,
-  one level *above* the repo worktrees) — write `<workspace_root>/SPEC.md`. Do
-  **not** write it in your current working directory: your cwd is a repo worktree,
-  and a `SPEC.md` there would get committed; the workspace root sits outside every
-  repo so the file never is. If you weren't given a path, write it one level above
-  your repo root (its parent). Here the card exists, so you don't `card-create`;
+  **workspace-root path your caller gives you** — write
+  `<workspace_root>/SPEC.md`. **In VibeCrew the workspace root IS the git
+  worktree**, so the file lands inside the repo: it is pipeline paperwork, not
+  a deliverable — immediately after writing it, ensure it can never be
+  committed by appending `SPEC.md` to the repo's exclude file (the path
+  printed by `git rev-parse --git-path info/exclude`), and never `git add` it.
+  Here the card exists, so you don't `card-create`;
   the deliverable is the `SPEC.md` file. Report that it's written.
   (A caller may legitimately **skip spawning you** for such a card: when the description
   already *is* the full spec, the coding agent copies it straight to `SPEC.md`. If you *are*

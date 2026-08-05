@@ -268,17 +268,36 @@ the exact order given, around the implementation.
   even though the stage prompts say `model: 'fable'`). **Absent a pin, nothing changes:**
   spawn with whatever model the stage prompt names.
 - **Routing line (if the card carries one):** a description line
-  `**Routing:** <tier> → <pipeline> — …` (above the Pipeline block) is the record of
-  the card's complexity classification — why *this* pipeline with *these* stages was
-  chosen. It is **informational, not a directive**: the stage list already reflects it,
-  so do not re-classify, add, or drop stages because of it. Its one runtime effect is
-  the **escalation tripwire**: if a `planner`/`coder` subagent's report **leads with a
-  line starting `VK-ESCALATE:`** — or you yourself hit a stage's inline tripwire — the
-  card is misclassified below its real size. **Do not push through and do not
-  re-route yourself:** commit any safe work, then STOP and make the **first line of
-  your final message** that exact `VK-ESCALATE: <tier>-><proposed-tier> — <evidence>`
-  line (park semantics, same as the approval gate: advance no later stage, wait). The
-  orchestrator surfaces it and the operator re-routes the card.
+  `**Routing:** <tier> → <pipeline> [<family>] — …` (above the Pipeline block) is the
+  record of the card's complexity classification — why *this* pipeline with *these*
+  stages was chosen. It is **informational, not a directive**: the stage list already
+  reflects it, so do not re-classify, add, or drop stages because of it. It has
+  exactly four runtime effects:
+  - **The family bounds every model decision.** OpenCode pipelines run
+    MiniMax / GLM / Kimi models only; Claude Code pipelines run Sonnet / Opus /
+    Fable models only; **never mix them** (Codex appears in both families, but
+    only ever as the reviewer). A model pin that contradicts the family is
+    surfaced, not applied.
+  - **PLAN-FACTS → PLAN-GATE.** After the plan stage, report
+    `PLAN-FACTS: <size> KB, <n> steps, <n> files, <n> open decisions`. At the
+    plan-review stage, gate first: under 40 KB AND 0 open decisions AND no
+    `plan-review: yes` on the Routing line ⇒ skip with
+    `PLAN-GATE: plan-review skipped (…)`; otherwise run it, **capped at two
+    passes** (persisting findings mean a mis-scoped plan — revise or escalate,
+    never a third pass). Cap `code-review` at two passes for the same reason.
+  - **CODER-MODEL.** Before spawning the coder, bind its model **within the
+    family**: a blown plan (≥ 40 KB or open design decisions) steps the coder
+    up one tier (sonnet → opus; a coder at its family ceiling stays put); an
+    operator model pin always wins. Report
+    `CODER-MODEL: <model> — <one-phrase reason>`.
+  - **The escalation tripwire**: if a `planner`/`coder` subagent's report
+    **leads with a line starting `VK-ESCALATE:`** — or you yourself hit a
+    stage's inline tripwire — the card is misclassified below its real size.
+    **Do not push through and do not re-route yourself:** commit any safe work,
+    then STOP and make the **first line of your final message** that exact
+    `VK-ESCALATE: <tier>-><proposed-tier> — <evidence>` line (park semantics,
+    same as the approval gate: advance no later stage, wait). The orchestrator
+    surfaces it and the operator re-routes the card.
 - **Fallback:** if you **can't** spawn the `product`/`planner` subagents — e.g. you're
   not a Claude Code agent, or have no Task/Agent tool or those subagents aren't
   available — then **write `SPEC.md` / `IMPLEMENTATION_PLAN.md` yourself** (follow the

@@ -221,6 +221,43 @@ VK-ESCALATE: <tier>-><proposed-tier> — <one-line evidence>
 - The marker is **case-sensitive** and matched as a **first-line prefix**; keep it
   byte-identical everywhere, same discipline as the approval marker above.
 
+## The two pipeline families, and the late-binding literals (2026-08-05)
+
+Pipelines split into two **families by executor, never mixed**: **Claude Code**
+(`CLAUDE_CODE` executor — Async Sonnet/Opus/Fable, build models Sonnet / Opus /
+Fable only; files `async-claude-*.toml`) and **OpenCode** (`OPENCODE` executor —
+Async OpenCode GLM, a self-drive pipeline; build models MiniMax / GLM / Kimi
+only). **Quick** / **Basic** are family-neutral and carry the family's executor
+pin instead. **Codex is the shared reviewer** in both families and is never a
+build model. No stage, pin, or advice may name a model from the other family.
+Family resolution and the per-family tier maps are `classify-task`'s job;
+`merge` is now **default-on** in every deployed pipeline (squash-merge is the
+default delivery; `pr` is the opt-in swap for heavy / R = 2 cards).
+
+Three late-binding report lines ride in run output (producers: the deployed
+stage prompts in `~/.vibe-kanban/pipelines/*.toml` + `prompts/pipeline.md`;
+consumers: the next stages and the telemetry loop) — keep them byte-stable:
+
+- `PLAN-FACTS: <size> KB, <n> steps, <n> files, <n> open decisions` — emitted
+  when the plan is verified.
+- `PLAN-GATE: plan-review skipped|running (<size> KB, <n> open decisions)` —
+  the plan-review stage runs only when the plan is ≥ 40 KB, has open
+  decisions, or the Routing line forces `plan-review: yes`; two-pass cap.
+- `CODER-MODEL: <model> — <reason>` — the coder model bound after the plan,
+  within the family (sonnet→opus step-up on blown plans; operator pin wins).
+
+## Lanes — dependent and parallel cards
+
+A multi-card brief files as **lanes**: one plain parent (epic) card that is
+never dispatched, sub-cards via the parent field, and **`blocking`
+relationships** chained within a lane (`create_issue_relationship`, direction
+blocker → blocked). No edge between lanes IS the parallelism. The
+orchestrator's sweep gates readiness on these edges (read via
+`GET /api/issue-relationships?issue_id=<id>` — **outgoing rows only**, so
+blockers are discovered from the blocker side; see `reference/sweep.md`), and
+a blocker going Done frees its dependents on the next sweep. A blocking cycle
+is a filing error: surfaced, never "resolved" by dispatching one side.
+
 ## Cross-references
 
 - `prompts/pipeline.md` — the coding-agent kickoff; defines the Wait-for-approval and
