@@ -21,6 +21,20 @@ You drive a running **vibe-kanban-indie** backend through its MCP server. Every
 tool is exposed as `mcp__plugin_vibe-kanban-indie_vibe-kanban__<tool>`. See this
 plugin's `README.md` for the full tool catalog and the connection prerequisites.
 
+## 0a. If the card tools are missing, check the backend channel
+
+`list_issues` / `get_issue` / `create_issue` / `update_issue` / `list_projects`
+were **removed from the MCP server in the 0.2.24-beta line** (the cloud-stack
+excision took `remote_issues.rs` / `remote_projects.rs` with it). This plugin's
+`.mcp.json` runs `npx vibe-kanban-indie@${VIBE_KANBAN_CHANNEL:-latest}`, and npm
+`latest` still resolves to 0.2.23, which has them — but `VIBE_KANBAN_CHANNEL=beta`
+does not, and neither will `latest` once 0.2.24 ships.
+
+So if a board tool comes back "tool not found", **do not work around it** — say
+plainly that the backend build has no card tools, name the channel, and stop.
+Every board operation in this skill depends on them; there is no REST fallback
+sanctioned for writes.
+
 ## 0. Make sure the backend is reachable
 
 The MCP is a client over the vibe-kanban HTTP API. If a tool returns "Failed to
@@ -37,11 +51,25 @@ Never invent UUIDs. Before any `create_*`, `update_*`, or `start_workspace`,
 discover the real entities:
 
 - `list_repos` → repo UUIDs (needed for `start_workspace`).
-- `list_projects` → project UUIDs (needed to scope issues).
-- `list_issues` (filter by `project_id`, `status`, `search`, `priority`, …) →
-  issue UUIDs. The human-readable `simple_id` (e.g. `PROJ-42`) is for display;
-  feed the UUID `id` back into other tools.
-- `list_workspaces` → workspace UUIDs.
+- `list_projects` → project UUIDs (needed to scope issues). Rows carry
+  **`parent_id`**: a project is a **board**, and boards nest — a project with
+  children still owns its own kanban. Resolve which board you mean before
+  listing anything.
+- `list_issues` (filter by `project_id`, `status`, `parent_issue_id`, `search`,
+  `priority`, `limit`/`offset`, …) → issue UUIDs. The human-readable `simple_id`
+  (e.g. `PROJ-42`) is for display; feed the UUID `id` back into other tools.
+  Every row carries **`parent_issue_id`** — absent/null on a root card — so
+  hierarchy costs no extra call.
+- `list_workspaces` → workspace UUIDs. **Not** project-scoped: it returns every
+  non-archived workspace on the machine, across all boards.
+
+**Columns are per board and fully custom.** They live in `project_statuses`
+(`name`, `color`, `sort_order`, `hidden`); `Todo / In Progress / In Review /
+Done` is only the seeded default, and nothing in the schema marks which column
+means "done". Read the real set with
+`curl -sf "$VIBE_BACKEND_URL/api/project-statuses?project_id=<id>"` before you
+filter or write a status, and treat **hidden columns ∪ the last visible one by
+`sort_order`** as terminal (the rule the board UI itself uses).
 
 ## 2. Core workflows
 

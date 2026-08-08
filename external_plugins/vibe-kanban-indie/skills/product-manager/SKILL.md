@@ -281,8 +281,10 @@ it as **lanes** so the orchestrator can run independent chains concurrently
 and always knows what to pick up when a card finishes:
 
 - **One parent epic card** — a plain tracking card (short summary; **no**
-  pipeline block, **no** orchestrate) so the sweep never dispatches it. File
-  it first; its id is the `parent_issue_id` for every sub-issue.
+  pipeline block, **no** orchestrate). File it first; its id is the
+  `parent_issue_id` for every sub-issue. The orchestrator refuses to dispatch
+  any card that has children, so the epic is safe in any column — filing it
+  bare is good hygiene, not the safety mechanism.
 - **One sub-issue per deliverable**, each a full self-contained spec, each
   classified and routed in its own right (step 5 per card — tiers and even
   families may differ), created with `parent_issue_id: <epic-id>`.

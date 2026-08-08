@@ -248,15 +248,43 @@ consumers: the next stages and the telemetry loop) — keep them byte-stable:
 
 ## Lanes — dependent and parallel cards
 
-A multi-card brief files as **lanes**: one plain parent (epic) card that is
-never dispatched, sub-cards via the parent field, and **`blocking`
-relationships** chained within a lane (`create_issue_relationship`, direction
-blocker → blocked). No edge between lanes IS the parallelism. The
-orchestrator's sweep gates readiness on these edges (read via
-`GET /api/issue-relationships?issue_id=<id>` — **outgoing rows only**, so
-blockers are discovered from the blocker side; see `reference/sweep.md`), and
-a blocker going Done frees its dependents on the next sweep. A blocking cycle
-is a filing error: surfaced, never "resolved" by dispatching one side.
+A multi-card brief files as **lanes**: one parent (epic) card, sub-cards via
+`parent_issue_id`, and **`blocking` relationships** chained within a lane
+(`create_issue_relationship`, direction blocker → blocked). No edge between
+lanes IS the parallelism. The orchestrator's sweep gates readiness on these
+edges (read via `GET /api/issue-relationships?issue_id=<id>` — **outgoing rows
+only**, so blockers are discovered from the blocker side; capped at 50 cards
+per sweep, holding whatever it could not verify; see `reference/sweep.md`), and
+a blocker reaching a terminal column frees its dependents on the next sweep. A
+blocking cycle is a filing error: surfaced, never "resolved" by dispatching one
+side.
+
+**A parent is never dispatched — that is now a rule, not a filing habit.** The
+orchestrator derives the parent set from `parent_issue_id` on the rows it
+already lists and refuses to start any card that has children, in any column.
+Filing an epic without a pipeline block is still good practice, but it is no
+longer what protects it: the board UI lets anyone drag an epic into the start
+column, and the backend enforces nothing. Nothing rolls a parent up either —
+the orchestrator *reports* "all N sub-issues done" and leaves the column to the
+operator, because the backend derives no status from hierarchy.
+
+## Boards are per-project, and their columns are custom
+
+A "board" is a project row; `parent_id` nests boards under a parent project,
+and a parent project still owns its own kanban. Columns live in
+`project_statuses` **per project** with arbitrary names — `Todo / In Progress /
+In Review / Done` is only the seeded default. Nothing in the schema flags which
+column means "done", so the orchestrator resolves roles the same way the app's
+own board UI does: **terminal** = hidden columns ∪ the last visible column by
+`sort_order`; **start-signal** = the second visible column; everything else is
+open. Read them from `/api/project-statuses?project_id=<id>`, per board, and
+never hardcode a column name into a filter or a write.
+
+A board can also carry its own **orchestrator prompt** (per project and per
+sub-board, edited live in the sidebar). Read the resolved stack from
+`/api/projects/<id>/orchestrator-prompt/resolve` once per sweep per board;
+`source: "default"` means none is set. It ranks with the directives block —
+board instructions add to behaviour, never override the safety rules.
 
 ## Cross-references
 

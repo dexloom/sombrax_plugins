@@ -108,8 +108,12 @@ If the brief bundles several genuinely separate deliverables:
   via `parent_issue_id`, and `blocking` edges created on the **blocker**
   (blocker → blocked) chaining each lane — cards in different lanes stay
   unlinked so the orchestrator runs them in parallel; its dependency gate
-  holds a blocked card until every blocker is Done. Never create a cycle.
-  Report the epic id, each sub-issue with its lane + tier, and the edges.
+  holds a blocked card until every blocker reaches a terminal column. Never
+  create a cycle: the backend accepts `A→B→A` and even a parent in another
+  project without complaint, so correctness here is entirely yours. The
+  orchestrator never dispatches a card that has children, so put the
+  `orchestrate` opt-in on the sub-issues, never on the epic. Report the epic
+  id, each sub-issue with its lane + tier, and the edges.
 
 ## Project resolution (headless ladder)
 

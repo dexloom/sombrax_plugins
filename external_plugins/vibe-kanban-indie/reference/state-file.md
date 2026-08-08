@@ -178,8 +178,16 @@ digested** — never the report line.
 
 `cards{}` caches **only facts that are a pure function of the card's DESCRIPTION** (plus
 the `updated_at` that description carried). Everything else — the card's **column**,
-whether it **has a workspace**, its **PR fields** — is read **fresh every sweep** from
-`list_issues` / `list_workspaces` and is **NEVER cached.**
+whether it **has a workspace**, its **PR fields**, and its **`parent_issue_id`** — is
+read **fresh every sweep** from `list_issues` / `list_workspaces` and is **NEVER
+cached.**
+
+**Hierarchy is deliberately not cached.** The parent set (which cards have children) is
+re-derived every sweep by one pass over the listing you already fetched — it is free,
+and caching it would go stale in a way you cannot detect: the backend re-parents on any
+`update_issue`, and deleting a parent silently orphans its children
+(`ON DELETE SET NULL`), so a card that was a child last tick can legitimately be a root
+this tick.
 
 - **`class: "managed" | "plain"`** — whether the description's `## Pipeline` carries the
   **Orchestrate** opt-in.
@@ -226,9 +234,12 @@ not. A future reader who "optimizes" it away would dispatch a coding agent with 
 and violate the constrained-tokens invariant above.
 
 **Pruning `cards{}` — about file size, not correctness.** Drop entries for issues this
-sweep's listing showed as **Done** (terminal). Drop entries for issues **not present** in
-this sweep's enumeration — **but only when the sweep actually enumerated the project's
-non-Done issues in full**; if the listing was partial, filtered short, paginated short,
+sweep's listing showed in a **terminal column** (the board's own — see `reference/sweep.md`
+→ *The board shape*; on a default board that is Done, and any hidden column counts too).
+Drop entries for issues **not present** in this sweep's enumeration — **but only when the
+sweep actually enumerated the board's non-terminal issues in full** (`returned_count ==
+total_count` on every page, the same completeness test the lane allocator applies to
+`list_workspaces`; a truncated listing means prune nothing); if the listing was partial, filtered short, paginated short,
 or errored, **prune nothing** this tick. A pruned-then-reappearing card is a safe cache
 miss. (Monitor-mode ticks run no listing at all ⇒ they prune nothing.)
 

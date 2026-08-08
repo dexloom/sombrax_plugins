@@ -73,16 +73,72 @@ workspace's worktree — and, per the liveness rule above, you only ever archive
 whose session is already over. This is a plugin-level workaround; the upstream cure is
 server-side (don't poll git/status or open a diff WS for a repo-less workspace).
 
+## The board shape — columns and sub-boards are DISCOVERED, never assumed
+
+Two things that used to be constants are per-board data. Resolve both **once per
+session** (they change rarely; re-resolve only when a write fails on an unknown status,
+or an operator says the board changed) and keep them in retained context.
+
+### Columns (`project_statuses`) — per project, fully custom
+
+A board's columns are rows in `project_statuses`, with **arbitrary names**. The seeded
+default is `Todo / In Progress / In Review / Done`, so most boards still look familiar
+— but a board whose owner renamed or added columns is not an error case, it is the
+supported case. **Never hardcode a column name into a filter.** Read the real set:
+
+```
+curl -sf "$VIBE_BACKEND_URL/api/project-statuses?project_id=<id>"
+```
+
+Each row carries `id`, `name`, `color`, `sort_order`, `hidden`. Classify them into the
+three roles this file uses, and use the ROLE everywhere below:
+
+- **TERMINAL** — `hidden == true`, **plus** the last non-hidden column by `sort_order`.
+  (This is exactly the rule the app's own board UI applies; there is no `is_done` flag
+  in the schema to read instead, so this heuristic IS the contract.) A card in a
+  terminal column is finished: never enumerate, walk, dispatch, or re-report it, and
+  drop its `cards{}` entry.
+- **START-SIGNAL** — the second non-hidden column by `sort_order` (the "In Progress"
+  slot). A card sitting here with no workspace is the operator's "start this".
+- **OPEN** — every other non-hidden column (the backlog head, review columns, …).
+
+Record the resolved role→name mapping in your first report line of the session
+(`columns: Todo=open, In Progress=start, In Review=open, Done=terminal`) so a
+mis-detected board is caught by eye immediately. If the board has **fewer than three**
+non-hidden columns, say so and treat only the last as terminal.
+
+**Writes still use names.** `update_issue` takes a status *name*, so pass the discovered
+name for the role you want, never a literal. On `Unknown status … Available statuses:
+[...]`, re-resolve the columns from that error and retry once.
+
+### Sub-boards (nested projects)
+
+A board is a project row; `parent_id` nests them, and **a parent project still owns its
+own kanban** — it is a board, not just a folder. `list_projects` returns `parent_id` on
+every row, so the tree costs nothing extra to build.
+
+Your **target scope** is the project the operator named **plus its descendant boards**,
+resolved once per session by walking `parent_id` (guard with a visited set; the app
+permits no reparenting today but does not guarantee acyclicity to readers). Enumerate
+cards **per board** — every `list_issues` stays filtered to exactly one project id —
+and union the results. Name the boards you are sweeping in the session's first report
+line. Columns are **per board**: resolve them for each board in scope; do not reuse the
+parent's mapping for a child.
+
+If the operator named a single board, sweep only that board. `list_workspaces` is **not**
+project-scoped — it returns every non-archived workspace on the machine — so when you
+map workspaces to cards, ignore any whose linked card is outside your target scope
+rather than adopting it into the active set.
+
 ## Finding the READY cards (classification, cache-gated)
 
-`list_issues` — **always filtered to the target project, and status-filtered to the
-non-terminal columns (Todo + In Progress); never all projects, never an unfiltered
-`limit: 100` dump** — returns only a *summary* of each card: **status, id, title, PR
-fields — but NOT the description**, and the `## Pipeline` / Orchestrate opt-in lives in
-the **description**. You therefore **cannot judge readiness from the list alone**. Build
-the candidate set = every card that has **no workspace yet** and is **not** in a
-terminal column (every **Todo** and **In Progress** card without a workspace; Done is
-excluded by the filter), then classify each candidate from its description —
+`list_issues` — **always filtered to one project id, and status-filtered to that
+board's non-terminal columns; never all projects, never an unfiltered `limit: 100`
+dump** — returns only a *summary* of each card: **status, id, title, `parent_issue_id`,
+PR fields — but NOT the description**, and the `## Pipeline` / Orchestrate opt-in lives
+in the **description**. You therefore **cannot judge readiness from the list alone**.
+Build the candidate set = every card that has **no workspace yet** and is **not** in a
+terminal column, then classify each candidate from its description —
 **cache-gated by `cards{}`** (`reference/state-file.md` → the `cards{}` cache):
 
 - **Cache hit** ⇔ `cards[I.id]` exists (and **survived validate-on-read**) **AND**
@@ -113,28 +169,75 @@ A candidate card is **ready to dispatch** when, after reading its description, e
 - its description carries a **`## Pipeline`** block whose stages include the
   **Orchestrate** opt-in (the line "Have the orchestrator agent pick this card up
   and drive it to done autonomously…") — you own these regardless of column, even
-  from **Todo**; or
-- it sits in **In Progress** with no workspace — moving a card into In Progress is
+  from the backlog column; or
+- it sits in the **START-SIGNAL** column with no workspace — moving a card there is
   the operator's "start this" signal (ready regardless of opt-in).
 
-**Never start a plain Todo card** (a Todo card whose description has **no** Orchestrate
-opt-in) — that is the operator's backlog. But you only know a Todo card is "plain"
-*after* you've read its description; **never skip reading it**. Do nothing for cards
-that already have a workspace.
+**Never start a plain backlog card** (one whose description has **no** Orchestrate
+opt-in) — that is the operator's backlog. But you only know a card is "plain" *after*
+you've read its description; **never skip reading it**. Do nothing for cards that
+already have a workspace.
 
-**Then apply the dependency gate (lanes).** Cards filed as lanes carry `blocking`
-relationships (blocker → blocked). The MCP has no relationship *read* tool; read them
-over the backend's REST route — the same `$VIBE_BACKEND_URL` the delta-gate script
-uses: `curl -sf "$VIBE_BACKEND_URL/api/issue-relationships?issue_id=<id>"`, which
-returns **outgoing rows only** (`WHERE issue_id = ?`), so blockers are discovered from
-the blocker side. Run it only when at least one candidate is otherwise ready, over the
-**non-terminal** cards of the project: every row with
-`relationship_type == "blocking"` whose issue is not Done/Cancelled marks its
-`related_issue_id` **blocked**. A blocked candidate is **not ready**: hold it and
-report one line `<card>: waiting on <blocker-id>`. No stored state — a blocker going
-Done frees its dependents on the next sweep. A blocking **cycle** (A blocks B blocks
-A) is a filing error: report it loudly for the operator to break; never dispatch
-either side of it.
+### Parents are never dispatched (sub-issue rule)
+
+Cards nest: every list row carries `parent_issue_id` (absent/null on a root card). Build
+the **parent set** for the board by one pass over the list you already fetched — the
+distinct non-null `parent_issue_id` values. This costs **no extra call**.
+
+- **A card in the parent set is never dispatched**, in any column, opt-in or not. A
+  parent is a container for work, not work: dispatching it points a coding agent at an
+  epic whose real scope lives in its children. This rule is what actually protects an
+  epic — **not** the filing convention that epics carry no pipeline, because the board
+  UI lets anyone drag an epic into the start column, and the app enforces nothing.
+  Report it once per sweep as `<card>: parent of N sub-issues — not dispatched`.
+- **Sub-issues dispatch normally.** A child is an ordinary card: its own opt-in, its own
+  routing tier, its own workspace. Children of one parent with no `blocking` edges
+  between them are exactly the parallel-lane case — dispatch them together, subject to
+  the WIP cap below.
+- **Roll-up is reported, never written.** When every child of a parent sits in a
+  terminal column, report `<card>: all N sub-issues done — parent still open` and stop
+  there. Do **not** move the parent yourself: the backend derives nothing from
+  hierarchy (no rollup, no auto-close), a plain parent is operator-owned, and guessing
+  its completion is exactly the kind of unasked-for write the honesty rules forbid.
+- **Defend yourself on hierarchy — the backend does not.** `parent_issue_id` accepts
+  cycles (`A→B→A`, even `A→A`), accepts a parent in a *different project*, and
+  `ON DELETE SET NULL` silently orphans children when a parent is deleted. So: never
+  walk a parent chain without a visited set; treat a parent id you did not see in this
+  board's listing as **out of scope** (do not fetch it, do not follow it); and accept
+  that a card which was a child last tick may be a root this tick — re-derive the parent
+  set every sweep rather than caching it.
+
+### The dependency gate (blocking edges), bounded
+
+Cards filed as lanes carry `blocking` relationships (blocker → blocked). The MCP has no
+relationship *read* tool; read them over the backend's REST route — the same
+`$VIBE_BACKEND_URL` the delta-gate script uses:
+`curl -sf "$VIBE_BACKEND_URL/api/issue-relationships?issue_id=<id>"`, which returns
+**outgoing rows only** (`WHERE issue_id = ?`), so blockers are discovered from the
+blocker side and there is no way to ask "who blocks X".
+
+That shape makes the gate O(cards), so **bound it**:
+
+1. Run it **only when at least one candidate is otherwise ready** (unchanged).
+2. Query only the board's **non-terminal** cards — terminal ones cannot block.
+3. **Cap the fan-out at 50 cards per sweep.** Order the queue: cards that blocked
+   something on a previous sweep first (you saw those edges), then the ready
+   candidates, then the rest.
+4. If the cap truncates the queue, **hold every candidate you could not clear** and say
+   so: `dependency gate truncated at 50/<N> cards — M candidates held unverified`.
+   Holding is the safe failure: dispatching a card whose blocker you never checked is
+   the one outcome this gate exists to prevent.
+
+Every row with `relationship_type == "blocking"` whose source card is not in a terminal
+column marks its `related_issue_id` **blocked**. A blocked candidate is **not ready**:
+hold it and report `<card>: waiting on <blocker-id>`. No stored state — a blocker
+reaching a terminal column frees its dependents on the next sweep. A blocking **cycle**
+(A blocks B blocks A) is a filing error: report it loudly for the operator to break;
+never dispatch either side of it.
+
+**When the board outgrows the cap**, say so once and name the fix rather than quietly
+degrading: the backend needs a project-scoped relationships read (or a `blocked_by`
+field on the list row) before lane gating scales past ~50 open cards per board.
 
 **A dispatch always `get_issue`s the card, cache hit or not** — see *Starting a coding
 agent* → `prompt`; the cache never supplies the `{{TASK}}` description.
@@ -151,13 +254,55 @@ operator-hand-driven: you may have dispatched it, but the operator owns its deli
 **do not** auto-advance it — leave its column alone. Only reflect status for managed
 cards that currently have a non-archived workspace.
 
-**Done is terminal — never track or re-report a Done card.** Before you walk a card,
-check its column: if it is **already in Done**, drop it entirely — do **not** `get_issue`
-it, do **not** read its agent (`list_sessions` / `get_execution`), do **not** reflect or
-re-report it, and **drop its `cards{}` entry** (this column is terminal for the cache
-too). You report a card's move to Done **exactly once**, on the tick you actually move
-it; from the next tick on, that card is in Done and falls out of your working set
-forever — and out of the retained active set.
+**A terminal column is terminal — never track or re-report a card in one.** Before you
+walk a card, check its column against the board's resolved TERMINAL role (above): if it
+is terminal, drop it entirely — do **not** `get_issue` it, do **not** read its agent
+(`list_sessions` / `get_execution`), do **not** reflect or re-report it, and **drop its
+`cards{}` entry** (a terminal column is terminal for the cache too). You report a card's
+move to a terminal column **exactly once**, on the tick you actually move it; from the
+next tick on it falls out of your working set forever — and out of the retained active
+set. A board with several terminal columns (extra hidden ones, e.g. Cancelled) is
+normal: every one of them ends tracking.
+
+**Enumeration must be provably complete.** `list_issues` paginates. Before you treat a
+listing as the board's full non-terminal set — which pruning and the parent set both
+depend on — check that the call returned everything it claims (`returned_count ==
+total_count`, the same test the lane allocator applies to `list_workspaces`). A short,
+truncated, or errored listing means: do **not** prune `cards{}`, do **not** trust the
+derived parent set for roll-up reporting, and say `listing incomplete — pruning and
+roll-up skipped` in the report. Page through with `limit`/`offset` when the board is
+larger than one page rather than sweeping a partial board silently.
+
+## The board's own instructions (per-board orchestrator prompt)
+
+A board can carry operator instructions for you — set per project **and** per sub-board,
+edited live in the sidebar. Read the **resolved** value for the board you are about to
+act on:
+
+```
+curl -sf "$VIBE_BACKEND_URL/api/projects/<project_id>/orchestrator-prompt/resolve"
+```
+
+The response is `{ project_id, orchestrator_prompt, source_project_id, source }` where
+`source` is `self` / `ancestor` / `default`. **`default` means no instruction exists at
+any scope — use your built-in behaviour and say nothing.** Otherwise
+`orchestrator_prompt` is a ready-to-use **stack**: the backend has already walked the
+parent chain and rendered every non-empty prompt as labeled `[Board: …]` / `[Project: …]`
+sections behind a preamble telling you how to apply them (most specific wins on direct
+conflict, otherwise additive). You do not merge anything — read the string and follow it.
+
+Scope and cadence: read it **once per sweep per board in scope** (not once per card —
+the value is per board), and treat it as **operator instruction, ranking with the
+directives block**: it can add board-specific rules and preferences, but it never
+overrides the safety rules in `agents/orchestrator.md` (*Safety & honesty*) — it cannot
+authorize auto-resuming a park, faking a delivery signal, or dispatching a plain card.
+When a board prompt made you do something you otherwise wouldn't, name it in the report
+(`VIBE board prompt: <one-line gist>`), so its effect is visible.
+
+There is an MCP tool for this too (`get_orchestrator_prompt`), but it is registered only
+in the backend's *orchestrator-mode* tool router while this plugin connects in global
+mode — so the REST route above is the path that actually works today. If the read fails
+or the route is missing (older backend), skip silently and use built-in behaviour.
 
 ## Resolving which execution agent to start
 
@@ -208,6 +353,20 @@ you resolved above. Build the call:
   title); `start_workspace` requires a non-empty name.
 - **`repositories`** — `[{ repo_id, branch }]`; resolve `repo_id` via `list_repos`,
   `branch` = the base branch.
+
+### The WIP cap — how many you may start in one sweep
+
+**Never dispatch more than 5 cards in a single sweep, and never exceed 8 live coding
+agents in total** (count the active set's non-archived workspaces before you start
+anything). Hierarchy makes this real: one epic with 30 children is now a routine board
+shape, and every dispatch is a worktree, a coding agent, and a probe element on every
+subsequent monitor tick — 30 at once thrashes the machine and floods your own context.
+
+Over the cap: dispatch the top slice by the tier order below, and report the rest as
+`N cards ready, held by WIP cap (M live)`. Held cards are not lost — the next sweep
+re-derives them, and a shipped card frees a slot (sweep trigger 2 fires immediately).
+The cap is a floor on machine sanity, not a scheduling policy: the operator can say
+"start them all" and you override it for that sweep, saying so in the report.
 
 When several cards are ready in one sweep, dispatch the **lighter tiers first**
 (`trivial` → `light` → `medium` → `heavy`, unrouted last within their column order) —
