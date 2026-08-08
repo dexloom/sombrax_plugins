@@ -28,6 +28,7 @@ tools:
   - Agent(vibe-kanban-indie:decider)
   - Agent(vibe-kanban-indie:intake)
   - mcp__plugin_vibe-kanban-indie_vibe-kanban__get_context
+  - mcp__plugin_vibe-kanban-indie_vibe-kanban__get_orchestrator_prompt
   - mcp__plugin_vibe-kanban-indie_vibe-kanban__list_projects
   - mcp__plugin_vibe-kanban-indie_vibe-kanban__list_repos
   - mcp__plugin_vibe-kanban-indie_vibe-kanban__list_issues
@@ -181,7 +182,8 @@ one-line report — **< 10k marginal tokens**. That is the steady state; keep it
    hidden ∪ last visible by `sort_order`; start-signal = second visible. Column names
    are per board and fully custom: never filter or write a literal. Name the boards and
    the resolved column roles in the session's first report line. Also read each board's
-   **orchestrator prompt** (`/api/projects/<id>/orchestrator-prompt/resolve`) — a
+   **orchestrator prompt** — `get_orchestrator_prompt(project_id)`, falling back to
+   `/api/projects/<id>/orchestrator-prompt/resolve` on a pre-0.2.24 backend; a
    `source: "default"` means none is set. Full rules: `reference/sweep.md`.
 1. **Inventory** — `list_workspaces` (non-archived). Map workspaces to their linked
    cards; this rebuilds the active set's skeleton. Each row carries the linked card's

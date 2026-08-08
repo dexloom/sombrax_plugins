@@ -21,19 +21,25 @@ You drive a running **vibe-kanban-indie** backend through its MCP server. Every
 tool is exposed as `mcp__plugin_vibe-kanban-indie_vibe-kanban__<tool>`. See this
 plugin's `README.md` for the full tool catalog and the connection prerequisites.
 
-## 0a. If the card tools are missing, check the backend channel
+## 0a. If a board tool is missing, name the backend build and stop
 
-`list_issues` / `get_issue` / `create_issue` / `update_issue` / `list_projects`
-were **removed from the MCP server in the 0.2.24-beta line** (the cloud-stack
-excision took `remote_issues.rs` / `remote_projects.rs` with it). This plugin's
-`.mcp.json` runs `npx vibe-kanban-indie@${VIBE_KANBAN_CHANNEL:-latest}`, and npm
-`latest` still resolves to 0.2.23, which has them — but `VIBE_KANBAN_CHANNEL=beta`
-does not, and neither will `latest` once 0.2.24 ships.
+The card tools (`list_issues` / `get_issue` / `create_issue` / `update_issue` /
+`delete_issue` / `list_issue_priorities` / `list_projects`) briefly vanished from
+the MCP server in the **0.2.24-beta line** — the cloud-stack excision took
+`remote_issues.rs` / `remote_projects.rs` with it — and were **restored in 0.2.24
+stable** as `issues.rs` / `projects.rs`. So: 0.2.23 has them, the 0.2.24 betas do
+not, 0.2.24+ does. This plugin's `.mcp.json` runs
+`npx vibe-kanban-indie@${VIBE_KANBAN_CHANNEL:-latest}`.
 
-So if a board tool comes back "tool not found", **do not work around it** — say
-plainly that the backend build has no card tools, name the channel, and stop.
-Every board operation in this skill depends on them; there is no REST fallback
-sanctioned for writes.
+If a board tool comes back "tool not found", **do not work around it** — say
+plainly that the backend build lacks it, name the resolved version and the
+`VIBE_KANBAN_CHANNEL` in play, and stop. Every board operation in this skill
+depends on those tools, and no REST fallback is sanctioned for writes.
+
+`get_orchestrator_prompt` (board-scoped instructions, ADR-016) arrived in the same
+0.2.24 stable and sits in the **global** router, so it is callable from a normal
+session; on anything older, read the value from
+`/api/projects/<id>/orchestrator-prompt/resolve` instead.
 
 ## 0. Make sure the backend is reachable
 

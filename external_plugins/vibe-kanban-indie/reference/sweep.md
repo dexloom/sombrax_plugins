@@ -277,7 +277,15 @@ larger than one page rather than sweeping a partial board silently.
 
 A board can carry operator instructions for you — set per project **and** per sub-board,
 edited live in the sidebar. Read the **resolved** value for the board you are about to
-act on:
+act on with the MCP tool:
+
+```
+get_orchestrator_prompt(project_id: <the board's project id>)
+```
+
+`project_id` is **required** — you are a global singleton with no implicit project, so
+always pass the board you are acting on. On a backend older than 0.2.24 the tool is not
+in your mode's router; fall back to the same value over REST:
 
 ```
 curl -sf "$VIBE_BACKEND_URL/api/projects/<project_id>/orchestrator-prompt/resolve"
@@ -299,10 +307,8 @@ authorize auto-resuming a park, faking a delivery signal, or dispatching a plain
 When a board prompt made you do something you otherwise wouldn't, name it in the report
 (`VIBE board prompt: <one-line gist>`), so its effect is visible.
 
-There is an MCP tool for this too (`get_orchestrator_prompt`), but it is registered only
-in the backend's *orchestrator-mode* tool router while this plugin connects in global
-mode — so the REST route above is the path that actually works today. If the read fails
-or the route is missing (older backend), skip silently and use built-in behaviour.
+If both reads fail (older backend without the route), skip silently and use built-in
+behaviour — a missing board prompt is the normal case, not an error.
 
 ## Resolving which execution agent to start
 
