@@ -5,11 +5,11 @@
 > pre-0.4.0 sweep logic; only the timer changed hands (you re-arm the cron yourself —
 > there is no `CADENCE:` handshake anymore).
 
-**One state file, five sections, read once and written once per tick.** This file is
+**One state file, six sections, read once and written once per tick.** This file is
 the **ONE canonical definition** of its shape — every other place that touches
-`cadence`, `sessions`, `parks`, `cards`, or `lanes` cross-references this file rather
-than restating a partial version of it. Exactly one fenced block below defines the JSON
-shape; if a second one ever appears, that is drift.
+`cadence`, `sessions`, `parks`, `cards`, `lanes`, or `parents` cross-references this file
+rather than restating a partial version of it. Exactly one fenced block below defines the
+JSON shape; if a second one ever appears, that is drift.
 
 ## Path
 
@@ -52,6 +52,9 @@ gate's own state file, `orchestrator-delta.json`, is a **separate, sibling** fil
   },
   "lanes": {
     "<workspace_id>": "A"
+  },
+  "parents": {
+    "<issue_id>": "seen"
   }
 }
 ```
@@ -76,6 +79,13 @@ gate's own state file, `orchestrator-delta.json`, is a **separate, sibling** fil
   a property of the *workspace*, and outlives any one session). **The value is ONLY the letter.** The
   human-readable nickname (`VIBE A`) is **derived fresh at render time and NEVER stored** — see *Lane labels*
   and THE CONSTRAINED-TOKENS INVARIANT.
+- **`parents`** — `{ <issue_id>: "seen" | "start" | "review" }` — the **parent roll-up
+  ledger**: which cards have been seen to have sub-issues, and the furthest column role you
+  have already rolled each one to (`seen` = discovered, nothing written yet; a parent rolled
+  to a **terminal** column is **dropped**, not recorded — terminal is untracked here exactly
+  as it is in `cards{}`). It is a *candidate set + write-once ledger*, never a claim about
+  who the children are — the roster is re-read every sweep (see *The `parents{}` ledger*).
+  Roll-up rules: `reference/sweep.md` → *Parent roll-up*.
 - **`version`** — write `1`. **Readers IGNORE it entirely** and never gate behavior on
   it — a version check would turn a hand-edit into a full state wipe for zero benefit;
   the validate-on-read and fresh-start rules below already cover every corruption case,
@@ -100,7 +110,7 @@ Two independent reasons this is an invariant, not a style note:
    (CR-2)"; nudge stores `last_fingerprint` / `nudged_fingerprint`. Parks storing a digest
    is consistent, not novel.
 
-**The audit table — every field of all five sections. This table IS the schema — it
+**The audit table — every field of all six sections. This table IS the schema — it
 governs both the write path and the read path (validate-on-read, below):**
 
 | Value | Token class (the validation rule) |
@@ -118,7 +128,8 @@ governs both the write path and the read path (validate-on-read, below):**
 | `cards.<id>.executor_pin` | a known `BaseCodingAgent` key **or `null`** |
 | `cards.<id>.routing` | enum: exactly `trivial`, `light`, `medium`, or `heavy` — **or `null`** |
 | `lanes.<workspace_id>` | `^[A-Z]{1,2}$` — a bare letter, nothing else |
-| every object key (`sessions`/`parks`/`cards`/`lanes`) | a UUID |
+| `parents.<issue_id>` | enum: exactly `seen`, `start`, or `review` |
+| every object key (`sessions`/`parks`/`cards`/`lanes`/`parents`) | a UUID |
 
 **Worked example — why the lane NICKNAME is not stored.** A lane label like `VIBE A` is a **project nickname**
 + a letter. The nickname is **free-form, operator/agent-authored prose** — it can contain an apostrophe, a
@@ -151,8 +162,10 @@ Why DROP, not abort — **every drop is fail-safe**:
 | a `parks` entry | the recovery rule (`reference/parks.md`) re-surfaces the park ⇒ one duplicate announcement, never a missed one |
 | a `cadence` field | the documented fresh-start default for that field ⇒ at most one idle-cadence reset |
 | a `lanes` entry | that workspace re-allocates a letter this tick ⇒ **at most one cosmetic re-label**. The row is still rendered and still reported |
+| a `parents` entry | that parent is re-discovered from any non-terminal child in the next sweep's listing ⇒ at most one re-asserted roll-up write. **The one drop that is not purely "more work":** if *every* child is already terminal there is no listing row left to re-discover the parent from, so its Done roll-up is missed until a child moves or the operator does — i.e. the card stays exactly where the operator left it (the pre-roll-up behaviour). Nothing stalls and no work is lost; report the drop so it is visible |
 
-**Every drop degrades to more work, never to a missed event.** And the drop is
+**Every drop degrades to more work, never to a missed event** (the `parents` row above is
+the one documented exception — it degrades to *no* roll-up, never to a wrong one). And the drop is
 **surgical**: one bad `cards` entry costs one `get_issue` — it does **not** wipe the
 other four sections. **Never crash the tick over one bad entry.**
 
@@ -187,7 +200,9 @@ re-derived every sweep by one pass over the listing you already fetched — it i
 and caching it would go stale in a way you cannot detect: the backend re-parents on any
 `update_issue`, and deleting a parent silently orphans its children
 (`ON DELETE SET NULL`), so a card that was a child last tick can legitimately be a root
-this tick.
+this tick. (`parents{}` is **not** a cache of that set — it never answers "who are P's
+children"; it only remembers *which cards to ask about* and *what you already wrote*. See
+below.)
 
 - **`class: "managed" | "plain"`** — whether the description's `## Pipeline` carries the
   **Orchestrate** opt-in.
@@ -242,6 +257,40 @@ total_count` on every page, the same completeness test the lane allocator applie
 `list_workspaces`; a truncated listing means prune nothing); if the listing was partial, filtered short, paginated short,
 or errored, **prune nothing** this tick. A pruned-then-reappearing card is a safe cache
 miss. (Monitor-mode ticks run no listing at all ⇒ they prune nothing.)
+
+## The `parents{}` ledger — candidate set + write-once record
+
+`parents{}` exists so the **parent roll-up** (`reference/sweep.md` → *Parent roll-up*) can
+do two things the listing alone cannot:
+
+1. **Remember which cards to ask about.** The parent set is derived free from the
+   non-terminal listing — but a parent whose children have **all** gone terminal has no
+   non-terminal child left to point at it, so it would vanish from that set on the exact
+   sweep its Done roll-up became due. Once a card is seen with ≥1 child, `parents{}`
+   remembers it and it stays a roll-up candidate across ticks and restarts.
+2. **Write each roll-up once.** The value records the furthest role you already rolled the
+   parent to, so a parent is moved **once per role** — an operator who then drags it
+   somewhere else keeps that placement instead of being overridden every sweep. It is a
+   record of *your writes*, never of the board's state.
+
+**Values** (`seen` → `start` → `review`, monotone; terminal ⇒ the entry is dropped):
+
+| Value | Meaning |
+|---|---|
+| `seen` | discovered as a parent; no roll-up written yet |
+| `start` | you rolled it to the board's **start-signal** column |
+| `review` | you rolled it to the board's **review** column |
+
+**This is not a hierarchy cache.** Membership ("who are P's children") is **always** read
+fresh — the free pass over the sweep's listing, plus the authoritative roster read the Done
+and Review rungs require. A stale key is therefore harmless: a card that is no longer a
+parent comes back with an **empty** roster ⇒ no roll-up, and the entry is dropped.
+
+**Pruning** — same discipline as `cards{}`, and only on a **complete** enumeration
+(`returned_count == total_count` on every page): drop the entry when the parent reached a
+**terminal** column, when its roster came back with **zero** children, or when the parent is
+**not present** in this sweep's complete enumeration. A truncated, filtered-short, or errored
+listing prunes **nothing**; monitor ticks run no listing, so they prune nothing.
 
 ## Lane labels (the `lanes{}` section)
 
@@ -387,7 +436,7 @@ mkdir -p "$(dirname "$F")" && printf '%s' '<json>' > "$F.tmp" && mv "$F.tmp" "$F
 ```
 
 The temp-file + `mv` is a **MUST**: unification means one torn write would reset
-cadence *and* nudge *and* parks *and* cards *and* lanes together. `mv` is atomic; the
+cadence *and* nudge *and* parks *and* cards *and* lanes *and* the parent ledger together. `mv` is atomic; the
 "garbled ⇒ fresh start" path below is only the backstop. (Per the invariant above,
 `<json>` contains **no** agent-authored text, so the single-quoted interpolation is safe
 by construction.)
@@ -403,7 +452,7 @@ the LAST TOOL CALL OF THE TICK** → emit the report.
 
 **The rule that decides the order:**
 
-> **All five sections of the unified state fail SAFE when unwritten. The delta-gate `commit`, when unwritten, merely costs an extra poll. The write whose absence is harmless goes LAST.**
+> **All six sections of the unified state fail SAFE when unwritten. The delta-gate `commit`, when unwritten, merely costs an extra poll. The write whose absence is harmless goes LAST.**
 
 | Unwritten section | Cost on the next tick |
 |---|---|
@@ -412,6 +461,7 @@ the LAST TOOL CALL OF THE TICK** → emit the report.
 | `parks` | self-heals via the recovery rule ⇒ the park is announced |
 | `cards` | one extra `get_issue` |
 | `lanes` | letters re-allocate next tick — at most one cosmetic re-label |
+| `parents` | a roll-up you already wrote may be re-asserted once next sweep — one idempotent `update_issue`, and the drop consequence in the table above |
 | the delta gate's `commit` | the gate POLLs instead of SKIPping — an extra read |
 
 **Why CR-3 is untouched.** `commit`'s own rule (`reference/delta-gate.md` → *Phase 2*)
@@ -472,6 +522,7 @@ state write self-heals. **Do not invent a delivery-acknowledgement mechanism.**
 | `parks` | `{}` | Every currently-parked card is un-surfaced ⇒ re-announced once. A garbled file can cause one duplicate announcement, never a missed one. |
 | `cards` | `{}` | Every candidate/managed card is a cache miss ⇒ one `get_issue` each — exactly the pre-cache behavior. Never a wrong classification, only a slower tick. |
 | `lanes` | `{}` | Every live workspace re-allocates a letter, **in the two-key allocation order** (*Lane labels*) ⇒ labels come out `A`, `B`, `C`… A garbled file costs **at most a cosmetic re-label**, never a lost or wrong row. |
+| `parents` | `{}` | Every parent with a non-terminal child is re-discovered by the next sweep and its roll-up re-asserted once; a parent whose children are **all** already terminal is not re-discovered, so its Done roll-up waits for the operator. Never a wrong roll-up, only a skipped one. |
 
 **Per-section / per-entry degradation — this is validate-on-read, applied.** If the file
 parses as JSON but a **section** is missing or is not an object, or an **individual

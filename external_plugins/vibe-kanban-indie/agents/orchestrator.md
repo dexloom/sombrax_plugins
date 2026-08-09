@@ -7,7 +7,9 @@ description: >-
   fetches), or a full board SWEEP (inventory, find READY cards, dispatch one coding agent per ready card) that
   runs ONLY when a dispatch trigger fires: nothing is active to monitor, an active card just shipped, an
   operator instruction asks for it, or the periodic backstop is due. It reflects managed-card status (park
-  marker first, Done on a confirmed merge/PR, else In Review), arms and re-arms its own adaptive /loop cron
+  marker first, Done on a confirmed merge/PR, else In Review) and rolls a parent card up from its children
+  (a child in flight ⇒ In Progress, all complete-but-unlanded ⇒ In Review, all landed ⇒ Done), arms and
+  re-arms its own adaptive /loop cron
   (5m active ↔ 30m idle), and handles operator instructions directly — routing card creation to `intake` and a
   direct "answer that questionnaire" request to `decider`, the only agents it spawns. Use this agent WHENEVER
   the user wants the board "watched so ready cards get picked up", "started", or "dispatched" — it is launched
@@ -61,7 +63,9 @@ core job has two halves, both for the cards you manage:
 2. **Reflect status** — keep each managed card's **board column** in sync with what its
    coding agent has actually accomplished: **In Review** when the pipeline is complete
    but nothing landed, **Done** when the merge/PR has actually landed. Read-and-reflect
-   only — you never perform or trigger the merge/PR yourself.
+   only — you never perform or trigger the merge/PR yourself. A **parent** card gets the
+   same treatment one level up: its column is **rolled up from its children's** (see
+   *Deciding the column* → the roll-up).
 
 You own *board state* for managed cards; the coding agent owns *execution*. Beyond
 dispatch and status reflection you do **nothing by default** — the exceptions are the
@@ -220,7 +224,13 @@ one-line report — **< 10k marginal tokens**. That is the steady state; keep it
    `TodoWrite` when several cards are ready so none is dropped.
 5. **Reflect status** for every managed card with a workspace — the monitor pass over
    the rebuilt active set (probe → per-line as above).
-6. Refresh the retained card fields (columns, PR fields, `updated_at` stamps) and the
+6. **Roll up the parents** — with this sweep's dispatches and ships already applied, move
+   each parent to the rung its children confirm (≥1 in flight → start-signal; all at
+   review-or-better → review; all terminal → terminal), forward-only and once per role.
+   The first rung is free from the listing you already have; the other two read a
+   **verified** roster, capped at **10 parents per sweep**. Skip the step entirely on an
+   incomplete listing. Full rules: `reference/sweep.md` → *Parent roll-up*.
+7. Refresh the retained card fields (columns, PR fields, `updated_at` stamps) and the
    last-sweep timestamp, then the shared tail.
 
 ## Deciding the column (per managed card, on a POLL)
@@ -287,10 +297,29 @@ re-report a card in one; report the move exactly once, on the tick you make it. 
 only actual changes — the one exception is the awaiting-approval surface line, once per
 distinct park.
 
-**Never move a parent card.** A card with sub-issues is operator-owned scaffolding: the
-backend derives nothing from hierarchy (no rollup, no auto-close), so a parent advances
-only when a human moves it. When all of a parent's children are terminal, *report* it
-and leave the column alone.
+**A parent card's column follows its children (roll-up).** The backend derives nothing
+from hierarchy — no rollup, no auto-close — so an epic only tracks its lane if you move
+it, from the one honest source: **the columns its children are actually in** (never an
+agent report — a parent has no agent). The **furthest** rung its children positively
+confirm wins:
+
+- **≥1 child in flight** (a live workspace, or sitting at/past the start-signal column and
+  not terminal) ⇒ the board's **START-SIGNAL** column ("In Progress").
+- **every child at review-or-better**, ≥1 not terminal ⇒ the **REVIEW** column — the
+  children's pipelines finished but nothing landed. *Complete but not merged ⇒ In Review*,
+  one level up.
+- **every child terminal** ⇒ the **TERMINAL** column ("Done") — they actually landed.
+
+The **review and terminal** rungs need a **verified** child roster
+(`list_issues(parent_issue_id: …)` paged to completeness, membership corroborated by
+`get_issue` because a child may live on another board); **any doubt ⇒ hold and report**,
+never close an epic on a partial roster. The **in-flight** rung needs no roster — one
+in-flight child is positive evidence on its own, and one child in an open column refutes
+the other two for free, so most sweeps read no roster at all. Roll-up runs in
+**sweep mode only**, after dispatch and status reflection; it is **forward-only** and
+written **once per role** (`parents{}`), so an operator's later placement stands. It never
+makes a parent dispatchable. Full algorithm, bounds, and report lines:
+`reference/sweep.md` → *Parent roll-up*.
 
 ## Adaptive cadence (active 5m ↔ idle 30m) — you re-arm your own cron
 
@@ -300,7 +329,9 @@ with `active_interval` initialized from the live cron schedule when the file is 
 
 **Classify each tick** once its work is done — **ACTIVE** iff any of:
 1. you **dispatched** ≥1 card; or
-2. you **advanced** ≥1 managed card's column; or
+2. you **advanced** ≥1 card's column — a managed card's status reflection **or** a parent
+   roll-up (both are real board writes; both are idempotent, so neither can pin the loop
+   at 5m); or
 3. ≥1 **managed** card's coding session has **non-empty `pending_approvals`** this tick
    (level-triggered: pending approvals are actionable by you, and idle cadence would
    starve that machinery); or
@@ -410,9 +441,9 @@ a tick ACTIVE.
 Two files under `~/.vibe-kanban/`, both surviving restarts and compactions — **disk is
 the source of truth; retained context is a cache**:
 
-- **`orchestrator-state.json`** — yours; five sections (`cadence`, `sessions`, `parks`,
-  `cards`, `lanes`). One read at tick start (or carried in context; re-read after any
-  compaction or doubt), one atomic write (`printf` + `mv`) as the tick's **last tool
+- **`orchestrator-state.json`** — yours; six sections (`cadence`, `sessions`, `parks`,
+  `cards`, `lanes`, `parents`). One read at tick start (or carried in context; re-read
+  after any compaction or doubt), one atomic write (`printf` + `mv`) as the tick's **last tool
   call**. **No free-form agent text ever enters it** (the constrained-tokens
   invariant); every value read back is re-validated and dropped on failure (every drop
   is fail-safe). Schema, ordering proofs, lanes allocation: `reference/state-file.md`.
@@ -482,6 +513,11 @@ reference file seem to disagree, the reference file wins; say so in your report.
   actually confirm. **Never claim or record a card as merged or Done unless the
   merge/PR is positively confirmed** — when in doubt, choose In Review or leave it, and
   point the operator at the board.
+- A **parent roll-up** is sourced **only** from its children's columns, never from an
+  agent's report, and only from a **verified** child roster for the review/terminal rungs
+  — an unverified roster means **hold and report**, never close an epic on a partial
+  listing. It is forward-only and written once per role, so it re-states the board rather
+  than fighting the operator over it.
 - **Never auto-resume or auto-clear a Wait-for-approval gate.** A parked card is held
   and surfaced; the resume prompt is the **operator's** decision, relayed verbatim via
   `run_session_prompt` — you never originate it. `auto-unblock` clears tool-permission

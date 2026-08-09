@@ -194,18 +194,124 @@ distinct non-null `parent_issue_id` values. This costs **no extra call**.
   routing tier, its own workspace. Children of one parent with no `blocking` edges
   between them are exactly the parallel-lane case — dispatch them together, subject to
   the WIP cap below.
-- **Roll-up is reported, never written.** When every child of a parent sits in a
-  terminal column, report `<card>: all N sub-issues done — parent still open` and stop
-  there. Do **not** move the parent yourself: the backend derives nothing from
-  hierarchy (no rollup, no auto-close), a plain parent is operator-owned, and guessing
-  its completion is exactly the kind of unasked-for write the honesty rules forbid.
+- **Roll-up is written — from the children's columns, and only from those.** The backend
+  still derives nothing from hierarchy (no rollup, no auto-close), so if the parent is to
+  track its children, you are the one who moves it. See *Parent roll-up* below for the
+  whole rule; the short version is: **≥1 child in flight ⇒ start-signal; every child at
+  review-or-better ⇒ review; every child terminal ⇒ terminal.**
 - **Defend yourself on hierarchy — the backend does not.** `parent_issue_id` accepts
   cycles (`A→B→A`, even `A→A`), accepts a parent in a *different project*, and
   `ON DELETE SET NULL` silently orphans children when a parent is deleted. So: never
   walk a parent chain without a visited set; treat a parent id you did not see in this
   board's listing as **out of scope** (do not fetch it, do not follow it); and accept
   that a card which was a child last tick may be a root this tick — re-derive the parent
-  set every sweep rather than caching it.
+  set every sweep rather than caching it. (`parents{}` is **not** such a cache: it stores
+  which cards to *ask* about and what you already *wrote*, never who the children are —
+  a card that is no longer a parent comes back with an empty roster and is dropped.)
+
+### Parent roll-up (a parent's column follows its children)
+
+A parent is not work, but it **is** a status container — and the backend fills nothing in
+(no rollup, no auto-close), so if an epic is to say what its lane is doing, you are the one
+who moves it. The roll-up reads **one** source: the **columns its children are actually
+in**. Never an agent's `final_message` (a parent has no agent), never a PR field of its own.
+
+**Runs in sweep mode only** — it needs the board listing, and *Context diet* forbids one in
+monitor mode. Nothing is lost by that: a child shipping in a monitor pass fires sweep
+trigger 2, so the sweep pass — and this roll-up — runs in that same tick. Run it **after**
+dispatch and status reflection, so this sweep's own dispatches and ships count.
+
+**Candidate parents — free, from data already in hand:**
+
+```
+PARENTS := { distinct non-null parent_issue_id over this sweep's COMPLETE listing, in scope }
+         ∪ { p ∈ parents{} that this sweep's listing still shows as a non-terminal card in scope }
+```
+
+The second term is why the ledger exists: a parent whose children have **all** gone
+terminal has no non-terminal child left to point at it, and would vanish from the derived
+set on the exact sweep its Done roll-up came due. Record each newly discovered parent as
+`parents[p] = "seen"` (`reference/state-file.md` → *The `parents{}` ledger*). On an
+**incomplete** listing, derive nothing and skip the roll-up entirely this sweep.
+
+Evaluate parents **deepest-first**, so a parent that is itself a child settles before its
+own parent and one sweep can roll a whole tree.
+
+**Per child, from the listing + the active set (no extra call):**
+
+- **IN FLIGHT** — it has a live (non-archived) workspace in the active set, **or** it sits
+  **at or past the START-SIGNAL column** by `sort_order` and is not terminal.
+- **AT REVIEW OR BETTER** — it sits in the board's **REVIEW** column (the last non-terminal
+  one) **or** in a **TERMINAL** column.
+- **TERMINAL** — the board's terminal role (hidden ∪ last visible).
+
+**The rungs — evaluate highest first; the first positively confirmed one is the target:**
+
+| # | Fires when | Target column role |
+|---|---|---|
+| **1** | roster **verified**, ≥1 child, **every** child TERMINAL | **TERMINAL** |
+| **2** | roster **verified**, ≥1 child, **every** child AT REVIEW OR BETTER, and ≥1 not terminal | **REVIEW** |
+| **3** | **≥1** child IN FLIGHT (a single positive — no roster needed) | **START-SIGNAL** |
+
+Rungs 1 and 2 are the same distinction the card-level rule (`agents/orchestrator.md` →
+*Deciding the column*) makes for a single card, applied one level up: a child reaches the
+review column when its pipeline finished but **nothing landed**, and a terminal column only
+on a **confirmed merge/PR**. So a parent whose children are all finished-but-unlanded lands
+in **review**, and follows them to **terminal** only once they actually land. **Complete but
+not merged ⇒ In Review; merged ⇒ Done** — for the parent exactly as for the card.
+
+**Verifying the roster (rungs 1 and 2 only — rung 3 never needs it):**
+
+1. `list_issues(project_id: <the parent's board>, parent_issue_id: <the parent's id>)` —
+   **no status filter** (terminal children are the whole point), paged until
+   `returned_count == total_count`.
+2. Corroborate **membership** against `get_issue(<the parent's id>)`'s sub-issue list, which
+   is not board-scoped. `parent_issue_id` may legitimately point **across projects**, and a
+   child on another board is invisible to the scoped listing above — exactly the blind spot
+   that would let a partial roster fake an "all done".
+3. **Hold on any doubt** — a short, errored, or unpaged listing; a child you cannot place in
+   a resolved board's columns (a child on a board outside your scope is exactly that case —
+   you have no column roles for it, and *Defend yourself on hierarchy* forbids wandering off
+   to fetch them); the two membership reads disagreeing. Write nothing for rungs 1–2 and
+   report `<card>: roll-up held — roster unverified (<why>)`. Holding is the safe failure: a
+   parent left where it is costs nothing, a parent falsely closed hides open work.
+
+**Bounding the cost — refute before you read.** The free listing already kills most roster
+reads: **one child in an OPEN column (anything non-terminal that is not the review column —
+the backlog head, the start-signal column, any middle column) refutes rungs 1 and 2
+outright**, because that child is neither done nor waiting on review. So attempt the roster
+read **only** for a parent whose visible children are *all* in the review column, or which
+has **no** visible children left at all (the all-terminal case) — a handful of parents on a
+normal board, usually none. **Cap it at 10 roster reads per sweep**, ordered: parents with a
+child that changed this tick, then newly discovered parents, then the rest; report the
+remainder as `roll-up deferred — N parents past the 10/sweep roster cap`. Rung 3 costs
+**nothing** — it is decided entirely from rows you already fetched.
+
+**Writing the move:**
+
+- **Forward-only, by `sort_order`, never by name** — never move a parent to a column that
+  sorts earlier than the one it is in. Already at or past the target ⇒ do nothing.
+- **Once per role.** The `parents{}` value records the furthest role you rolled it to
+  (`seen` → `start` → `review`; a parent rolled to terminal is **dropped** from the ledger).
+  A role already written is never re-written, so an operator who moves a rolled-up parent
+  somewhere else **keeps** that placement instead of being overridden every sweep.
+- Write the **real column name** for the role on **the parent's own board** (a parent may
+  sit on a different board than its children — resolve columns per board, as always).
+- **Report as plain lines, never digest rows** — a parent has no workspace and therefore no
+  lane letter (`reference/report.md` → *Explicitly NOT rows*):
+  `<card>: 2/5 sub-issues in flight → In Progress`,
+  `<card>: all 5 sub-issues complete, none landed → In Review`,
+  `<card>: all 5 sub-issues done → Done`.
+- A roll-up move **advances a card's column**, so it counts the tick **ACTIVE** for cadence.
+  It is idempotent by the two rules above, so it can never pin the loop at 5m.
+- **A roll-up never makes a parent dispatchable.** Moving an epic into the start-signal
+  column is exactly the operator gesture that normally means "start this" — the
+  never-dispatch-a-parent rule above is unconditional and outranks it, whoever did the
+  moving.
+- **"Plain cards are operator-owned" does not exempt a parent.** That rule (*Which cards
+  count as "managed"*) forbids advancing a card from an **agent's** report when no agent was
+  told to drive it. The roll-up asserts nothing about an agent: it restates, on the parent,
+  what the board already says about its children.
 
 ### The dependency gate (blocking edges), bounded
 
@@ -252,7 +358,9 @@ the description you already fetched, or the `cards{}` hit, for any candidate tha
 overlaps). A plain In-Progress card with **no** Orchestrate opt-in is
 operator-hand-driven: you may have dispatched it, but the operator owns its delivery, so
 **do not** auto-advance it — leave its column alone. Only reflect status for managed
-cards that currently have a non-archived workspace.
+cards that currently have a non-archived workspace. **The one exception is the parent
+roll-up** (above): a parent's column is derived from its children's columns, not from any
+agent's report, so it applies to a plain parent too.
 
 **A terminal column is terminal — never track or re-report a card in one.** Before you
 walk a card, check its column against the board's resolved TERMINAL role (above): if it
@@ -268,9 +376,9 @@ normal: every one of them ends tracking.
 listing as the board's full non-terminal set — which pruning and the parent set both
 depend on — check that the call returned everything it claims (`returned_count ==
 total_count`, the same test the lane allocator applies to `list_workspaces`). A short,
-truncated, or errored listing means: do **not** prune `cards{}`, do **not** trust the
-derived parent set for roll-up reporting, and say `listing incomplete — pruning and
-roll-up skipped` in the report. Page through with `limit`/`offset` when the board is
+truncated, or errored listing means: do **not** prune `cards{}` or `parents{}`, do **not**
+trust the derived parent set — **skip the parent roll-up entirely this sweep** — and say
+`listing incomplete — pruning and roll-up skipped` in the report. Page through with `limit`/`offset` when the board is
 larger than one page rather than sweeping a partial board silently.
 
 ## The board's own instructions (per-board orchestrator prompt)

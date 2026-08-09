@@ -18,8 +18,9 @@ timer.
 3. **Plain lines** — each only when it actually occurred: the **quiesce** line; any
    **validate-on-read drop** line (which section/entry — *it is real news, not noise*); a
    **commit-failure / state-write-failure** line; an **unrecognized executor pin**
-   warning; the **plugin-root** note; an **un-dispatchable card** notice. **These are NOT
-   rows** — a failure notice must be maximally visible, never buried in a table cell.
+   warning; the **plugin-root** note; an **un-dispatchable card** notice; a **parent
+   roll-up** line (moved, held, or deferred — see below). **These are NOT rows** — a
+   failure notice must be maximally visible, never buried in a table cell.
 4. **The tick-summary line** — **one** line, carrying the `(delta: N/M skipped)` and
    `(cards: N/M cached)` folds. On a **zero-row** tick this **IS** the nothing-happened
    line, e.g.
@@ -58,8 +59,27 @@ the "no other row" case.)
 **Explicitly NOT rows** (they are not per-card events): the backend-down notice, the
 quiesce line, the cadence-transition line, validate-on-read drop lines,
 commit/state-write failure lines, the unrecognized-executor-pin warning, the plugin-root
-note, the un-dispatchable-card notice, and the `(delta: …)` / `(cards: …)` folds. They
-are **plain lines** (order items 3/4 above).
+note, the un-dispatchable-card notice, **every parent roll-up line**, and the
+`(delta: …)` / `(cards: …)` folds. They are **plain lines** (order items 3/4 above).
+
+**Why a parent roll-up is never a row.** The table is keyed by **workspace** — the `Lane`
+cell is what makes a row identifiable, and a parent has **no workspace and therefore no
+lane letter** (`reference/state-file.md` → *Lane labels*: every live workspace gets a
+lane; a card without one gets nothing). A roll-up is also not the work of any agent, which
+is what R1–R5 report. So it renders as a plain line, one per parent that actually moved or
+was held:
+
+```
+VIBE-12: 2/5 sub-issues in flight → In Progress
+VIBE-12: all 5 sub-issues complete, none landed → In Review
+VIBE-12: all 5 sub-issues done → Done
+VIBE-12: roll-up held — roster unverified (child listing paged short, 20/34)
+roll-up deferred — 3 parents past the 10/sweep roster cap
+```
+
+Column names in the line are the board's **real** ones, whatever they are — the examples
+above just happen to come from a default board. **Report only actual moves**: a parent
+already at its rung produces no line, tick after tick.
 
 ### R5 — the progress row, precisely gated
 
