@@ -3,6 +3,15 @@ node_modules/
 .env
 .DS_Store
 
+# Python bytecode/build artifacts — the plugins ship .py scripts, and running one
+# drops a __pycache__ next to it.
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
 # Pipeline scratch files — specs/plans belong at the workspace root (one level
 # above this repo) and must never be committed. Ignore them here too, in case a
 # run writes them at the repo root.
