@@ -238,6 +238,49 @@ monitor-mode tick nearly free.
   happens **inside this script**, so it costs the calling agent **zero** extra context
   tokens — it only ever replaces a call whose result is thousands of tokens.
 
+## Ship planning (`ship_planner.py`)
+
+A stdlib-only Python tool the **orchestrator** runs when the operator says "ship
+these cards". It builds the **dependency tree split into lanes (parallel) and
+waves (sequential)** and emits a JSON plan whose `next` list is exactly the cards
+that may be dispatched right now. The orchestrator re-runs it each sweep: a
+shipped card reaches a terminal column, freeing the next wave.
+
+- **Lanes** — one per root parent (walk `parent_issue_id` up). A standalone card
+  is its own singleton lane. No edge between lanes IS the parallelism.
+- **Waves** — topological levels of the `blocking` edges within the lane graph
+  (blocker → blocked; outgoing rows only, read from the blocker side, capped at
+  50 cards like the sweep gate). Wave 0 = nothing unshipped blocks it; a card in
+  a terminal column is satisfied and drops out.
+- **Never planned** — **In Review** and **Done** cards are excluded from the
+  candidate set (the planner never ships them). A review card is still a
+  **known in-flight blocker** for its dependents (it stays in the graph), so it
+  gates the next wave without itself being dispatched. Parents are containers and
+  are never dispatched.
+
+Two modes:
+
+```bash
+# Live: resolve the backend like resolve-backend.sh and fetch statuses +
+# relationships over the documented REST routes (the issue LIST is MCP-gated, so
+# live mode also probes /api/issues; if that route is absent it fails fast and
+# points at --input rather than guessing).
+python3 scripts/ship_planner.py plan --project <id> [--cards VIBE-1,VIBE-2] \
+    [--wip-cap 5] [--pretty] [--backend URL]
+
+# Offline (pure planner): the orchestrator gathers a snapshot via its MCP tools
+# (list_issues / get_issue) and the REST routes, and pipes it in. Fully testable
+# with fixtures, no network.
+python3 scripts/ship_planner.py plan --input snapshot.json [--cards ...] [--pretty]
+```
+
+The output carries every card's **current column** (name + role), so the
+orchestrator sees board state at a glance. Exit codes: `0` ok, `1` logical
+failure, `2` argparse, `3` backend down (canonical message). `--cards` restricts
+only the **output** — dependency resolution always sees the full board, so a
+selected card's blockers still resolve (a blocker is never mis-flagged
+"unverified" just because it wasn't selected).
+
 ## Backend connection (why MCP tools sometimes don't load)
 
 The vibe-kanban MCP resolves the backend URL from, in order: `VIBE_BACKEND_URL`
