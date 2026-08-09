@@ -67,7 +67,12 @@ When a card lists several of these, they appear in this relative order:
    base, **re-runs the checks**, and squashes **without checking out the base**
    (`git commit-tree` plus a **compare-and-swap** `git update-ref` — a `git checkout` of the
    base fails from a linked worktree, and an unguarded ref write would silently clobber
-   another card's merge). The protocol lives in `prompts/pipeline.md`.
+   another card's merge). Once the merge lands it also **restores the base branch's own
+   checkout to clean** — the ref-only CAS leaves the old index behind there as staged
+   residue, and step 7 of the protocol removes it with a guarded `reset --hard HEAD`
+   (only when the checkout holds nothing but that residue; the pre-merge tip stays
+   recoverable via the reflog, so the residue is no backup worth keeping). The protocol
+   lives in `prompts/pipeline.md`.
 
 The numbered list is the **default relative order** the other stages keep when several
 are listed; **Wait for approval** is the one stage that may appear earlier than its slot
@@ -264,9 +269,23 @@ orchestrator derives the parent set from `parent_issue_id` on the rows it
 already lists and refuses to start any card that has children, in any column.
 Filing an epic without a pipeline block is still good practice, but it is no
 longer what protects it: the board UI lets anyone drag an epic into the start
-column, and the backend enforces nothing. Nothing rolls a parent up either —
-the orchestrator *reports* "all N sub-issues done" and leaves the column to the
-operator, because the backend derives no status from hierarchy.
+column, and the backend enforces nothing.
+
+**The parent's column, on the other hand, IS rolled up — by the orchestrator,
+because the backend still derives no status from hierarchy.** In its sweep pass
+it moves each parent to the furthest rung its children's columns positively
+confirm: **≥1 child in flight** (live workspace, or at/past the start-signal
+column) ⇒ the **start-signal** column; **every child at review-or-better, none
+still working** ⇒ the **review** column (their pipelines finished, nothing
+landed — the same "complete but not merged" distinction the card-level rule
+makes, one level up); **every child terminal** ⇒ the **terminal** column. The
+review and terminal rungs require a **verified** child roster (`list_issues`
+paged to completeness, membership corroborated via `get_issue` because a child
+may sit on another board) — an unverified roster is **held and reported**, never
+closed on a guess. The roll-up is **forward-only**, written **once per role**
+(the `parents{}` ledger in `orchestrator-state.json`), sourced **only** from
+children's columns and never from an agent's report, and it never makes a parent
+dispatchable. Long form: `reference/sweep.md` → *Parent roll-up*.
 
 ## Boards are per-project, and their columns are custom
 
@@ -295,8 +314,9 @@ board instructions add to behaviour, never override the safety rules.
   telegram-fanout surfacing, and the no-auto-resume safety rule. One long-running
   session that owns the timer AND the tick (monitor-first two-mode loop), routes
   card-creation to `intake` and a direct "answer that questionnaire" request to
-  `decider`, and owns the unified `orchestrator-state.json` (its five sections:
-  `cadence`, `sessions`, `parks`, `cards`, `lanes` — see `reference/state-file.md`).
+  `decider`, and owns the unified `orchestrator-state.json` (its six sections:
+  `cadence`, `sessions`, `parks`, `cards`, `lanes`, `parents` — see
+  `reference/state-file.md`).
   The park-surfacing long-form lives in `reference/parks.md`.
 - `scripts/orchestrator-delta.sh` — the delta-polling gate; second consumer of the marker
   (derives `is_parked` from the same literal, and hashes `final_message` into its

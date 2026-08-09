@@ -217,7 +217,12 @@ knowledge-recall/enrich/release are deliberately deferred; see the README):
    nothing); both listed → both, in the order the card gives them; neither
    listed → it does neither and simply reports complete. Both stages are
    default-off, and **ticking one IS the operator's authorization** — there is
-   no further go to wait for and nothing to hand back. The protocol lives in
+   no further go to wait for and nothing to hand back. After a landed merge the
+   agent also **restores the base branch's own checkout to clean** — the ref-only
+   CAS leaves the old index behind there as staged residue, and step 7 of the
+   protocol removes it with a guarded `reset --hard HEAD` (only when the checkout
+   holds nothing but that residue; the pre-merge tip stays recoverable via the
+   reflog, so the residue is no backup worth keeping). The protocol lives in
    `prompts/pipeline.md`.
 
 **Wait for approval is the SOLE operator gate.** The operator's merge/PR

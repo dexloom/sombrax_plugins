@@ -156,7 +156,7 @@ subagents** so they write there, not inside the repo.
       (`gh pr create`); report the PR URL.
 
   **The merge protocol.** Other cards are merging into the same base branch at the same
-  time, and no human is watching any more. Do all six steps, in order:
+  time, and no human is watching any more. Do all seven steps, in order:
 
   1. **Commit everything, then take the per-repo merge lock** —
      `until mkdir /tmp/vk-merge-lock-<repo> 2>/dev/null; do sleep 10; done`, but **bounded**
@@ -193,9 +193,10 @@ subagents** so they write there, not inside the repo.
      would reopen the very race this closes.
      This touches **only the ref**, never a working tree, so the ref update succeeds
      regardless of where the base is checked out. It does **not** synchronize that other
-     worktree: a clone with the base checked out keeps its old index and files while its
-     `HEAD` now resolves to the new tip, until someone refreshes it *there*. That is the
-     operator's business — **never reach into another worktree.**
+      worktree: a clone with the base checked out keeps its old index and files while its
+      `HEAD` now resolves to the new tip, until someone refreshes it *there*. That refresh
+      is **step 7's** job, done only when provably safe; everywhere else, **never reach
+      into another worktree.**
   5. **If the swap failed *because the base moved*, loop back to step 2** — re-pin, rebase
      again, **re-run the checks**, re-mint, retry — and **bound the retries** (a handful) so
      you can never spin forever; if the base keeps moving, report it. **Recognize that
@@ -203,10 +204,39 @@ subagents** so they write there, not inside the repo.
      <old>`. A **deleted** ref reads `reference is missing but expected <old>` — that is
      **not** a race, and neither is any other `update-ref` error: **surface those, do not
      retry.** Never "report and move on" while your merge has not landed.
-  6. **Verify, unlock, report** — `git log --oneline {{BASE_BRANCH}} -1` shows **your**
-     commit **and** `git diff {{BASE_BRANCH}} HEAD` is **empty** (both, or it did not land);
-     then `rmdir /tmp/vk-merge-lock-<repo>` — **even on failure** — and report what you
-     merged.
+  6. **Verify** — `git log --oneline {{BASE_BRANCH}} -1` shows **your**
+     commit **and** `git diff {{BASE_BRANCH}} HEAD` is **empty** (both, or it did not
+     land).
+  7. **Leave the base branch clean where it is checked out, then unlock and report.**
+     The ref move does not synchronize the worktree that has `{{BASE_BRANCH}}` checked
+     out: its index and files still match the old tip, so `git status` there shows your
+     whole merge as *staged* residue. Restore it to clean — **only when nothing but
+     that residue is present**:
+     ```sh
+     base_wt=$(git worktree list --porcelain \
+       | awk '/^worktree /{p=$2} /^branch refs\/heads\/{{BASE_BRANCH}}$/{print p}')
+     if [ -n "$base_wt" ] \
+        && git -C "$base_wt" diff --quiet \
+        && [ -z "$(git -C "$base_wt" diff --cached --name-only HEAD \
+             | grep -vxF "$(git diff --name-only "$OLD" "$NEW")")" ]; then
+       git -C "$base_wt" reset --hard HEAD
+     fi
+     ```
+     Three guards, all required: the checkout exists at all (a base checked out nowhere
+     needs nothing); **no unstaged changes** (worktree matches index — anything else is
+     operator work in progress); and **every staged path is one your merge touched**
+     (anything else is operator work staged on purpose). Only then does
+     `reset --hard HEAD` rewrite exclusively files you positively know are merge
+     residue — untracked files are never touched by it, so they need no guard. The
+     residue is **not** a backup worth keeping: the pre-merge tip lives on in the
+     reflog, so restoring the original content is
+     `git -C "$base_wt" reset --hard "{{BASE_BRANCH}}@{1}"`, not a dirty checkout.
+     **If any guard fails, touch nothing** — report that the base checkout carries
+     residue plus possible operator work and needs a manual
+     `git -C <path> reset --hard HEAD`. This step is the **one** sanctioned reach into
+     another worktree; everywhere else the rule stands. Then
+     `rmdir /tmp/vk-merge-lock-<repo>` — **even on failure** — and report what you
+     merged and whether you left the base checkout clean.
 
   Worked example (fill in `<repo>`, the card id and summary, and your real checks):
   ```sh
@@ -241,10 +271,19 @@ subagents** so they write there, not inside the repo.
   done
   [ -n "$merged" ] || { echo "base kept moving — merge did not land; report and stop"; exit 1; }
 
-  # 6 — verify it landed, then unlock (the trap also covers the failure paths)
+  # 6 — verify it landed
   git log --oneline {{BASE_BRANCH}} -1                   # your squash commit is the base tip
   git diff {{BASE_BRANCH}} HEAD                          # must print nothing
-  rmdir "$lock" 2>/dev/null
+
+  # 7 — leave the base clean where it is checked out (guards: no unstaged work, and
+  #     every staged path is part of THIS merge); touch nothing if any guard fails
+  base_wt=$(git worktree list --porcelain | awk '/^worktree /{p=$2} /^branch refs\/heads\/{{BASE_BRANCH}}$/{print p}')
+  if [ -n "$base_wt" ] && git -C "$base_wt" diff --quiet \
+     && [ -z "$(git -C "$base_wt" diff --cached --name-only HEAD | grep -vxF "$(git diff --name-only "$OLD" "$NEW")")" ]; then
+    git -C "$base_wt" reset --hard HEAD
+  fi
+
+  rmdir "$lock" 2>/dev/null                              # unlock (the trap covers failure paths)
 
   # push the base only if this repo actually has that remote:
   #   git remote get-url origin >/dev/null 2>&1 && git push origin {{BASE_BRANCH}}
