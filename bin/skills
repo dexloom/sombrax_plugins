@@ -1,0 +1,355 @@
+#!/usr/bin/env python3
+"""skills — manage agent skills across CLIs from one canonical source.
+
+Two canonical sources, two subcommand groups:
+
+1. PKB skills — $SKILL_HOME (default ~/VibeCoding/skills — the dexloom/skills
+   repo). Agent config dirs are deployment targets only — installs are symlinks,
+   so a skill is edited exactly once and every agent sees the same content
+   (copies drift; symlinks can't).
+
+   Destination table mirrors VibeCrew's PluginDestination.resolve:
+     claude   -> ~/.claude/skills/<id>
+     opencode -> ~/.config/opencode/skills/<id>
+     codex    -> ~/.codex/prompts/<id>
+
+2. Sombrax orchestration content — $SOMBRAX_HOME (default
+   ~/VibeCoding/sombrax_plugins/external_plugins/vibecrew). The vibecrew
+   plugin's skills + crew-bundle, deployed so both CLIs read them from git:
+     skills/<name>            -> ~/.claude/skills/<name>     (opencode reads ~/.claude/skills too)
+     crew-bundle/<id>/opencode/agent.md -> ~/.config/opencode/agents/<id>.md
+
+Usage:
+  skills list                     PKB skills + where each is installed
+  skills status                   PKB drift report (copies, mismatches, missing)
+  skills install <name> [-a AGENT ... | -a all] [--copy]
+  skills uninstall <name> [-a AGENT ... | -a all]
+  skills adopt <name|--all> [-a AGENT ...] [--force]
+                                  replace a destination COPY with a symlink to
+                                  the canonical source (backs up differing
+                                  copies to <dest>.bak first; --force skips
+                                  the content-match check)
+  skills sombrax status           sombrax deploy-unit report (linked/copied/missing)
+  skills sombrax install <name|all>
+  skills sombrax adopt [--all] [--force]
+                                  replace copies with symlinks to $SOMBRAX_HOME
+"""
+import argparse, filecmp, os, shutil, sys
+from collections import defaultdict
+
+HOME = os.path.expanduser("~")
+SOURCE = os.environ.get("SKILL_HOME", f"{HOME}/VibeCoding/skills")
+DESTS = {
+    "claude":   f"{HOME}/.claude/skills",
+    "opencode": f"{HOME}/.config/opencode/skills",
+    "codex":    f"{HOME}/.codex/prompts",
+}
+ALL_AGENTS = list(DESTS)
+
+def skills_in(path):
+    if not os.path.isdir(path):
+        return {}
+    return {d: os.path.join(path, d) for d in sorted(os.listdir(path))
+            if os.path.exists(os.path.join(path, d, "SKILL.md"))}
+
+def origin(path):
+    """'3rd-party' if the entry resolves into a package/vendor checkout, else 'personal'."""
+    real = os.path.realpath(path)
+    if "site-packages" in real or "/3rdparty/" in real:
+        return "3rd-party"
+    return "personal"
+
+def dircmp(a, b):
+    """True if dirs a and b have identical content."""
+    if not os.path.isdir(a) or not os.path.isdir(b):
+        return False
+    cmp = filecmp.dircmp(a, b)
+    if cmp.left_only or cmp.right_only or cmp.diff_files or cmp.funny_files:
+        return False
+    return all(dircmp(os.path.join(a, s), os.path.join(b, s)) for s in cmp.common_dirs)
+
+def state(name, agent):
+    """(status, path): 'ok' symlink-to-source | 'copy-same' | 'copy-diff' | 'link-other' | None."""
+    dest = os.path.join(DESTS[agent], name)
+    src = os.path.join(SOURCE, name)
+    if os.path.islink(dest):
+        return ("ok" if os.path.realpath(dest) == os.path.realpath(src) else "link-other", dest)
+    if os.path.isdir(dest):
+        return ("copy-same" if dircmp(src, dest) else "copy-diff", dest)
+    return (None, dest)
+
+MARK = {"ok": "link", "copy-same": "COPY", "copy-diff": "DIFF", "link-other": "LNK?"}
+
+def cmd_list(args):
+    src = skills_in(SOURCE)
+    names = [n for n, p in src.items()
+             if not args.mine or origin(p) == "personal"]
+    print(f"canonical source: {SOURCE} ({len(src)} skills"
+          f"{', showing personal only' if args.mine else ''})\n")
+    head = f"{'skill':<28}{'origin':<11}" + "".join(f"{a:<10}" for a in ALL_AGENTS)
+    print(head); print("-" * len(head))
+    for name in names:
+        cells = []
+        for a in ALL_AGENTS:
+            st, _ = state(name, a)
+            cells.append(f"{MARK.get(st, '-'):<10}")
+        print(f"{name:<28}{origin(src[name]):<11}" + "".join(cells))
+    only_dest = defaultdict(list)
+    for a in ALL_AGENTS:
+        for name, path in skills_in(DESTS[a]).items():
+            if name not in src and (args.all or origin(path) == "personal"):
+                only_dest[a].append(name)
+    for a, names2 in only_dest.items():
+        print(f"\nonly in {a} (not canonical): {', '.join(names2)}")
+
+def cmd_status(args):
+    src = skills_in(SOURCE)
+    problems = 0
+    for name in src:
+        for a in ALL_AGENTS:
+            st, dest = state(name, a)
+            if st in ("copy-same", "copy-diff", "link-other"):
+                problems += 1
+                note = {"copy-same": "duplicate copy (identical — safe to adopt)",
+                        "copy-diff": "COPY HAS DRIFTED from canonical",
+                        "link-other": "symlink points elsewhere"}[st]
+                print(f"{a:<10} {name:<28} {note}")
+    if not problems:
+        print("no drift — every install is a symlink to the canonical source")
+    else:
+        print(f"\n{problems} drifted install(s). Fix with: skills adopt --all")
+
+def resolve_agents(args):
+    if not args.agent or "all" in args.agent:
+        return ALL_AGENTS
+    bad = [a for a in args.agent if a not in DESTS]
+    if bad:
+        sys.exit(f"unknown agent(s): {', '.join(bad)} (choose from {', '.join(ALL_AGENTS)})")
+    return args.agent
+
+def cmd_install(args):
+    src = os.path.join(SOURCE, args.name)
+    if not os.path.isdir(src):
+        sys.exit(f"no such skill in canonical source: {args.name}")
+    for a in resolve_agents(args):
+        dest = os.path.join(DESTS[a], args.name)
+        if os.path.lexists(dest):
+            print(f"{a}: exists — use 'skills adopt {args.name} -a {a}' to replace")
+            continue
+        os.makedirs(DESTS[a], exist_ok=True)
+        if args.copy:
+            shutil.copytree(src, dest)
+        else:
+            os.symlink(src, dest)
+        print(f"{a}: {'copied' if args.copy else 'linked'} -> {dest}")
+
+def cmd_uninstall(args):
+    for a in resolve_agents(args):
+        dest = os.path.join(DESTS[a], args.name)
+        if os.path.islink(dest):
+            os.unlink(dest); print(f"{a}: symlink removed")
+        elif os.path.isdir(dest):
+            print(f"{a}: {dest} is a real directory — remove by hand if intended")
+        else:
+            print(f"{a}: not installed")
+
+def cmd_adopt(args):
+    names = sorted(skills_in(SOURCE)) if args.all else [args.name]
+    for name in names:
+        src = os.path.join(SOURCE, name)
+        for a in resolve_agents(args):
+            st, dest = state(name, a)
+            if st in (None, "ok"):
+                continue
+            if st == "link-other":
+                print(f"{a:<10} {name:<28} symlink points elsewhere — left alone")
+                continue
+            if not os.path.isdir(src):
+                # skill only exists in the agent dir — seed canonical from it,
+                # so the symlink we create below never dangles
+                shutil.copytree(dest, src)
+                print(f"{a:<10} {name:<28} seeded canonical -> {src}")
+            elif st == "copy-diff" and not args.force:
+                print(f"{a:<10} {name:<28} DRIFTED copy — rerun with --force to overwrite "
+                      f"(backup will be saved)")
+                continue
+            elif st == "copy-diff":
+                shutil.move(dest, dest + ".bak")
+                print(f"{a:<10} {name:<28} drifted copy backed up to {dest}.bak")
+            if os.path.isdir(dest) and not os.path.islink(dest):
+                shutil.rmtree(dest)
+            os.symlink(src, dest)
+            print(f"{a:<10} {name:<28} adopted -> symlink to canonical")
+
+# ---------------------------------------------------------------------------
+# Sombrax orchestration content (vibecrew plugin: skills + crew-bundle)
+# ---------------------------------------------------------------------------
+
+SOMBRAX = os.environ.get("SOMBRAX_HOME", "")
+if not SOMBRAX:
+    # Try relative to this script (works when installed in sombrax_plugins/bin/),
+    # then fall back to the conventional absolute path.
+    _here = os.path.dirname(os.path.abspath(__file__))
+    _guess = os.path.join(os.path.dirname(_here), "external_plugins", "vibecrew")
+    SOMBRAX = _guess if os.path.isdir(_guess) else \
+        f"{HOME}/VibeCoding/sombrax_plugins/external_plugins/vibecrew"
+CLAUDE_SKILLS_DIR = f"{HOME}/.claude/skills"
+OPENCODE_AGENTS_DIR = f"{HOME}/.config/opencode/agents"
+
+
+def sombrax_units():
+    """Every deploy unit in the sombrax plugins as
+    (kind, name, source, dest) tuples. kind is 'skill' (dir -> ~/.claude/skills)
+    or 'agent' (file -> ~/.config/opencode/agents)."""
+    units = []
+    if not os.path.isdir(SOMBRAX):
+        return units
+    # Orchestration skills -> ~/.claude/skills/<name> (both CLIs read it there).
+    sd = os.path.join(SOMBRAX, "skills")
+    if os.path.isdir(sd):
+        for name in sorted(os.listdir(sd)):
+            src = os.path.join(sd, name)
+            if os.path.exists(os.path.join(src, "SKILL.md")):
+                units.append(("skill", name, src,
+                              os.path.join(CLAUDE_SKILLS_DIR, name)))
+    # Crew bundle: code-review-checklist (skill) + pipeline subagents (agents).
+    cb = os.path.join(SOMBRAX, "crew-bundle")
+    if os.path.isdir(cb):
+        for name in sorted(os.listdir(cb)):
+            role = os.path.join(cb, name)
+            if not os.path.isdir(role):
+                continue
+            claude_skill = os.path.join(role, "claude", "SKILL.md")
+            if os.path.exists(claude_skill):
+                units.append(("skill", name, os.path.join(role, "claude"),
+                              os.path.join(CLAUDE_SKILLS_DIR, name)))
+                continue
+            oc_agent = os.path.join(role, "opencode", "agent.md")
+            if os.path.exists(oc_agent):
+                units.append(("agent", name, oc_agent,
+                              os.path.join(OPENCODE_AGENTS_DIR, f"{name}.md")))
+    # vibe-kanban-indie opencode orchestrator agents (vk-*) -> ~/.config/opencode/agents/
+    vk_oc = os.path.join(os.path.dirname(SOMBRAX),
+                         "vibe-kanban-indie", "agents-opencode")
+    if os.path.isdir(vk_oc):
+        for fname in sorted(os.listdir(vk_oc)):
+            if fname.endswith(".md") and fname != "README.md":
+                src = os.path.join(vk_oc, fname)
+                units.append(("agent", fname[:-3], src,
+                              os.path.join(OPENCODE_AGENTS_DIR, fname)))
+    return units
+
+
+def _link_state(src, dest):
+    """'ok' | 'copy' | 'link-other' | None for a deploy target."""
+    if os.path.islink(dest):
+        return "ok" if os.path.realpath(dest) == os.path.realpath(src) else "link-other"
+    if os.path.lexists(dest):
+        return "copy"
+    return None
+
+
+def cmd_sombrax(args):
+    action = args.sombrax_action
+    if action == "status":
+        _sombrax_status()
+        return
+    units = sombrax_units()
+    if not units:
+        sys.exit(f"no sombrax content found at {SOMBRAX}")
+    if action == "install":
+        target = args.name
+        if target != "all":
+            if not any(u[1] == target for u in units):
+                sys.exit(f"no such sombrax unit: {target}")
+        for _, name, src, dest in units:
+            if target != "all" and name != target:
+                continue
+            if os.path.lexists(dest):
+                print(f"{name}: exists — use 'skills sombrax adopt {name}'")
+                continue
+            os.makedirs(os.path.dirname(dest), exist_ok=True)
+            os.symlink(src, dest)
+            print(f"{name}: linked -> {dest}")
+    elif action == "adopt":
+        if not args.all and not args.name:
+            sys.exit("adopt needs a unit name or --all")
+        for _, name, src, dest in units:
+            if not args.all and args.name != name:
+                continue
+            st = _link_state(src, dest)
+            if st == "ok":
+                continue
+            if st == "link-other":
+                print(f"{name}: symlink points elsewhere — left alone")
+                continue
+            if st == "copy":
+                if not args.force:
+                    print(f"{name}: real copy — rerun with --force (backup saved)")
+                    continue
+                shutil.move(dest, dest + ".bak")
+                print(f"{name}: backed up copy to {dest}.bak")
+            os.makedirs(os.path.dirname(dest), exist_ok=True)
+            os.symlink(src, dest)
+            print(f"{name}: adopted -> symlink to canonical")
+
+
+def _sombrax_status():
+    units = sombrax_units()
+    if not units:
+        sys.exit(f"no sombrax content found at {SOMBRAX}")
+    print(f"sombrax source: {SOMBRAX} ({len(units)} deploy units)\n")
+    marks = {"ok": "link", "copy": "COPY", "link-other": "LNK?"}
+    notes = {"ok": "", "copy": " (real copy — adopt to symlink)",
+             "link-other": " (points elsewhere)"}
+    problems = 0
+    for kind, name, src, dest in units:
+        st = _link_state(src, dest)
+        mark = marks.get(st, "-")
+        note = notes.get(st, " (not installed)")
+        print(f"  {mark:<5} {kind:<6} {name:<24} -> {dest}{note}")
+        if st != "ok":
+            problems += 1
+    if problems:
+        print(f"\n{problems} unit(s) not symlinked. Fix with: skills sombrax adopt --all")
+    else:
+        print("\nall units symlinked to canonical.")
+
+p = argparse.ArgumentParser(prog="skills", description=__doc__,
+                            formatter_class=argparse.RawDescriptionHelpFormatter)
+sub = p.add_subparsers(dest="cmd", required=True)
+spl = sub.add_parser("list")
+spl.add_argument("--mine", action="store_true",
+                 help="show only personal skills (hide 3rd-party package skills)")
+spl.add_argument("--all", action="store_true",
+                 help="also report 3rd-party skills installed in agent dirs")
+spl.set_defaults(fn=cmd_list)
+sub.add_parser("status").set_defaults(fn=cmd_status)
+for name, fn in (("install", cmd_install), ("uninstall", cmd_uninstall)):
+    sp = sub.add_parser(name)
+    sp.add_argument("name")
+    sp.add_argument("-a", "--agent", action="append",
+                    help="claude | opencode | codex | all (repeatable; default all)")
+    if name == "install":
+        sp.add_argument("--copy", action="store_true",
+                        help="copy instead of symlink (not recommended)")
+    sp.set_defaults(fn=fn)
+sp = sub.add_parser("adopt")
+sp.add_argument("name", nargs="?")
+sp.add_argument("--all", action="store_true")
+sp.add_argument("-a", "--agent", action="append")
+sp.add_argument("--force", action="store_true",
+                help="adopt even drifted copies (backs them up first)")
+sp.set_defaults(fn=cmd_adopt)
+sp = sub.add_parser("sombrax",
+                    help="deploy vibecrew orchestration skills + crew-bundle from sombrax_plugins")
+sp.add_argument("sombrax_action", choices=["status", "install", "adopt"])
+sp.add_argument("name", nargs="?", help="unit name (install), or name for adopt")
+sp.add_argument("--all", action="store_true", help="adopt all units")
+sp.add_argument("--force", action="store_true",
+                help="adopt even real copies (backs them up first)")
+sp.set_defaults(fn=cmd_sombrax)
+args = p.parse_args()
+if args.cmd == "adopt" and not args.all and not args.name:
+    sys.exit("adopt needs a skill name or --all")
+args.fn(args)
