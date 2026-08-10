@@ -44,10 +44,13 @@ When a card lists several of these, they appear in this relative order:
    stages to build on. Read-only on the knowledge base (see below).
 4. **plan** — `planner` subagent writes `IMPLEMENTATION_PLAN.md` at the workspace root.
 5. **plan-review** — codex reviews the plan (`codex exec --sandbox read-only … < /dev/null` —
-   codex reads stdin too, so an unredirected `exec` blocks forever); resolve blockers.
+   codex reads stdin too, so an unredirected `exec` blocks forever); resolve blockers,
+   then re-check with `codex exec resume --last "…" < /dev/null` (same session — codex
+   keeps the plan and its findings in context, far cheaper than a fresh review).
 6. **implement** — *always*; the coding agent's own core work, committed as it goes.
-7. **code-review** — codex reviews the diff (the piped `echo "…" | codex review --base <base>`,
-   whose pipe closes stdin — no redirect); address findings.
+7. **code-review** — codex reviews the diff (`codex exec --sandbox read-only "Review the
+   diff … git diff <base> …" < /dev/null`); address findings, re-checking via
+   `codex exec resume --last` until it passes.
 8. **Update documentation** — update the docs the change affects (see below), before merge.
 9. **enrich-knowledge** — the coding agent invokes `knowledge-enrich`: records reusable
    knowledge from what shipped into the project knowledge base (its own git repo) and

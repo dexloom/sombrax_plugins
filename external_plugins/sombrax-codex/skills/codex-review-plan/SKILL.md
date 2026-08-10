@@ -21,7 +21,7 @@ Arguments: `[plan-file-name]` — specific plan file to review (optional, defaul
    - Read `CLAUDE.md` for architectural guidelines and conventions
    - Run `git diff main --stat` to understand current branch scope (if any changes exist)
 
-3. **Launch Codex review:**
+3. **Launch the first Codex review:**
    - Write the plan content to a temp file so Codex can read it
    - Run Codex in exec mode:
 
@@ -39,8 +39,9 @@ Arguments: `[plan-file-name]` — specific plan file to review (optional, defaul
    Give a verdict: APPROVED / NEEDS CHANGES / REJECTED
    APPROVED means no Critical or Important findings remain (Minor findings are acceptable).
    List specific issues by severity (Critical / Important / Minor).
-   For each issue, reference the specific section of the plan."
+   For each issue, reference the specific section of the plan." < /dev/null
    ```
+   - The redirect `< /dev/null` is mandatory: `codex exec` reads stdin in addition to its prompt and blocks forever if left open.
 
 4. **Process results and iterate:**
    - Parse the Codex verdict and findings
@@ -48,12 +49,16 @@ Arguments: `[plan-file-name]` — specific plan file to review (optional, defaul
    - If **NEEDS CHANGES** or **REJECTED** (Critical or Important findings exist):
      a. Present all findings to the user
      b. Apply fixes to the plan file based on the findings
-     c. Re-run Codex review (step 3) on the updated plan
-     d. Repeat until verdict is APPROVED (only Minor findings remain)
+     c. **Re-check by resuming the same Codex session** — do not start a fresh review. Codex already has the full plan and guidelines in context, so a short follow-up costs a fraction of the tokens and time of a new review:
+     ```bash
+     codex exec resume --last "We updated the plan at $PLAN_PATH to address your findings: <one-line summary of each change>. Re-read the plan and verify each finding is resolved. Give a new verdict (APPROVED / NEEDS CHANGES) and report only unresolved or newly introduced issues." < /dev/null
+     ```
+     d. Run `resume` from the same working directory as the first review (`--last` filters sessions by cwd). If `resume` fails, fall back to a fresh full review (step 3).
+     e. Repeat until verdict is APPROVED (only Minor findings remain)
 
 ## Notes
 
 - This is read-only for Codex (--sandbox read-only) — Codex cannot modify files
 - Between review iterations, Claude (not Codex) applies fixes to the plan based on findings
-- Codex provides a fresh independent perspective on the plan
+- Re-checks after fixes resume the same Codex session (`codex exec resume --last`), so Codex keeps the plan and CLAUDE.md in context and only re-reads what changed — this is the main token/time saving over restarting a full review each iteration
 - If Codex is not installed, fall back to performing the review inline using the same criteria

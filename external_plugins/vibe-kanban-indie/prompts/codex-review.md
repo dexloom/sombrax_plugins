@@ -16,18 +16,30 @@ codex exec --sandbox read-only "Review this implementation plan before any code 
 ```
 
 ## Reviewing the DIFF (after a step, or before marking done)
+Use `codex exec` (not `codex review`) so the session can be resumed cheaply for
+re-checks:
 ```
-echo "Review for: correctness bugs, missed requirements, regressions, error handling, and consistency with the codebase and CLAUDE.md. Separate blockers from recommendations and nits." | codex review --base {{BASE_BRANCH}}
+codex exec --sandbox read-only "Review the diff of this branch against its base. Run git diff {{BASE_BRANCH}} yourself and read any changed files you need. Review for: correctness bugs, missed requirements, regressions, error handling, and consistency with the codebase and CLAUDE.md. Separate blockers from recommendations and nits." < /dev/null
 ```
 
-**Never leave codex's stdin open.** `codex exec` reads stdin *in addition to* its prompt
-argument: launched from an agent's shell, stdin is an open pipe that never sends EOF, so
-codex prints "Reading additional input from stdin…" and **blocks forever** at 0% CPU. That
-is why the plan-review command ends with `< /dev/null`. The diff-review command needs no
-redirect — the `echo … |` pipe supplies its input *and* closes it — and you must **not** add
-one there: it would override the pipe and throw the review instructions away. Run codex from
-**inside the repo worktree** (not the workspace root), and add `--skip-git-repo-check` only
-if codex complains that the directory is untrusted.
+## Re-reviewing after fixes — resume the SAME session
+After you fix blockers, **do not start a fresh review.** Codex already holds the
+plan/diff, the files it read, and its own findings in context, so resuming costs a
+fraction of the tokens and time of a new review:
+```
+codex exec resume --last "We fixed your findings: <one-line per fix>. Re-check the updated plan/diff and verify each finding is resolved. Report only unresolved or newly introduced blockers; if none, say PASS." < /dev/null
+```
+Run `resume` from the **same working directory** as the first review (`--last`
+filters sessions by cwd). If `resume` fails (no session, CLI error), fall back to a
+fresh full review with the first-pass command above.
+
+**Never leave codex's stdin open.** `codex exec` (and `exec resume`) reads stdin
+*in addition to* its prompt argument: launched from an agent's shell, stdin is an
+open pipe that never sends EOF, so codex prints "Reading additional input from
+stdin…" and **blocks forever** at 0% CPU. That is why every command here ends with
+`< /dev/null`. Run codex from **inside the repo worktree** (not the workspace
+root), and add `--skip-git-repo-check` only if codex complains that the directory
+is untrusted.
 
 ## Report back in this shape
 ```
@@ -45,7 +57,8 @@ review inline against the same criteria — don't silently skip it.
 
 **Then close the loop yourself — this review is never a park.** On `PASS`, continue the
 pipeline. On `CHANGES REQUESTED`, **resolve every blocker yourself** and **review again**:
-re-run codex if the CLI works, or — if it doesn't — repeat the **inline** review against
+resume the same codex session (`codex exec resume --last "…" < /dev/null`) if the CLI
+works, or — if it doesn't — repeat the **inline** review against
 the same criteria, again saying the CLI was unavailable. **Iterate until the verdict is
 `PASS`**, then continue.
 

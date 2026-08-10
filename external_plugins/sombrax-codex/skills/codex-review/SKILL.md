@@ -46,10 +46,14 @@ Arguments: `[base-branch]` — the branch to diff against (default: main)
    - Run `git log <base>..HEAD --oneline` to see commits
    - Run `git diff <base> --stat` to see changed files
 
-2. **Run Codex review with criteria:**
+2. **Run the first Codex review with criteria:**
+   - Use `codex exec` (not `codex review`) so the session can be resumed cheaply for re-checks:
    ```bash
-   echo "Review for: code quality, efficiency, consistency with codebase patterns, and CLAUDE.md compliance. Check error handling, async patterns, data layer architecture, and database usage." | codex review --base <base-branch>
+   codex exec --sandbox read-only "Review the diff of the current branch against the base branch <base-branch>. Run git diff <base-branch> yourself and read any changed files you need.
+
+   Review for: code quality, efficiency, consistency with codebase patterns, and CLAUDE.md compliance. Check error handling, async patterns, data layer architecture, and database usage. Separate blockers (Critical/Important) from Minor findings and false positives." < /dev/null
    ```
+   - The redirect `< /dev/null` is mandatory: `codex exec` reads stdin in addition to its prompt and blocks forever if left open.
 
 3. **Analyze findings and categorize:**
    - Critical: Security vulnerabilities, data loss risks, breaking changes, CLAUDE.md violations
@@ -64,7 +68,12 @@ Arguments: `[base-branch]` — the branch to diff against (default: main)
 5. **After fixing:**
    - Stage changes: `git add <fixed-files>`
    - Commit with message: "fix: address code review findings"
-   - Re-run: `echo "Review for: code quality, efficiency, consistency with codebase patterns, and CLAUDE.md compliance." | codex review --base <base-branch>`
+   - **Re-check by resuming the same Codex session** — do not start a fresh review. Codex already has the full context, so a short follow-up prompt costs a fraction of the tokens and time of a new review:
+   ```bash
+   codex exec resume --last "We fixed the findings: <one-line summary of each fix>. Re-run git diff <base-branch> on the updated code and verify each of your previous findings is resolved. Report only unresolved or newly introduced issues, by severity. If everything is resolved, say so explicitly." < /dev/null
+   ```
+   - Run `resume` from the same working directory as the first review (`--last` filters sessions by cwd).
+   - If `resume` fails (session not found, CLI error), fall back to a fresh full review with the step-2 prompt.
 
 6. **Repeat steps 3-5 until:**
    - Only Minor findings remain, OR

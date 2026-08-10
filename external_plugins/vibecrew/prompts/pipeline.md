@@ -121,12 +121,16 @@ hand — the skill's curl-fallback section has the full recipe.
   codex as the reviewer — `codex exec --sandbox read-only "<review prompt>"
   < /dev/null` over `IMPLEMENTATION_PLAN.md`, or the `codex-review-plan` skill
   if available). Do **not** review it yourself. Resolve blockers and revise the
-  plan before writing code, **capped at TWO review passes** — findings still
+  plan, then **re-check by resuming the same codex session** — `codex exec
+  resume --last "We fixed your findings: … verify each is resolved" < /dev/null`
+  — instead of paying a fresh review; codex already has the plan and its
+  findings in context, so a resume costs a fraction of a new review. Before
+  writing code, **cap at TWO review passes** — findings still
   open after the second pass mean the plan (or spec) is mis-scoped: revise the
   plan or escalate, never pay a third pass. While codex runs, **wait cheaply**
   — don't re-read the plan or narrate; babysitting a review is a measured
   token sink.
-  **Never leave codex's stdin open:** `codex exec` reads stdin *in addition to* its prompt
+  **Never leave codex's stdin open:** `codex exec` (and `exec resume`) reads stdin *in addition to* its prompt
   argument, so without `< /dev/null` it prints "Reading additional input from stdin…" and
   **blocks forever** waiting for an EOF your shell never sends. Run it from **inside your
   repo worktree** (not the workspace root).
@@ -152,14 +156,18 @@ hand — the skill's curl-fallback section has the full recipe.
   sitting uncommitted. If the coder's report **leads with `VK-ESCALATE:`**,
   commit the safe work, relay the line, and stop (see *When to stop*).
 - **code-review** (if listed) — when the work is done, **have codex review the diff**
-  (`echo "<what to look for>" | codex review --base {{BASE_BRANCH}}`, or the `codex-review`
-  skill). Do **not** review it yourself. Address its findings and re-run, **capped at
+  (`codex exec --sandbox read-only "Review the diff of this branch against its base.
+  Run git diff {{BASE_BRANCH}} yourself …" < /dev/null`, or the `codex-review`
+  skill). Do **not** review it yourself. Address its findings and re-check by
+  **resuming the same codex session** (`codex exec resume --last "We fixed your
+  findings: … verify" < /dev/null` — codex keeps the diff and its findings in
+  context, far cheaper than a fresh review), **capped at
   TWO passes** — findings still open after the second pass are a scope problem, not a
   review problem: fix what is confirmed, report what remains, and move on rather than
   paying a third pass. While codex runs, wait cheaply — don't narrate or re-read the
   diff alongside it.
-  Piping the instructions in is what closes codex's stdin here — the pipe sends EOF, so this
-  form needs no `< /dev/null` (and adding one would throw the piped instructions away).
+  Every `codex exec` invocation (first pass and `resume`) needs `< /dev/null` to close
+  its stdin, or it blocks forever reading it.
 - **Update documentation** (if listed) — once the change exists (and is code-reviewed,
   if that stage ran), update the documentation the change actually affects so the docs
   match what shipped: the repo/plugin's own docs that describe the changed behavior —

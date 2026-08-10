@@ -7,8 +7,8 @@ as an independent second reviewer alongside Claude.
 
 | Skill | Triggers on | What it does |
 |-------|-------------|--------------|
-| `codex-review` | "review my code", "codex review", "check my changes" | Runs an iterative code review of the current branch (diffed against a base branch) via `codex review`, applies fixes, and re-reviews until only minor findings remain. |
-| `codex-review-plan` | "review the plan", "approve the plan", after plan mode | Has Codex review a Claude Code implementation plan (in `~/.claude/plans/`) for completeness, architecture fit, risks, and scope creep before you start coding. |
+| `codex-review` | "review my code", "codex review", "check my changes" | Runs an iterative code review of the current branch (diffed against a base branch), applies fixes, and re-reviews until only minor findings remain. Re-checks resume the same Codex session (`codex exec resume --last`) instead of starting fresh reviews, saving tokens and time. |
+| `codex-review-plan` | "review the plan", "approve the plan", after plan mode | Has Codex review a Claude Code implementation plan (in `~/.claude/plans/`) for completeness, architecture fit, risks, and scope creep before you start coding. Re-checks after plan updates resume the same Codex session. |
 | `codex-advisor` | "which approach", "how should I architect", "help me decide" | Gets an architectural / algorithmic / debugging second opinion from Codex (read-only sandbox) when multiple viable approaches exist. |
 
 Once installed, the skills namespace as `sombrax-codex:codex-review`,

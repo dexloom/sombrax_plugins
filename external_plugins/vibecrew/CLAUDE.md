@@ -199,11 +199,14 @@ knowledge-recall/enrich/release are deliberately deferred; see the README):
    workspace root.
 4. **plan-review** — codex reviews the plan (`codex exec --sandbox read-only …
    < /dev/null` — codex reads stdin too, so an unredirected `exec` blocks
-   forever); resolve blockers.
+   forever); resolve blockers, then re-check with `codex exec resume --last "…"
+   < /dev/null` (same session — codex keeps the plan and its findings in
+   context, far cheaper than a fresh review).
 5. **implement** — *always*; the coding agent's own core work, committed as it
    goes.
-6. **code-review** — codex reviews the diff (the piped `echo "…" | codex review
-   --base <base>`, whose pipe closes stdin — no redirect); address findings.
+6. **code-review** — codex reviews the diff (`codex exec --sandbox read-only
+   "Review the diff … git diff <base> …" < /dev/null`); address findings,
+   re-checking via `codex exec resume --last` until it passes.
 7. **Update documentation** — update the docs the change affects, before merge.
 8. **Wait for approval** — an operator gate. Its slot here (just before
    merge/pr) is only its **most common** placement; unlike the other stages it

@@ -22,7 +22,7 @@ agent locally — it's already in the worktree with the code.
 |------|---------|--------------|
 | `pipeline.md` | The **kickoff** the orchestrator sends once after starting the agent: work your card's `## Pipeline` to completion on your own; stop only for a genuine question, at a **Wait-for-approval** gate, or when the pipeline is **complete** (a listed `merge`/`pr` stage the agent performs itself). | `{{TASK}}`, `{{BASE_BRANCH}}` |
 | `plan.md` | The canonical planning method — the shape for `IMPLEMENTATION_PLAN.md` (written at the workspace root). Self-contained; used by the coding agent for its plan stage (or by the standalone `planner` agent if a human invokes it). | `{{TASK}}` |
-| `codex-review.md` | Gate with codex: `codex exec --sandbox read-only … < /dev/null` for the plan, the piped `codex review --base <base>` for the diff — never leave codex's stdin open. Reports `PASS`/`CHANGES REQUESTED`. | `{{BASE_BRANCH}}` |
+| `codex-review.md` | Gate with codex: `codex exec --sandbox read-only … < /dev/null` for the first pass of plan and diff reviews, `codex exec resume --last "…" < /dev/null` for cheap re-checks after fixes — never leave codex's stdin open. Reports `PASS`/`CHANGES REQUESTED`. | `{{BASE_BRANCH}}` |
 
 ## How it fits together
 ```
