@@ -32,6 +32,18 @@ it there too, with numbers.
 You classify; you do not persist. Hand the family, tier, toggles, and Routing
 line back to your caller.
 
+## Inputs
+
+- **The task text** — the best available of: full spec (the `## Task:` render),
+  intake mini-spec, or raw brief. Classify the *best* text, so run this after
+  the spec is drafted, not before.
+- **The operator's request phrasing**, verbatim if available — it carries
+  forcing words ("quick", "thorough", a named pipeline, a named model).
+- Optionally, a couple of cheap repo lookups the caller already made (does a
+  template for this exist; is the named file real). Never start a code
+  exploration session just to classify — if an axis can't be scored from the
+  text, score it 1 and say so in the report.
+
 ## Step 1 — resolve the FAMILY (before any scoring)
 
 VibeCrew pipelines come in two families, split by executor, **never mixed**:
@@ -128,6 +140,15 @@ completed-card data. Hence:
 Report each explicitly; the caller applies them against the pipeline's
 `default_enabled` set when composing the block.
 
+- **spec:** `adopt` when the card description already passes the full-spec test
+  (`### Outcome`, `### Scope`, and `### Testing & acceptance criteria` each at
+  the start of a line — the same test the async spec stage applies) — the spec
+  stage detects this itself and copies the description through to `SPEC.md`
+  instead of spawning a subagent, so no add/drop is needed; the toggle records
+  the *expectation* so a mis-detect is visible. `write` when the description is
+  not a full spec. `skip` only for trivial (Basic has no spec stage). A card
+  created by the `product` agent is always full-spec → always `adopt`: never
+  pay a spec subagent to rewrite a spec that exists.
 - **plan-review:** `yes` (forced) when R = 2; otherwise **`gate`** — the
   stage stays listed and the runtime PLAN-GATE decides after the plan exists
   (skip when the plan is under ~40 KB with 0 open decisions). Never `no`:
@@ -152,13 +173,13 @@ Hand back exactly one line, placed in the card description directly **above**
 the `## Pipeline` block (outside its delimiters):
 
 ```
-**Routing:** <tier> → <pipeline> [<Claude Code|OpenCode>] — S<s> D<d> R<r> N<n> V<v> = <total><; forced by <trigger|operator>>; plan-review: <yes|gate>; code-review: <yes|no>; completion: <merge|pr>; coder: post-plan(<default model>)
+**Routing:** <tier> → <pipeline> [<Claude Code|OpenCode>] — S<s> D<d> R<r> N<n> V<v> = <total><; forced by <trigger|operator>>; spec: <adopt|write|skip>; plan-review: <yes|gate>; code-review: <yes|no>; completion: <merge|pr>; coder: post-plan(<default model>)
 ```
 
 Example:
 
 ```
-**Routing:** medium → Async OpenCode GLM [OpenCode] — S2 D1 R0 N0 V1 = 4; plan-review: gate; code-review: no; completion: merge; coder: post-plan(glm-5.2)
+**Routing:** medium → Async OpenCode GLM [OpenCode] — S2 D1 R0 N0 V1 = 4; spec: write; plan-review: gate; code-review: no; completion: merge; coder: post-plan(glm-5.2)
 ```
 
 The runtime reads two things from it: `plan-review: yes` forces the PLAN-GATE
@@ -173,6 +194,23 @@ the tier — an oversized plan, a broken assumption, an unpriced design
 decision — they park loudly and the card is re-routed one tier up. A cheap
 first route plus a loud tripwire beats an expensive route taken "just in
 case".
+
+## Worked micro-examples
+
+- *"401 from x.ai when updating thesis — we should use `XAI_API_KEY` env var"*
+  → S0 D0 R0 N0 V0 = 0 → **trivial → Basic** (default state: implement +
+  merge). (Historically this card ran a spec stage plus a coder subagent — pure
+  overhead.)
+- *"Markets page doesn't render content"* → S0 D1 (cause unknown) R0 N0 V0 =
+  1, D ≠ 0 → **light**; Claude executor → **Async Sonnet**, spec: write,
+  plan-review: gate.
+- *"Add Limitless as a fourth venue, cloning the `polymarket/` package; L0
+  probe first"* → S2 D1 R0 N0 V1 = 4 → **medium**; OpenCode default executor
+  → **Async OpenCode GLM [OpenCode]**, spec: adopt (full PM spec already on the
+  card), code-review: no.
+- *"Backtest replay engine + depth-aware fill sim + reports/CLI"* → S2 D2 R1
+  N2 V2 = 9 → **heavy → Async Opus [Claude Code]** + code-review, completion:
+  pr. (Async Fable only if the operator names it — uncalibrated.)
 
 ## Report facts (hand these to your caller)
 

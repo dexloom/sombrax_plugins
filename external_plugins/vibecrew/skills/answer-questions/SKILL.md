@@ -19,10 +19,10 @@ description: >-
 
 # Answering an agent's question on the operator's behalf
 
-A coding agent has raised a **question prompt** and is blocked waiting for an
-answer. Your job: choose the answer the operator most likely would, grounded in
-the work itself, and submit it — so the agent keeps moving instead of stalling
-on a human.
+A coding agent has raised a **question prompt** (it called `AskUserQuestion`, or
+a plan-mode questionnaire) and is blocked waiting for an answer. Your job:
+choose the answer the operator most likely would, grounded in the work itself,
+and submit it — so the agent keeps moving instead of stalling on a human.
 
 **Inert until Agent-ops 5/5 (say this plainly, up front, every time this skill
 runs):** VibeCrew spawns every headless run with

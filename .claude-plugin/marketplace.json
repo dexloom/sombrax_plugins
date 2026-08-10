@@ -6,7 +6,7 @@
   },
   "metadata": {
     "description": "SombraX plugins for Claude Code",
-    "version": "1.2.2"
+    "version": "1.3.0"
   },
   "plugins": [
     {
@@ -68,8 +68,8 @@
     {
       "name": "vibecrew",
       "source": "./external_plugins/vibecrew",
-      "description": "Orchestrate a VibeCrew board from Claude Code, MCP-free, over its REST API via a bundled stdlib-only Python client. Family-first pipeline routing (OpenCode vs Claude Code, never mixed; Codex reviews both) via the classify-task skill, lanes (epic + sub-cards + blocking edges) for parallel dispatch, and pipeline overrides with merge-on delivery and post-plan gates. Ships the vibecrew, product-manager, classify-task, and answer-questions skills, the orchestrator/product/planner/coder/decider agents, lifecycle prompts, and looped-orchestrator launchers",
-      "version": "0.2.0",
+      "description": "Orchestrate a VibeCrew board from Claude Code, MCP-free, over its REST API via a bundled stdlib-only Python client. Family-first pipeline routing (OpenCode vs Claude Code, never mixed; Codex reviews both) via the classify-task skill, lanes (epic + sub-cards + blocking edges) for parallel dispatch, and pipeline overrides with merge-on delivery and post-plan gates. Ships the vibecrew, product-manager, classify-task, and answer-questions skills, the orchestrator/product/planner/coder/decider agents, the pipeline-stage crew-bundle (vibecrew-product/-planner/-coder/-reviewer subagents + code-review-checklist skill — canonical source the app vendors), lifecycle prompts, and looped-orchestrator launchers",
+      "version": "0.3.0",
       "author": {
         "name": "dexloom"
       },

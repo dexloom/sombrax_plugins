@@ -98,11 +98,13 @@ this skill exists to catch. Look specifically for:
 ### 2. Do light, targeted verification (optional, fast)
 
 If the brief names concrete things you can cheaply check, do so — one or two
-quick lookups. The goal is to avoid baking a wrong assumption into the spec.
-Confirm a flag exists in the CLI args, a function is where the brief implies, an
-endpoint path is real. If a check is fast and kills an assumption, do it. If
-it's not fast, skip it and list the assumption instead. Never let verification
-turn into a code-exploration session — that's the opposite of this skill.
+quick lookups. The goal is to avoid baking a wrong assumption into the spec
+("the spec said modify `process_block`, but that function iterates the whole
+block, not transactions"). Confirm a flag exists in the CLI args, a function is
+where the brief implies, an endpoint path is real. If a check is fast and kills
+an assumption, do it. If it's not fast, skip it and list the assumption instead.
+Never let verification turn into a code-exploration session — that's the
+opposite of this skill.
 
 ### 3. Ask one focused round of clarifying questions
 
