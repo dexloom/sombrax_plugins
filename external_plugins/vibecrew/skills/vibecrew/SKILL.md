@@ -213,6 +213,60 @@ hold: the card is `done`, delivery is corroborated (a **merged** PR from
 the latest run is **terminal**. Anything less: archive, which is reversible, and
 say plainly what evidence was missing.
 
+### Sweep — bulk-close every finished workspace (+ its tmux)
+
+Reclaim all worktrees whose card already shipped, in one pass, and tear down the
+headed tmux sessions that outlived them. Destructive end-to-end — run the
+safety sweep first, never the deletes.
+
+**Headed-run caveat (read first).** A **headed** run reads `status: running`
+for its whole tmux life (see `send-input` above), so the single-workspace
+"latest run is terminal" gate does **not** apply to headed workspaces — a done
+card with its work merged to base routinely still shows a `running` run. For the
+sweep, gate a headed workspace on: card `done` **+** work merged to the base
+branch **+** the artifact-only dirty check below, then stop the zombie run and
+kill its tmux in step 4.
+
+**1. Join workspaces to done cards.** Gather `done` card ids across every
+project, then keep only workspaces whose `card_id` is in that set:
+```
+for p in $(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/vibecrew_api.py projects | jq -r .data[].id); do
+  python3 ${CLAUDE_PLUGIN_ROOT}/scripts/vibecrew_api.py cards --project-id "$p" --status done
+done
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/vibecrew_api.py workspaces      # join on card_id
+```
+Never delete a workspace whose card is still `todo`/`inprogress`/`inreview`, and
+never the orchestrator's own pinned workspace.
+
+**2. Safety-sweep each candidate worktree BEFORE deleting.** `workspace-delete`
+force-removes the worktree, so check first:
+```
+git -C <worktree> status --porcelain
+```
+Dirty is **expected** on a done card, but only from artifacts: untracked
+`.mcp.json`, modified `Package.resolved` (resolution drift), and pipeline
+paperwork (`SPEC.md`/`IMPLEMENTATION_PLAN.md`/`PRIOR_KNOWLEDGE.md`). If anything
+**else** is dirty (real source/test changes), the card may not actually be
+merged — archive (`workspace-update --archived true`) and flag it instead of
+deleting.
+
+**3. Map tmux sessions to cards.** A headed run's tmux session is named
+`vc-<lowercased session_uuid>`, where `session_uuid` is the run's
+`executor_action.typ.interactive.session_uuid`. `tmux ls` lists them; a session
+marked `(attached)` is the operator's live terminal — **never kill it.** Match
+each `vc-<uuid>` back to its card and kill only sessions whose card is `done`.
+A session with no matching workspace (e.g. the orchestrator's own attached
+terminal) is orphaned on purpose — leave it.
+
+**4. Tear down, in order:**
+```
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/vibecrew_api.py stop <run_id>              # stop a still-running run on a done-card ws
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/vibecrew_api.py workspace-delete <workspace_id>   # or: curl -X DELETE "$URL/api/workspaces/<id>"
+tmux kill-session -t "vc-<lowercased-session_uuid>"     # done cards only; preserve attached + non-done
+```
+Then re-run `workspaces` and `tmux ls` to confirm only non-done / attached
+sessions remain.
+
 ### Stop a run
 ```
 python3 ${CLAUDE_PLUGIN_ROOT}/scripts/vibecrew_api.py stop <run_id>
