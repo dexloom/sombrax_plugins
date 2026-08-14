@@ -1,33 +1,29 @@
-# Crew bundle — pipeline-stage subagents + self-review skill (Layer B)
+# Crew bundle — the app's plugin catalog (git source of truth)
 
-This directory is the **canonical source** for the content the VibeCrew app
-ships via its Plugin Manager (`CrewPlugins/Resources/Plugins/payloads/`). It
-holds:
+This directory is the **complete, self-describing plugin catalog** the VibeCrew
+app installs from. The app keeps a git checkout of this repo at
+`~/.vibecrew/plugins` (source of truth: `dexloom/sombrax_plugins`) and its
+Plugin Manager reads `manifest.json` + the payload tree straight from that
+checkout — nothing is vendored into the app bundle any more.
+
+It holds:
 
 - **Pipeline-stage subagents** — `vibecrew-product`, `vibecrew-planner`,
   `vibecrew-coder`, `vibecrew-reviewer` — that run *inside a card's worktree*
   as stages of an execution pipeline.
 - **`code-review-checklist`** — a self-review skill invoked before opening a PR.
+- **`commit-helper`** — a conventional-commit drafting subagent.
+- **`vibecrew-orchestrator`** / **`vibecrew-decider`** — standalone copies of
+  the board orchestrator and its decider delegate (see below).
 
 A separate thing from the **board orchestrator crew** (`orchestrator`,
 `product`, `planner`, `coder`, `decider` — unprefixed, living in `../agents/`),
 which drives the board from the operator's session.
 
-## Two agent layers — do not merge them
-
-| | Layer A — orchestrator crew | Layer B — pipeline subagents (here) |
-|---|---|---|
-| **Names** | unprefixed (`product`, `planner`…) | prefixed (`vibecrew-product`…) |
-| **Runs** | in the operator's session, drives the board | inside a card worktree, as a pipeline stage |
-| **Model** | carries its own `model:` frontmatter | **no model** frontmatter — pinned per call by the launching pipeline |
-| **Lives** | `../agents/*.md` | `<id>/{claude,opencode}/agent.md` |
-
-The prefixed names exist so a pipeline stage can delegate (`Agent(vibecrew-product)`)
-without colliding with the board-level agent of the same role.
-
 ## Layout
 
 ```
+crew-bundle/manifest.json                  # the catalog (same schema the app parses)
 crew-bundle/<id>/{claude,opencode}/agent.md   (subagents)
 crew-bundle/code-review-checklist/{claude,opencode}/SKILL.md
 ```
@@ -40,9 +36,36 @@ crew-bundle/code-review-checklist/{claude,opencode}/SKILL.md
   model per call (Claude Code) or per launch (OpenCode env), so a global install
   must not fight the card's binding.
 
-## Source of truth
+## Two agent layers — do not merge them
 
-This directory is canonical. The app's bundled
-`CrewPlugins/Resources/Plugins/payloads/` is a vendored copy (generated at
-build), and per-CLI global installs (`~/.config/opencode/agents/vibecrew-*.md`,
-`~/.claude/agents/`) are deployed symlinks — never edit those in place.
+| | Layer A — orchestrator crew | Layer B — standalone catalog copies (here) |
+|---|---|---|
+| **Names** | unprefixed (`orchestrator`, `decider`…) | prefixed (`vibecrew-orchestrator`…) |
+| **Runs** | in the operator's session, drives the board | installed by the app into each CLI's global config dir |
+| **Model** | carries its own `model:` frontmatter | orchestrator/decider keep theirs; pipeline agents pin **no** model |
+| **Lives** | `../agents/*.md`, `../agents-opencode/` | `<id>/{claude,opencode}/agent.md` |
+
+The `vibecrew-orchestrator`/`vibecrew-decider` payloads are DERIVED from
+`../agents/orchestrator.md`, `../agents-opencode/vc-orchestrator.md`, and
+`../agents/decider.md`. Never edit them by hand — run:
+
+```bash
+scripts/sync-crew-bundle.sh
+```
+
+which re-copies with the one rewrite that cannot be verbatim (`name:
+orchestrator` → `name: vibecrew-orchestrator`, likewise decider — the
+standalone copy must declare the id the app launches it by).
+
+## Workflow (edit → sync → install)
+
+1. Edit the payload (or its layer-A source + run `scripts/sync-crew-bundle.sh`).
+2. Bump the plugin's `version` in `manifest.json` — that bump is what makes an
+   installed copy show "Update available".
+3. Commit + push. In VibeCrew: Settings → Plugins → **Sync Catalog**
+   (`git fetch` + reset to `origin/HEAD` in `~/.vibecrew/plugins`), then click
+   Update on the flagged rows.
+
+Per-CLI global installs (`~/.config/opencode/agents/vibecrew-*.md`,
+`~/.claude/agents/`) are written by the app's Plugin Manager — never edit
+those in place.

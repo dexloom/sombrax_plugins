@@ -47,6 +47,15 @@ agents land in `~/.config/opencode/agents/`. Override the plugin root with
 `SOMBRAX_HOME=...` if your checkout lives elsewhere — by default the script
 resolves it relative to its own location.
 
+## VibeCrew plugin catalog (git-backed)
+
+The VibeCrew app's Plugin Manager keeps a checkout of this repo at
+`~/.vibecrew/plugins` as its plugin catalog — `external_plugins/vibecrew/
+crew-bundle/` (`manifest.json` + payloads) is self-describing, so a
+"Sync Catalog" click in the app (git fetch + reset to `origin/HEAD`) is all it
+takes to pick up new plugin content. No app update or vendoring step is
+involved; see `external_plugins/vibecrew/crew-bundle/README.md`.
+
 ## License
 
 Apache-2.0
