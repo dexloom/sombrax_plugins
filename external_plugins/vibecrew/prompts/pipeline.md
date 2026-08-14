@@ -60,10 +60,10 @@ block records the card's complexity classification — why *this* pipeline with
 already reflects it, so never re-classify or add/drop stages because of it. It
 has exactly three runtime effects: `plan-review: yes` forces the PLAN-GATE
 open (below), the tier is the plan-size envelope the escalation tripwire
-checks, and the family bounds every model decision — **OpenCode pipelines run
-MiniMax / GLM / Kimi models only; Claude Code pipelines run Sonnet / Opus /
-Fable models only; never mix them** (Codex appears in both families, but only
-ever as the reviewer).
+checks, and the family bounds every model decision — **OpenCode and Pi
+pipelines run MiniMax / GLM / Kimi models only; Claude Code pipelines run
+Sonnet / Opus / Fable models only; never mix them** (Codex appears in every
+family, but only ever as the reviewer).
 
 **Board access — the bundled client, with a curl fallback.** Every board operation in
 this prompt is `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/vibecrew_api.py <subcommand> …`
@@ -145,8 +145,8 @@ hand — the skill's curl-fallback section has the full recipe.
   **within your pipeline's own family** — if the plan blew its envelope
   (PLAN-FACTS ≥ 40 KB, or open design decisions surfaced during planning), step
   the coder up one tier inside the family (Claude Code: sonnet → opus;
-  OpenCode: MiniMax-M3 → glm-5.2; a coder already at its family ceiling stays
-  put), **never** a model from the other family; an operator's card-level model
+  OpenCode/Pi: MiniMax-M3 → glm-5.2; a coder already at its family ceiling stays
+  put), **never** a model from another family; an operator's card-level model
   pin always wins. Report the single line
   `CODER-MODEL: <model> — <one-phrase reason>`, then spawn. That
   subagent **leaves the worktree dirty on purpose** — it never commits, because the
@@ -381,7 +381,8 @@ implementation.
   spawn — `product`, `planner`, `coder`, and any other — and it **overrides any model
   named inside a stage prompt** and the CODER-MODEL advice. **Absent a pin, nothing
   changes:** spawn with whatever the stage prompt (or the MODEL CHECK) names. A pin
-  must belong to your pipeline's family (never mix OpenCode and Claude Code models);
+  must belong to your pipeline's family (never mix families — OpenCode/Pi run
+  MiniMax / GLM / Kimi; Claude Code runs Sonnet / Opus / Fable);
   if it doesn't, surface the contradiction instead of applying it.
 - **Fallback:** if you **can't** spawn the `product`/`planner` subagents — e.g. you're
   not a Claude Code agent, or have no Task/Agent tool or those subagents aren't

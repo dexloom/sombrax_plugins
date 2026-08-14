@@ -45,6 +45,9 @@ ASYNC_FILES = {
     "async-opencode-glm.toml": "async-opencode-glm.toml",
     "async-opencode-glm-minimax.toml": "async-opencode-glm-minimax.toml",
     "async-opencode-kimi-minimax.toml": "async-opencode-kimi-minimax.toml",
+    "async-pi-glm.toml": "async-pi-glm.toml",
+    "async-pi-glm-minimax.toml": "async-pi-glm-minimax.toml",
+    "async-pi-kimi-minimax.toml": "async-pi-kimi-minimax.toml",
 }
 
 HEADER = (
@@ -100,7 +103,7 @@ CODE_HEAD_NEW = (
     "design decisions surfaced during planning), step the coder model up one tier inside the "
     "family — on a Claude Code pipeline sonnet steps up to opus; on an OpenCode pipeline "
     "MiniMax-M3 steps up to glm-5.2; a coder already at its family ceiling stays put. NEVER "
-    "cross families: OpenCode pipelines run MiniMax / GLM / Kimi models only, Claude Code "
+    "cross families: OpenCode and Pi pipelines run MiniMax / GLM / Kimi models only, Claude Code "
     "pipelines run Sonnet / Opus / Fable models only — Codex appears on both, but only ever as "
     "the reviewer, never as a build model. An operator's card-level model pin always beats this "
     "advice. Report the single line `CODER-MODEL: <model> — <one-phrase reason>`. Then: "

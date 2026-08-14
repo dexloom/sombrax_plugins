@@ -137,8 +137,10 @@ Render that line under the spec in the same inline review — the user corrects
 a wrong tier or family with one word, the same way they correct a wrong scope
 bullet. Overrides, and only these: a pipeline / executor / model / tier the
 **user named** wins outright (note the disagreement if the rubric says
-otherwise), and "just the spec, don't file it" skips routing along with the
-card.
+otherwise) — this is how a **Pi** card is filed (Pi is explicit-ask-only and
+uncalibrated; `classify-task` never auto-routes to it, so it appears only when
+the user names a `async-pi-*` pipeline or `PI`/`PI_HEADED` executor) — and "just
+the spec, don't file it" skips routing along with the card.
 
 ### 6. Resolve the project, then create the card
 
@@ -298,14 +300,14 @@ Compose the block **from the pipeline's TOML file**, inline:
   file's order, with `{{DELEGATE}}` / `{{model_name}}` rendered from the
   TOML's `subagent` / `[models]` values.
 - **Executor pin.** Basic has no executor binding — always add the executor-pin
-  line for the resolved family (`CLAUDE_CODE_HEADED` / `OPENCODE_HEADED`) on a
-  Basic card. Async pipelines carry their family in the TOML's `agent =`; add
-  the pin line when the user named an executor explicitly.
+  line for the resolved family (`CLAUDE_CODE_HEADED` / `OPENCODE_HEADED` /
+  `PI_HEADED`) on a Basic card. Async pipelines carry their family in the TOML's
+  `agent =`; add the pin line when the user named an executor explicitly.
 - **Model pin.** Only when the user names a model — and it must belong to the
-  card's pipeline family (OpenCode: MiniMax / GLM / Kimi; Claude Code: Sonnet /
-  Opus / Fable — **never mixed**; Codex is only ever the reviewer). Use the
-  model-pin template from `CLAUDE.md`. A family contradiction is surfaced, not
-  composed.
+  card's pipeline family (OpenCode/Pi: MiniMax / GLM / Kimi; Claude Code:
+  Sonnet / Opus / Fable — **never mixed**; Codex is only ever the reviewer). Use
+  the model-pin template from `CLAUDE.md`. A family contradiction is surfaced,
+  not composed.
 - **Placement.** The `**Routing:**` line from step 5, then the composed block,
   appended to the end of the rendered spec (after the last section, e.g.
   Risks) before writing the description file — the Routing line sits directly

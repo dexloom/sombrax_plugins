@@ -85,23 +85,36 @@ TOML):
 text — never retype fragments from memory; a paraphrase silently breaks the
 shared parser and the stage-number tracking.
 
-## The two pipeline families — never mixed
+## The pipeline families — never mixed
 
 | Family | Executor (`agent =`) | Build models | Pipelines |
 |---|---|---|---|
 | **Claude Code** | `CLAUDE_CODE_HEADED` | Sonnet / Opus / Fable only | Async Sonnet, Async Opus, Async Fable |
 | **OpenCode** | `OPENCODE_HEADED` | MiniMax / GLM / Kimi only | Async OpenCode GLM, Async OpenCode GLM-MiniMax, Async OpenCode Kimi-MiniMax |
+| **Pi** *(explicit-ask-only, uncalibrated)* | `PI_HEADED` | GLM / Kimi / MiniMax only | Async Pi GLM, Async Pi GLM-MiniMax, Async Pi Kimi-MiniMax |
 
 **Basic** is family-neutral (no `agent`, no `[models]`) and runs on whichever
 executor the card pins or the config defaults to. **Codex is the shared
 reviewer**: `plan-review-codex` / `code-review` bind to `CODEX` via `[agents]`
-in BOTH families — Codex is never a build model. **The never-mix invariant:**
-no stage, pin, or advice may name a model from the other family; a model pin
+in EVERY family — Codex is never a build model. **The never-mix invariant:**
+no stage, pin, or advice may name a model from another family; a model pin
 must belong to the card's pipeline family, and a contradiction is surfaced,
 never composed. Which pipeline a card gets when the operator names none is the
 `classify-task` skill's job (family from the executor ladder, tier from the
 five-axis rubric); the design record with the telemetry evidence is
 `reference/routing.md`.
+
+**Pi is the explicit-ask-only arm.** It runs the same model set OpenCode uses
+(Z.ai GLM / Kimi / MiniMax via the `pi` CLI) but has **zero telemetry** (n=0 on
+both boards) and is deliberately **not** in `classify-task`'s executor ladder
+or tier→pipeline maps — `classify-task` never auto-routes to Pi. An operator
+selects Pi only by naming a Pi pipeline (`async-pi-*`) or executor
+(`PI`/`PI_HEADED`) explicitly; an operator-named Pi pipeline/executor always
+wins, the same override rule as any family. Pi runs a single conversation with
+no subagents, so per-stage model bindings on a Pi pipeline are advisory and the
+CODER-MODEL step-up stays within the GLM/Kimi/MiniMax set. Provisioning the
+`pi` CLI (the `zai-coding-plan` custom provider + env keys) is documented in the
+app's `docs/configuration.md`.
 
 **All async pipelines share one stage catalog**: `orchestrate` (off) → `spec`
 (on) → `plan` (on) → `plan-review-codex` (on) → `code-subagent` (on) →

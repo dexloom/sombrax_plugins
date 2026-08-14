@@ -5,7 +5,7 @@
 the design record (evidence, architecture, savings model, follow-ups); the
 skill is what agents execute. When they disagree, fix the skill, then this doc.
 
-## 1. The two families — the axiom everything else follows
+## 1. The families — the axiom everything else follows
 
 VibeCrew's bundled pipelines split by executor, and the split is absolute:
 
@@ -13,14 +13,28 @@ VibeCrew's bundled pipelines split by executor, and the split is absolute:
   Kimi-MiniMax — build models are **MiniMax / GLM / Kimi only**.
 - **Claude Code** (`CLAUDE_CODE_HEADED`): Async Sonnet / Opus / Fable — build
   models are **Sonnet / Opus / Fable only**.
+- **Pi** (`PI_HEADED`): Async Pi GLM / GLM-MiniMax / Kimi-MiniMax — same build
+  models as OpenCode (**MiniMax / GLM / Kimi only**), via the `pi` CLI.
+  **Explicit-ask-only and uncalibrated** — see below.
 - **Basic** is family-neutral (no `agent`, no `[models]`).
 - **Codex is the shared reviewer** — `plan-review-codex` / `code-review` bind
-  to `CODEX` in both families; Codex is never a build model.
+  to `CODEX` in every family; Codex is never a build model.
 
-**Never mix.** No stage, pin, or advice may name a model from the other
+**Never mix.** No stage, pin, or advice may name a model from another
 family. When the operator names no pipeline, the **executor picks the
 family** (operator-named executor/model → config `executor_profile` → Claude
 Code), and the tier picks the pipeline **within** it.
+
+**Pi is the explicit-ask-only arm.** It shares OpenCode's model set but has
+**n=0 telemetry** on both boards, so it is deliberately absent from the
+auto-routing (executor ladder + tier→pipeline maps in §3/§4) —
+`classify-task` never routes to Pi. An operator selects Pi ONLY by naming an
+`async-pi-*` pipeline or `PI`/`PI_HEADED`; that explicit ask overrides the
+ladder exactly like any operator-named family. Pi runs a single conversation
+with no subagents, so per-stage model bindings on a Pi pipeline are advisory
+and the CODER-MODEL step-up stays inside the MiniMax / GLM / Kimi set. When Pi
+accumulates real telemetry it can be promoted into the tier maps like any
+calibrated arm.
 
 ## 2. The telemetry, with receipts
 
@@ -52,7 +66,8 @@ Claude-era, n=65 done); raw JSONs alongside. Collector:
   Opus coder ~1,666 · Sonnet coder on thin plans 5,155 · **MiniMax-M3
   5,855–10,851** (median 21 LOC/card; needed a follow-up debug card).
 - **Uncalibrated arms:** Async Fable n=0 on both boards; Kimi n=0 pipeline
-  completions. They stay explicit-ask-only until measured.
+  completions; **Pi** (all three `async-pi-*`) n=0 — explicit-ask-only until
+  measured.
 - **Plan quality, not coder model, is the first-order cost driver** — both
   reports converge on this; it is why spec/plan stay on strong models and the
   coder is the axis that flexes.
@@ -94,7 +109,7 @@ with no later re-composition, so late binding lives in the stage prompts and
 
 | Artifact | Change |
 |---|---|
-| `pipelines/*.toml` (**new**, deployed to `~/.vibecrew/pipelines/`) | override copies of all 7 bundled pipelines: `merge` default-ON everywhere; plan stage emits `PLAN-FACTS`; `plan-review-codex` gains the 40 KB gate + 2-pass cap; `code-subagent` gains the in-family CODER-MODEL check; `merge` gains the artifact gate; spec/plan paperwork never committed (`git rev-parse --git-path info/exclude`). Claude files renamed `async-claude-*` (display `name =` kept — the registry shadows bundled by name). Generator: `scripts/generate_pipeline_overrides.py` (asserts every edit fired, so upstream drift breaks generation, not silently). |
+| `pipelines/*.toml` (**new**, deployed to `~/.vibecrew/pipelines/`) | override copies of all 10 bundled pipelines (Async Claude ×3, Async OpenCode ×3, Async Pi ×3, Basic): `merge` default-ON everywhere; plan stage emits `PLAN-FACTS`; `plan-review-codex` gains the 40 KB gate + 2-pass cap; `code-subagent` gains the in-family CODER-MODEL check; `merge` gains the artifact gate; spec/plan paperwork never committed (`git rev-parse --git-path info/exclude`). Claude files renamed `async-claude-*` (display `name =` kept — the registry shadows bundled by name). Generator: `scripts/generate_pipeline_overrides.py` (asserts every edit fired, so upstream drift breaks generation, not silently). |
 | `skills/classify-task/SKILL.md` | **new** — family ladder, rubric, per-family tier maps, toggles, Routing line |
 | `skills/product-manager/SKILL.md` | classify step 5; pipeline routed-by-default, composed from the TOML (numbered stages); **Lanes** section |
 | `agents/product.md` | classify-and-route bullet; worktree-truth fix for `SPEC.md` |

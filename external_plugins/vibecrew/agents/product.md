@@ -101,9 +101,9 @@ directly — they are the source of truth:
 - **Classify every card, attach the routed pipeline by default — embed, don't
   dispatch.** After the spec is drafted, invoke the `classify-task` skill
   (`vibecrew:classify-task`): family first (OpenCode vs Claude Code, from the
-  executor ladder — **never mixed**: OpenCode pipelines run MiniMax/GLM/Kimi,
-  Claude Code pipelines run Sonnet/Opus/Fable, Codex is only ever the shared
-  reviewer), then the five-axis tier → routed pipeline + toggles + the
+  executor ladder — **never mixed**: OpenCode and Pi pipelines run
+  MiniMax/GLM/Kimi, Claude Code pipelines run Sonnet/Opus/Fable, Codex is only
+  ever the shared reviewer; Pi is explicit-ask-only and never auto-routed), then the five-axis tier → routed pipeline + toggles + the
   one-line `**Routing:**` record. Compose the `## Pipeline` block from the
   routed pipeline's TOML in `~/.vibecrew/pipelines/` (numbered stages, the
   order-instruction line — grammar in `${CLAUDE_PLUGIN_ROOT}/CLAUDE.md`); the

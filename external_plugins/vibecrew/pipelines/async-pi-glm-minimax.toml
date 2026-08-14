@@ -2,9 +2,9 @@
 # plugin (sombrax_plugins) from the app's DefaultPipelines by
 # scripts/generate_pipeline_overrides.py. Do not hand-edit; regenerate.
 
-name = "Async OpenCode GLM-MiniMax"
-description = "The Async flow bound to OpenCode: a GLM-5.2 main loop, GLM-5.2 subagents for spec and plan on the max reasoning-effort variant, MiniMax M3 for code; Codex reviews the plan and the diff."
-agent = "OPENCODE_HEADED"
+name = "Async Pi GLM-MiniMax"
+description = "The Async flow bound to Pi: a GLM-5.2 main loop, GLM-5.2 for spec and plan on the max reasoning-effort variant, MiniMax M3 for code; Codex reviews the plan and the diff. Pi runs a single conversation (no subagents), so per-stage model bindings are advisory."
+agent = "PI_HEADED"
 
 # The execution binding. Keys are stage ids; `main` is the card's main loop.
 # Re-binding this pipeline to other models means editing only this table —
@@ -20,9 +20,9 @@ code-subagent = "minimax/MiniMax-M3"
 # Bare names above resolve against `provider`; a value containing a slash is
 # taken as written, so the fully-qualified MiniMax id survives intact.
 
-# Reasoning effort, pinned per stage into the OpenCode subagent definitions
-# at launch (glm-5.2 on zai-coding-plan ships `high` and `max` variants). The
-# reserved `main` key would set the main loop's effort (`--effort`/`--variant`).
+# Reasoning effort, advisory per stage on Pi (the `--thinking` flag maps
+# glm-5.2's `high` and `max` variants). Pi runs a single conversation with no
+# subagents, so these bindings are advisory, not enforced per-stage.
 
 [effort]
 spec = "max"

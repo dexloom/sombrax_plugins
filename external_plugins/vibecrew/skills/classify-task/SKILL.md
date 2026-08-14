@@ -46,29 +46,37 @@ line back to your caller.
 
 ## Step 1 — resolve the FAMILY (before any scoring)
 
-VibeCrew pipelines come in two families, split by executor, **never mixed**:
+VibeCrew pipelines come in three families, split by executor, **never mixed**:
 
 | Family | Executor | Build models (spec/plan/code) | Pipelines |
 |---|---|---|---|
 | **Claude Code** | `CLAUDE_CODE_HEADED` | Sonnet / Opus / Fable — only these | Async Sonnet, Async Opus, Async Fable |
 | **OpenCode** | `OPENCODE_HEADED` | MiniMax / GLM / Kimi — only these | Async OpenCode GLM, Async OpenCode GLM-MiniMax, Async OpenCode Kimi-MiniMax |
+| **Pi** *(explicit-ask-only, uncalibrated)* | `PI_HEADED` | GLM / Kimi / MiniMax — only these | Async Pi GLM, Async Pi GLM-MiniMax, Async Pi Kimi-MiniMax |
 
 - **Basic** is family-neutral (no executor binding, no model table): it runs
   on whichever executor the card pins or the config defaults to.
 - **Codex is the shared reviewer** — `plan-review-codex` / `code-review` run
-  on Codex in BOTH families. Codex is never a build model.
+  on Codex in EVERY family. Codex is never a build model.
 - **The never-mix invariant:** no stage, pin, or advice may name a model from
-  the other family. A Claude Code card never runs a GLM coder; an OpenCode
+  another family. A Claude Code card never runs a GLM coder; an OpenCode
   card never runs an Opus coder. If the operator's words contradict the
   family (e.g. names an OpenCode pipeline *and* an Opus model), surface the
   contradiction in your report and follow the pipeline's family — never
   compose a mixed binding.
+- **Pi is explicit-ask-only and uncalibrated.** It shares OpenCode's model
+  set (GLM / Kimi / MiniMax, via the `pi` CLI) but has **no telemetry** (n=0)
+  and is **not** on the resolution ladder below and **not** in the tier→pipeline
+  maps in Step 3 — you NEVER auto-route to Pi. An operator selects Pi ONLY by
+  naming a `async-pi-*` pipeline or a `PI`/`PI_HEADED` executor (step 1/2 of the
+  ladder); an explicit Pi ask always wins, the same override rule as any family.
 
 Resolution ladder, first hit wins:
 
-1. **Operator names a pipeline** → that pipeline's family, done.
+1. **Operator names a pipeline** → that pipeline's family, done (a `async-pi-*`
+   name → Pi).
 2. **Operator names an executor or a family model** ("on opencode", "with
-   glm", "on sonnet") → that family. A model name implies its family.
+   glm", "on sonnet", "on pi") → that family. A model name implies its family.
 3. **The config's default executor** (`vibecrew_api.py config` →
    `executor_profile`): `OPENCODE*` → OpenCode; `CLAUDE*` → Claude Code.
 4. Nothing resolvable → **Claude Code** (the app's own final fallback).
