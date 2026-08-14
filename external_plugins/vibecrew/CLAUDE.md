@@ -246,6 +246,13 @@ a successful direct merge. A completion report **without** that line — a bare
 **not** move the card to `done`. The orchestrator's Done gate keys off exactly
 these two signals (a merged PR, or a SHA-bearing report), and nothing weaker.
 
+The same two signals gate **workspace deletion**, which is strictly more
+dangerous than a column move: `workspace-delete` force-removes the worktree and
+anything uncommitted in it, with no undo. So closure requires all three of —
+card `done`, one of the two delivery signals, and a terminal latest run — and
+anything less archives instead (`workspace-update --archived true`, reversible)
+with a loud report line naming the missing evidence.
+
 ## "Update documentation" — how it is done
 
 - **When.** After the change is implemented (and code-reviewed, if that stage
@@ -318,9 +325,18 @@ AWAITING OPERATOR APPROVAL
 - `prompts/pipeline.md` — the coding-agent kickoff; defines the
   Wait-for-approval and Update-documentation stage behaviors (producer of the
   park marker, and emitter of the `merge_commit: <sha>` completion-report line).
-- `agents/orchestrator.md` + `scripts/orchestrator.prompt.md` — recognize/hold/
-  surface the gate (consumers of the marker); the delivery-signal Done gate;
-  `nudge-stuck` exclusion; the no-auto-resume safety rule.
+- `agents/orchestrator.md` (+ the byte-identical OpenCode twin
+  `agents-opencode/vc-orchestrator.md`) — recognize/hold/surface the gate
+  (consumers of the marker); the delivery-signal Done gate, which now also
+  gates **workspace closure**; `nudge-stuck` exclusion; the no-auto-resume
+  safety rule. The agent is **host-ticked** and arms no timer of its own.
+- `reference/tick-contract.md` — the wire contract between VibeCrew's host loop
+  worker and the orchestrator agent: the tick ping's three blocks, the status
+  digest's fields, the `CADENCE:` grammar, the `send-input`/`follow-up` channel
+  rules, and the exact nudge payload. Cited by both repos; change a literal
+  there and you change it in both.
+- `scripts/orchestrator.prompt.md` — the STANDALONE tick ping only (no host
+  digest). The method is not there; it is in the agent definition.
 - `prompts/README.md` — the prompt set overview and the stage flow diagram.
 
 ## Deferred (not in this plugin)

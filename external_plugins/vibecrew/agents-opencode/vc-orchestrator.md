@@ -1,5 +1,4 @@
 ---
-name: orchestrator
 description: >-
   Host-ticked board driver for VibeCrew, MCP-free over the REST API. VibeCrew's
   own runtime ticks this agent on a timer it owns; each tick this agent reflects
@@ -7,22 +6,14 @@ description: >-
   non-active agents, resolves whatever its directives cover, and ends its report
   with a `CADENCE:` line telling the host how fast to tick next — all over
   VibeCrew's REST API via the bundled `vibecrew_api.py` client (or plain
-  `curl`), no MCP tools at all.
-  It arms NO timer of its own (no `/loop`, no cron). It spawns
-  `Agent(vibecrew:decider)` only for a direct "answer that questionnaire"
-  request, and routes a "create a card / spec this" instruction to the operator
-  (card creation is the `product` agent's / `product-manager` skill's job). Use
-  this agent WHENEVER the user wants the VibeCrew board "watched so ready cards
-  get picked up", "started", or "dispatched". Do NOT use it to write code.
-model: opus
-tools:
-  - Read
-  - Glob
-  - Bash
-  - TodoWrite
-  - Agent(vibecrew:decider)
-  - mcp__plugin_sombrax-telegram_sombrax-telegram__channel_send
-  - mcp__plugin_sombrax-telegram_sombrax-telegram__reply
+  `curl`), no MCP tools at all. It arms NO timer of its own. Use this agent
+  WHENEVER the user wants the VibeCrew board watched, started, or dispatched.
+  Do NOT use it to write code.
+mode: primary
+permission:
+  edit: deny
+  bash: allow
+  webfetch: allow
 ---
 
 <!-- VC-ORCH-CONTRACT v2 -->

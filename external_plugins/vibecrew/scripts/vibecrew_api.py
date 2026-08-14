@@ -348,6 +348,61 @@ def build_parser():
     p.add_argument("--model-id")
     p.add_argument("--permission-policy")
 
+    p = sub.add_parser(
+        "workspace-delete",
+        help="DELETE /api/workspaces/:id — DESTRUCTIVE: force-removes the "
+        "worktree, and any uncommitted work in it is gone with no undo. Only "
+        "for a card that is done AND has corroborated delivery (a merged PR, "
+        "or a `merge_commit: <sha>` line in the run's final report) AND whose "
+        "latest run is terminal. Anything less: use `workspace-update "
+        "--archived true`, which is reversible.",
+    )
+    p.add_argument("workspace_id")
+
+    p = sub.add_parser(
+        "workspace-update",
+        help="PATCH /api/workspaces/:id — archive (or un-archive) a workspace. "
+        "The reversible counterpart to `workspace-delete`: the worktree stays "
+        "on disk, so this is the correct action whenever the delivery evidence "
+        "is incomplete.",
+    )
+    p.add_argument("workspace_id")
+    p.add_argument(
+        "--archived", required=True, choices=["true", "false"],
+        help="true to archive, false to restore")
+
+    p = sub.add_parser(
+        "send-input",
+        help="POST /api/runs/:id/send-input — type into a LIVE headed agent's "
+        "TUI. The only way to reach a headed run: it stays `running` for its "
+        "whole tmux life, so a follow-up would 409 forever. Exit codes carry "
+        "the meaning: 409 not_ready_for_input = mid-turn, retry later; 422 "
+        "not_interactive = headless, use follow-up; 410 session_gone = the "
+        "tmux session is gone, stop. The canonical nudge payload is exactly "
+        "`Why are you stuck` — no punctuation.",
+    )
+    p.add_argument("run_id")
+    g = p.add_mutually_exclusive_group(required=True)
+    g.add_argument("--text")
+    g.add_argument("--text-file")
+
+    p = sub.add_parser(
+        "pane",
+        help="GET /api/runs/:id/pane — what a headed agent's screen shows right "
+        "now. Answers what no API field can: whether it is sitting on a modal "
+        "the board cannot see. Returns 200 with `alive: false` for a dead "
+        "session (that IS the answer, not an error).",
+    )
+    p.add_argument("run_id")
+    p.add_argument("--lines", type=int, help="trim to the last N rendered lines")
+
+    p = sub.add_parser(
+        "agent-activity",
+        help="GET /api/agent-activity — one-shot snapshot of every tracked "
+        "workspace, including `last_activity_at`. The curl-able twin of the SSE "
+        "stream; use it to see who has gone quiet.",
+    )
+
     p = sub.add_parser("sessions", help="GET /api/workspaces/:id/sessions")
     p.add_argument("workspace_id")
 
@@ -500,6 +555,33 @@ def main(argv=None):
         if args.parent_position is not None:
             body["parent_position"] = args.parent_position
         call(base, "PATCH", build_path("api", "cards", args.card_id), body=body)
+        return
+
+    if cmd == "workspace-delete":
+        call(base, "DELETE", build_path("api", "workspaces", args.workspace_id))
+        return
+
+    if cmd == "workspace-update":
+        call(base, "PATCH", build_path("api", "workspaces", args.workspace_id),
+             body={"archived": args.archived == "true"})
+        return
+
+    if cmd == "send-input":
+        text = args.text
+        if text is None:
+            with open(args.text_file, "r", encoding="utf-8") as handle:
+                text = handle.read()
+        call(base, "POST", build_path("api", "runs", args.run_id, "send-input"),
+             body={"text": text})
+        return
+
+    if cmd == "pane":
+        query = {"lines": str(args.lines)} if args.lines else None
+        call(base, "GET", build_path("api", "runs", args.run_id, "pane"), query=query)
+        return
+
+    if cmd == "agent-activity":
+        call(base, "GET", "/api/agent-activity")
         return
 
     if cmd == "card-prs":

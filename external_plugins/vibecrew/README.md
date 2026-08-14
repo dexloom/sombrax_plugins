@@ -15,7 +15,7 @@ attention.
 | **`product-manager` skill** | Turns a rough brief into a dev-ready VibeCrew card (spec → card), classifies it via `classify-task`, attaches the routed pipeline by default (composed inline from the deployed pipeline TOMLs), and decomposes multi-card briefs into **lanes** (epic + sub-cards + `blocking` edges). |
 | **`classify-task` skill** | Family-first routing: OpenCode vs Claude Code resolved from the executor (never mixed — OpenCode = MiniMax/GLM/Kimi, Claude Code = Sonnet/Opus/Fable, Codex reviews both), then a five-axis tier (trivial/light/medium/heavy) → per-family pipeline + stage toggles + the `**Routing:**` line. Telemetry-grounded; design record in `reference/routing.md`. |
 | **`answer-questions` skill** | The method for answering an agent's stale question prompt on the operator's behalf — ground it in the card/spec/plan, pick, submit. **Currently inert** (see *Deferred*, below). |
-| **`orchestrator` agent** | The **single, loop-armed sweep agent** (`model: opus`; launched as the session agent via `claude --agent`, on an **adaptive** `/loop` timer). Unlike `vibe-kanban-indie`'s split loop-manager + per-tick subagent, this ONE agent arms the timer **and** runs the whole sweep itself, every tick, entirely over the bundled client — no MCP tools, no subagent spawned for the routine tick. It dispatches ready cards, reflects card status forward (`inreview`/`done`, per a delivery-signal gate honest about VibeCrew's asymmetric PR-vs-merge corroboration), surfaces parked agents, applies opt-in directives, and re-arms its own cadence (5m active ↔ 30m idle). It spawns `Agent(vibecrew:decider)` only for a direct "answer that questionnaire" request; a "create a card" instruction is bounced back to the operator — card creation stays operator-driven via `product`/`product-manager`. |
+| **`orchestrator` agent** | The **host-ticked board driver** (`model: opus`; launched as the session agent via `claude --agent`). It arms **no timer of its own**: VibeCrew's runtime owns the loop and delivers each tick as a prompt carrying a host-computed status digest — see [`reference/tick-contract.md`](reference/tick-contract.md). Every tick it reflects card status forward (`inreview`/`done`, per a delivery-signal gate honest about VibeCrew's asymmetric PR-vs-merge corroboration), **closes finished workspaces** (delete only on done + corroborated delivery + a terminal run; otherwise archive, loudly), dispatches ready cards, surfaces parked and stalled agents, applies opt-in directives, and ends its report with a `CADENCE:` line the host obeys (5m active ↔ 30m idle). All of it over the bundled client — no MCP tools, no subagent for the routine tick. It spawns `Agent(vibecrew:decider)` only for a direct "answer that questionnaire" request; a "create a card" instruction is bounced back to the operator — card creation stays operator-driven via `product`/`product-manager`. A byte-identical OpenCode twin lives at `agents-opencode/vc-orchestrator.md`. |
 | **`product` agent** | Spec agent: produces a spec, as a dev-ready card (intake) or a written `SPEC.md` (when a coding agent spawns it for the spec stage). |
 | **`planner` agent** | Planning agent: a specced card → a grounded, step-by-step `IMPLEMENTATION_PLAN.md` written at the workspace root. |
 | **`coder` agent** | Executes `IMPLEMENTATION_PLAN.md` step by step in the worktree; produces a diff, not ceremony — the caller owns commits/board moves. |
@@ -44,9 +44,10 @@ external_plugins/vibecrew`, or use `scripts/orchestrator.sh` (see
   `vibecrew:classify-task`, `vibecrew:answer-questions`
 - Agents: `orchestrator`, `product`, `planner`, `coder`, `decider`. The
   `orchestrator` is meant to be launched as the session agent (`claude --agent
-  vibecrew:orchestrator`, as `scripts/orchestrator.sh` does) — it is a single
-  loop-armed sweep agent that owns both the timer and the tick, with no board
-  MCP tools at all (there are none in this plugin); `product`/`planner` are
+  vibecrew:orchestrator`) — normally by VibeCrew itself, which then ticks it;
+  `scripts/orchestrator.sh` is the standalone fallback. It owns the tick but
+  **not** the timer, and holds no board MCP tools at all (there are none in
+  this plugin); `product`/`planner` are
   spawned by a self-driving coding agent (and usable directly via the
   Task/Agent tool); `decider` is spawned by the orchestrator on an operator's
   "answer that questionnaire" request (and usable directly).
@@ -110,14 +111,18 @@ itself — and the always-on operator-instruction routes it handles inline (a
 direct "answer that questionnaire" request spawns `decider`; a "create a
 card" instruction is bounced back to the operator; no flag, no env toggle for
 either) — the orchestrator does **nothing more** unless a directive is turned
-on at spawn time. Four directives, named as flags in the spawn prompt's
-`Directives enabled for this run:` block (`scripts/orchestrator.sh` injects it
-from env toggles — see [`scripts/README.md`](scripts/README.md)):
+on. Four directives, named as flags in the LAST block of every tick ping
+(`Directives enabled for this run:`). Under VibeCrew the operator ticks them in
+the pre-launch sheet; standalone, `scripts/orchestrator.sh` injects them from
+env toggles — see [`scripts/README.md`](scripts/README.md):
 
-- **`auto-unblock`** — `ORCH_AUTO_UNBLOCK=1` — **inert until Agent-ops 5/5**
-  (see *Deferred*, below).
-- **`auto-answer-questions`** — `ORCH_AUTO_ANSWER=1` — **inert until
-  Agent-ops 5/5** (see *Deferred*, below).
+- **`auto-unblock`** — `ORCH_AUTO_UNBLOCK=1` — **live for OpenCode runs**,
+  which now raise real approval rows (their permission/question prompts are
+  promoted from SSE events into `approvals`). Headless Claude runs are spawned
+  with `--dangerously-skip-permissions` and raise none, so there is nothing to
+  clear there.
+- **`auto-answer-questions`** — `ORCH_AUTO_ANSWER=1` — same: live wherever
+  question approvals are actually raised (OpenCode today).
 - **`telegram-fanout`** — `ORCH_TELEGRAM_FANOUT=1` — mirrors
   dispatch/directive/awaiting-approval lines to the operator's Telegram
   topic. Requires the sombrax-telegram channel + listener.

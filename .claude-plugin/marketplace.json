@@ -29,7 +29,7 @@
     {
       "name": "vibe-kanban-indie",
       "source": "./external_plugins/vibe-kanban-indie",
-      "description": "Orchestrate vibe-kanban-indie from Claude Code — drive the kanban board and a crew of coding agents via a bundled MCP server. Board-shape aware: nested sub-boards, per-board custom columns discovered from project_statuses (never hardcoded), per-board orchestrator prompts, and sub-issue hierarchy (a card with children is never dispatched). Family-first pipeline routing (OpenCode vs Claude Code, never mixed; Codex reviews both) via the classify-task skill, lane-aware parallel dispatch with a bounded blocking-edge dependency gate and a WIP cap, and the VK-ESCALATE misclassification tripwire. Ships the vibe-kanban, product-manager, classify-task, compose-pipeline, answer-questions, knowledge-recall, knowledge-enrich, and release skills, the single-loop orchestrator (monitor-first two-mode tick), product, planner, decider, intake, and release agents, lifecycle prompts, and looped-orchestrator launchers",
+      "description": "Orchestrate vibe-kanban-indie from Claude Code \u2014 drive the kanban board and a crew of coding agents via a bundled MCP server. Board-shape aware: nested sub-boards, per-board custom columns discovered from project_statuses (never hardcoded), per-board orchestrator prompts, and sub-issue hierarchy (a card with children is never dispatched). Family-first pipeline routing (OpenCode vs Claude Code, never mixed; Codex reviews both) via the classify-task skill, lane-aware parallel dispatch with a bounded blocking-edge dependency gate and a WIP cap, and the VK-ESCALATE misclassification tripwire. Ships the vibe-kanban, product-manager, classify-task, compose-pipeline, answer-questions, knowledge-recall, knowledge-enrich, and release skills, the single-loop orchestrator (monitor-first two-mode tick), product, planner, decider, intake, and release agents, lifecycle prompts, and looped-orchestrator launchers",
       "version": "0.6.2",
       "author": {
         "name": "dexloom"
@@ -51,7 +51,7 @@
     {
       "name": "sombrax-codex",
       "source": "./external_plugins/sombrax-codex",
-      "description": "Codex CLI helpers for Claude Code — iterative code review, plan review, and architectural second-opinion advisor",
+      "description": "Codex CLI helpers for Claude Code \u2014 iterative code review, plan review, and architectural second-opinion advisor",
       "version": "0.1.0",
       "author": {
         "name": "dexloom"
@@ -68,8 +68,8 @@
     {
       "name": "vibecrew",
       "source": "./external_plugins/vibecrew",
-      "description": "Orchestrate a VibeCrew board from Claude Code, MCP-free, over its REST API via a bundled stdlib-only Python client. Family-first pipeline routing (OpenCode vs Claude Code, never mixed; Codex reviews both) via the classify-task skill, lanes (epic + sub-cards + blocking edges) for parallel dispatch, and pipeline overrides with merge-on delivery and post-plan gates. Ships the vibecrew, product-manager, classify-task, and answer-questions skills, the orchestrator/product/planner/coder/decider agents, the pipeline-stage crew-bundle (vibecrew-product/-planner/-coder/-reviewer subagents + code-review-checklist skill — canonical source the app vendors), lifecycle prompts, and looped-orchestrator launchers",
-      "version": "0.3.0",
+      "description": "Orchestrate a VibeCrew board from Claude Code, MCP-free, over its REST API via a bundled stdlib-only Python client. The orchestrator agent is HOST-TICKED \u2014 VibeCrew's runtime owns the loop and delivers each tick with a status digest; the agent replies with a CADENCE line and arms no cron of its own (see reference/tick-contract.md). Family-first pipeline routing (OpenCode vs Claude Code, never mixed; Codex reviews both) via the classify-task skill, lanes (epic + sub-cards + blocking edges) for parallel dispatch, and pipeline overrides with merge-on delivery and post-plan gates. Ships the vibecrew, product-manager, classify-task, and answer-questions skills, the orchestrator (Claude + OpenCode twins) / product / planner / coder / decider agents, the pipeline-stage crew-bundle (vibecrew-product/-planner/-coder/-reviewer subagents + code-review-checklist skill \u2014 canonical source the app vendors), lifecycle prompts, and a standalone orchestrator launcher",
+      "version": "0.4.0",
       "author": {
         "name": "dexloom"
       },

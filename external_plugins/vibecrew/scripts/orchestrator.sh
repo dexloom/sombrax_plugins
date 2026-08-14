@@ -1,38 +1,32 @@
 #!/usr/bin/env bash
 #
-# orchestrator.sh — launch the orchestrator (a single loop-armed board sweep
-# agent) as the session agent (`claude --agent vibecrew:orchestrator`) and
-# re-arm the `/loop` timer on an interval. Unlike vibe-kanban-indie's split
-# loop-manager + per-tick subagent, this ONE agent both owns the timer and
-# runs the sweep itself, entirely over `python3 vibecrew_api.py …` — no MCP,
-# no subagent spawned for the routine tick. The launch interval is the
-# "active" cadence; the agent classifies each tick and requests re-arms
-# ADAPTIVELY — backing the timer off to 30m after two consecutive empty ticks
-# and snapping back to the active interval when a card needs work or an
-# operator instruction arrives (see agents/orchestrator.md's "Adaptive cadence
-# 5m ↔ 30m"). The agent re-arms its own cron only when its own cadence
-# decision asks it to.
+# orchestrator.sh — launch the orchestrator agent
+# (`claude --agent vibecrew:orchestrator`) and tick it on an interval.
 #
-# The agent's full behavior lives in its agent definition; launching it with
-# --agent (rather than as a Task subagent) makes it the session itself. `/loop
-# <interval> <prompt>` re-runs the per-tick brief in
-# scripts/orchestrator.prompt.md every <interval>: that brief runs one sweep
-# itself (finds READY cards with no workspace — inprogress or Orchestrate
-# opt-in —, resolves the executor: the card's pinned agent, else the
-# operator's last-used/default config, starts ONE coding run per card via the
-# client, marks it inprogress, applies whichever opt-in directives its spawn
-# prompt names — auto-unblock / auto-answer-questions / telegram-fanout /
-# nudge-stuck, whose logic lives in agents/orchestrator.md — and reports).
-# The agent itself handles two operator-instruction routes with no flag: a
-# direct "answer that questionnaire" request is routed to the decider agent;
-# "create a card / spec this" is bounced back to the operator (card creation
-# stays operator-driven via the product agent / product-manager skill).
-# Default (active) interval is 5m; idle backoff is 30m.
+# STANDALONE MODE. Normally VibeCrew's own runtime owns the orchestrator loop:
+# one worker inside the app composes each tick ping (instruction + a
+# host-computed STATUS DIGEST + the enabled directives), delivers it, and reads
+# the agent's `CADENCE:` reply to decide when to tick again. This script exists
+# for the case where you want an orchestrator WITHOUT the app driving it — a
+# dev checkout, a headless box, a debugging session.
+#
+# It is a DELIBERATELY DEGRADED loop, and the degradations are worth knowing:
+#
+#   * No status digest. A shell ticker has no database access, so each ping says
+#     so explicitly and the agent probes the API itself. Slower, not wrong.
+#   * Fixed interval. The agent still emits its `CADENCE:` line — but nothing
+#     here reads it, so a `re-arm 30m` is ignored and the loop keeps ticking at
+#     whatever interval you launched with. Under the app, that line is obeyed.
+#
+# No `/loop` is armed, for any executor. The agent holds no cron tools and arms
+# no timer of its own; the ticker below is the only clock. (Before this, Claude
+# self-armed a `/loop` cron — invisible and uncontrollable from outside its own
+# session — while OpenCode got a loop that died with the app's UI.)
 #
 # Usage:
-#   scripts/orchestrator.sh            # check every 5 minutes
-#   scripts/orchestrator.sh 10m        # check every 10 minutes
-#   scripts/orchestrator.sh 300s       # check every 300 seconds
+#   scripts/orchestrator.sh            # tick every 5 minutes
+#   scripts/orchestrator.sh 10m        # tick every 10 minutes
+#   scripts/orchestrator.sh 300s       # tick every 300 seconds
 #   ORCH_INTERVAL=2m scripts/orchestrator.sh
 #
 # Spawn = connect: this launches `claude` inside a stable, shared tmux session
@@ -44,18 +38,13 @@
 #
 # Opt-in directives (default-off; injected into the spawn prompt — see
 # directives-block.sh), canonical order:
-#   ORCH_AUTO_UNBLOCK=1 scripts/orchestrator.sh   # auto-unblock — INERT until
-#                                                 # Agent-ops 5/5 (see
-#                                                 # agents/orchestrator.md)
-#   ORCH_AUTO_ANSWER=1 scripts/orchestrator.sh    # auto-answer-questions —
-#                                                 # INERT until Agent-ops 5/5
-#   ORCH_TELEGRAM_FANOUT=1 scripts/orchestrator.sh  # telegram-fanout: mirror
-#                                                   # status to the operator
-#                                                   # Telegram topic
-#   ORCH_NUDGE_STUCK=1 scripts/orchestrator.sh     # nudge-stuck: follow-up a
-#                                                  # managed run stuck 2 ticks
+#   ORCH_AUTO_UNBLOCK=1 scripts/orchestrator.sh     # auto-unblock
+#   ORCH_AUTO_ANSWER=1 scripts/orchestrator.sh      # auto-answer-questions
+#   ORCH_TELEGRAM_FANOUT=1 scripts/orchestrator.sh  # telegram-fanout
+#   ORCH_NUDGE_STUCK=1 scripts/orchestrator.sh      # nudge-stuck
 #
-# To stop the loop: type "stop the loop" in the session, or Ctrl-C / exit it.
+# To stop the loop: type "stop the loop" in the session, or Ctrl-C / exit it,
+# then kill the ticker (it exits on its own when the tmux session goes away).
 #
 # Prerequisite: the VibeCrew backend must be running (see ../README.md), or
 # every tick will just report "backend down".
@@ -117,5 +106,75 @@ ORCH_AGENT="${ORCH_AGENT:-vibecrew:orchestrator}"
 # orchestrator-attach.sh.)
 . "$(dirname "$0")/orchestrator-attach.sh"
 
-# Kick off (or attach to) the session that arms the /loop timer.
-orchestrator_launch --plugin-dir "${PLUGIN_DIR}" --agent "${ORCH_AGENT}" "/loop ${INTERVAL} ${LOOP_BODY}"
+# ---------------------------------------------------------------------------
+# The standalone ticker
+#
+# Re-submits the ping into the orchestrator's tmux pane every INTERVAL. It has
+# to be started BEFORE `orchestrator_launch`, because that helper always ends in
+# `tmux attach` (which `exec`s, replacing this process) or an `exit 0` — nothing
+# placed after it would ever run.
+#
+# Only the launcher that actually CREATES the session starts a ticker. A second
+# invocation attaches to the running orchestrator, and must not add a second
+# clock ticking the same pane.
+#
+# Delivery uses the same load-buffer/paste-buffer path the app's worker uses,
+# not `send-keys` with the text inline: tmux ships commands to its server over a
+# socket with a ~16 KiB cap, and a multi-line prompt sent as keys would submit on
+# its first newline.
+#
+# Fixed interval by design — see the header. The agent's `CADENCE:` line is
+# still emitted (and still correct); this loop has no way to act on it.
+# ---------------------------------------------------------------------------
+
+# Seconds, from the same `<N>[smh]` forms the interval grammar accepts.
+_orch_interval_seconds() {
+  local raw="$1" num unit
+  num="${raw%[smh]}"
+  unit="${raw##*[0-9]}"
+  case "${unit}" in
+    s) echo "${num}" ;;
+    m|"") echo $(( num * 60 )) ;;
+    h) echo $(( num * 3600 )) ;;
+    *) echo 300 ;;
+  esac
+}
+
+_orch_ticker() {
+  local seconds tick=1 buf tick_file
+  seconds="$(_orch_interval_seconds "${INTERVAL}")"
+  while true; do
+    sleep "${seconds}"
+    # The session going away is the loop's exit signal — the operator quit the
+    # orchestrator, so there is nothing left to tick.
+    tmux has-session -t "=${ORCH_TMUX_SESSION}" 2>/dev/null || return 0
+    tick=$(( tick + 1 ))
+
+    buf="vc-orch-tick-${tick}"
+    tick_file="$(mktemp)"
+    {
+      printf 'ORCHESTRATOR TICK (#%s, interval %s). ' "${tick}" "${INTERVAL}"
+      tail -n +2 "${PROMPT_FILE}"
+      printf '\n\nPLUGIN ROOT: %s' "${PLUGIN_DIR}"
+      printf '%s' "${DIRECTIVES_BLOCK}"
+    } > "${tick_file}"
+
+    tmux load-buffer -b "${buf}" "${tick_file}" 2>/dev/null || { rm -f "${tick_file}"; return 0; }
+    tmux paste-buffer -b "${buf}" -t "${ORCH_TMUX_SESSION}" -p -d 2>/dev/null || true
+    tmux send-keys -t "${ORCH_TMUX_SESSION}" Enter 2>/dev/null || true
+    rm -f "${tick_file}"
+  done
+}
+
+# Start a ticker only when THIS invocation is the one creating the session.
+# `ORCH_TICKER=0` opts out entirely (e.g. when something else drives the ticks).
+if [[ "${ORCH_TICKER:-1}" == "1" ]] \
+   && ! tmux has-session -t "=${ORCH_TMUX_SESSION}" 2>/dev/null; then
+  _orch_ticker &
+  echo "orchestrator.sh: ticking '${ORCH_TMUX_SESSION}' every ${INTERVAL} (ticker pid $!)" >&2
+fi
+
+# Kick off (or attach to) the session. NO `/loop` prefix — the agent arms no
+# timer; the ticker above is the clock. This call does not return: it execs
+# `tmux attach` (with a TTY) or exits.
+orchestrator_launch --plugin-dir "${PLUGIN_DIR}" --agent "${ORCH_AGENT}" "${LOOP_BODY}"

@@ -24,7 +24,7 @@ ORCH_TMUX_SESSION="${ORCH_TMUX_SESSION:-vc-orchestrator}"
 # so a new session does not automatically see VIBECREW_URL et al. We therefore
 # forward these explicitly via an `env VAR=val …` prefix rather than trusting
 # inheritance. (Directive toggles like ORCH_NUDGE_STUCK are already baked into
-# the /loop prompt by directives-block.sh, so they need no forwarding here.)
+# the tick prompt by directives-block.sh, so they need no forwarding here.)
 _ORCH_ENV_FORWARD=(
   VIBECREW_URL
   TELEGRAM_PROJECT_MANAGER TELEGRAM_TOPIC ORCH_OPERATOR_TOPIC
@@ -49,7 +49,7 @@ _orchestrator_attach_or_report() {
 
 # orchestrator_launch <claude-arg>...
 #   <claude-arg>... is the full `claude` argv the launcher built
-#   (e.g. --plugin-dir X --agent Y "/loop 5m <body>"). Call this IN PLACE OF
+#   (e.g. --plugin-dir X --agent Y "<tick ping>"). Call this IN PLACE OF
 #   the launcher's final `exec claude …`.
 orchestrator_launch() {
   # tmux is REQUIRED — without it we cannot dedupe, and silently running
@@ -94,7 +94,7 @@ orchestrator_launch() {
   done
 
   # Pass argv DIRECTLY to tmux (executable + each arg as a separate word) —
-  # tmux execs them directly without a shell, so the multi-line /loop prompt
+  # tmux execs them directly without a shell, so the multi-line tick prompt
   # round-trips with no quoting work. Don't let `new-session` abort the
   # launcher under `set -e` if we lost a creation race; fall through to attach
   # instead.

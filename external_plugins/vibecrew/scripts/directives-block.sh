@@ -5,7 +5,7 @@
 # (not executed) by orchestrator.sh, so every launch emits the identical block and
 # can't drift. It sets one variable:
 #
-#   DIRECTIVES_BLOCK  — the block text to append to the /loop spawn prompt, or an
+#   DIRECTIVES_BLOCK  — the block text to append to the tick prompt, or an
 #                       EMPTY string when no directive env is set (the default: no
 #                       block ⇒ no directive behavior — dispatch + status
 #                       reflection only).

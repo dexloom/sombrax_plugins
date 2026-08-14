@@ -1,7 +1,7 @@
 {
   "name": "vibecrew",
-  "description": "Orchestrate a VibeCrew board from Claude Code, MCP-free, over its REST API via a bundled stdlib-only Python client. Ships the vibecrew, product-manager, classify-task (family-first pipeline routing: OpenCode vs Claude Code, never mixed), and answer-questions skills, the orchestrator/product/planner/coder/decider agents, the pipeline-stage crew-bundle (vibecrew-product/-planner/-coder/-reviewer subagents + code-review-checklist skill — canonical source the app vendors), lane-aware dispatch (blocking-edge dependency gate), deployed pipeline overrides (merge-on, plan-gate late binding), lifecycle prompts, and looped-orchestrator launchers.",
-  "version": "0.3.0",
+  "description": "Orchestrate a VibeCrew board from Claude Code, MCP-free, over its REST API via a bundled stdlib-only Python client. The orchestrator agent is HOST-TICKED \u2014 VibeCrew's runtime owns the loop and delivers each tick with a status digest; the agent replies with a CADENCE line and arms no cron of its own (see reference/tick-contract.md). Family-first pipeline routing (OpenCode vs Claude Code, never mixed; Codex reviews both) via the classify-task skill, lanes (epic + sub-cards + blocking edges) for parallel dispatch, and pipeline overrides with merge-on delivery and post-plan gates. Ships the vibecrew, product-manager, classify-task, and answer-questions skills, the orchestrator (Claude + OpenCode twins) / product / planner / coder / decider agents, the pipeline-stage crew-bundle (vibecrew-product/-planner/-coder/-reviewer subagents + code-review-checklist skill \u2014 canonical source the app vendors), lifecycle prompts, and a standalone orchestrator launcher",
+  "version": "0.4.0",
   "keywords": [
     "vibecrew",
     "kanban",

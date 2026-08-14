@@ -160,10 +160,58 @@ python3 ${CLAUDE_PLUGIN_ROOT}/scripts/vibecrew_api.py approval-respond <approval
 route's body is non-optional there, and `status` is sent as a **nested**
 `ApprovalOutcome` object (`{"status": "approved"}` / `{"status": "denied",
 "reason": "…"}` / `{"status": "answered", "answers": […]}`), never a bare
-string. **Caveat:** headless runs are spawned with
-`--dangerously-skip-permissions`, so **tool-permission** approvals never
-arise, and **question** approvals stay **inert until Agent-ops 5/5** ships (no
-hook raises them yet) — the plumbing is wired so it works the day it does.
+string.
+
+**Which runs actually raise approvals.** **OpenCode** runs do: their
+`permission.asked` / `question.asked` events are promoted from the SSE stream
+into real `approvals` rows (keyed by OpenCode's own request id), and responding
+here really unblocks the agent — the decision is relayed to
+`POST /permission/<id>/reply` or `/question/<id>/reply` on that session's own
+server. **Claude** headless runs are spawned with
+`--dangerously-skip-permissions` and raise no tool-permission approvals at all;
+Claude question approvals still await the deferred headless-approvals hook. So
+an empty `approvals-pending` on a Claude fleet is expected, not a fault.
+
+### Reach a headed agent (send-input / pane)
+```
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/vibecrew_api.py send-input <run_id> --text "Why are you stuck"
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/vibecrew_api.py pane <run_id> --lines 40
+```
+A **headed** run stays `status: running` for its whole tmux life, so
+`follow-up` would 409 forever — `send-input` types into its live TUI instead.
+Branch on the status, not the prose: `409 not_ready_for_input` = mid-turn,
+**retry later**; `422 not_interactive` = headless, use `follow-up`; `410
+session_gone` = the tmux session is gone, **stop**; `404` = no such run.
+
+`pane` shows what the agent's screen shows *right now* — the only way to see a
+modal the board's API cannot represent (a trust dialog, a permission prompt in
+a TUI that raises no approval row). A dead session answers `200` with
+`alive: false`; that IS the answer, not an error.
+
+The canonical nudge payload is exactly `Why are you stuck` — no punctuation, one
+literal everywhere, so a transcript grep finds every nudge.
+
+### See who has gone quiet
+```
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/vibecrew_api.py agent-activity
+```
+One-shot snapshot of every tracked workspace, each with `last_activity_at`. A
+`running` row is not evidence of life — a headed run reads `running` whether its
+agent is working, wedged, or sitting on a dialog — so time-since-last-output is
+the signal that separates them. (The SSE twin is
+`GET /api/agent-activity/stream`, for a UI rather than a shell.)
+
+### Close a finished workspace
+```
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/vibecrew_api.py workspace-update <workspace_id> --archived true
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/vibecrew_api.py workspace-delete <workspace_id>
+```
+**`workspace-delete` is destructive** — it force-removes the worktree, and
+anything uncommitted in it is gone with no undo. Delete only when all three
+hold: the card is `done`, delivery is corroborated (a **merged** PR from
+`card-prs`, or a `merge_commit: <sha>` line in the run's `final_message`), and
+the latest run is **terminal**. Anything less: archive, which is reversible, and
+say plainly what evidence was missing.
 
 ### Stop a run
 ```

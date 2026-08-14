@@ -9,10 +9,11 @@ description: >-
   orchestrator spawns it on an operator's "answer that questionnaire" request,
   and an operator can run it directly ("answer the question for me", "decide
   this questionnaire", "unblock the agent's question"). It runs the
-  `answer-questions` skill as its method. NOTE: question approvals are
-  currently INERT — VibeCrew's headless runs skip tool-permission prompts
-  entirely and nothing yet raises a question approval (that hook is deferred to
-  Agent-ops 5/5) — this agent is wired so it works the day it ships. Do NOT use
+  `answer-questions` skill as its method. NOTE: which runs raise question
+  approvals differs by executor — OpenCode's `question.asked` prompts become
+  real approval rows, while Claude headless runs (spawned with
+  `--dangerously-skip-permissions`) raise none, so an empty pending list on a
+  Claude fleet is expected rather than a fault. Do NOT use
   it for tool-permission approvals, to author specs (`product`) or plans
   (`planner`), or to write code; it only answers question prompts.
 model: opus
