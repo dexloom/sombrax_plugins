@@ -25,13 +25,17 @@ which drives the board from the operator's session.
 ```
 crew-bundle/manifest.json                  # the catalog (same schema the app parses)
 crew-bundle/<id>/{claude,opencode}/agent.md   (subagents)
-crew-bundle/code-review-checklist/{claude,opencode}/SKILL.md
+crew-bundle/code-review-checklist/{claude,opencode,pi}/SKILL.md
 ```
 
 - The **body is identical** across `claude/` and `opencode/` — only the
   frontmatter format differs (Claude Code: `name:` + flat `tools:`/`allowed-tools:`
   list; opencode: `description:` + `mode:` + `permission:` map). Edit one, mirror
   the other; a drift check enforces it.
+- The `pi/` payload is the same body with plain `name:`/`description:`
+  frontmatter (Pi implements the Agent Skills standard; no tools list). Only
+  skills target `pi` today — Pi pipelines self-execute stages, so the
+  `vibecrew-<role>` agents deliberately do not ship a `pi` target.
 - Each pipeline `agent.md` carries no `model:` pin — the pipeline supplies the
   model per call (Claude Code) or per launch (OpenCode env), so a global install
   must not fight the card's binding.

@@ -9,7 +9,8 @@
       "description": "A reusable self-review checklist skill: run a focused pass over a diff for common defects (error handling, edge cases, naming, tests) before opening a PR. Installs a SKILL.md the agent can invoke.",
       "targets": [
         "claude",
-        "opencode"
+        "opencode",
+        "pi"
       ]
     },
     {
