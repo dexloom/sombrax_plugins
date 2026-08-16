@@ -162,6 +162,8 @@ These lines ride in card descriptions and run reports; keep them byte-stable.
 
 ## VibeCrew semantics
 
+- Notes for other agents or the operator go to card comments (`vibecrew_api.py comment`), never into the card description and never into the shipping report.
+
 - **Park marker** — the literal `AWAITING OPERATOR APPROVAL`, emitted by a
   coding agent as the **first line of its final message** when it reaches a
   Wait-for-approval gate, followed by a one-line summary of what awaits

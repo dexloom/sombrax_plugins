@@ -72,6 +72,8 @@ this prompt is `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/vibecrew_api.py <subcomman
 application/json' "$VIBECREW_URL/api/…"`, unwrapping `{success,data,message}` by
 hand — the skill's curl-fallback section has the full recipe.
 
+Notes for other agents or the operator go to card comments (`vibecrew_api.py comment`), never into the card description and never into the shipping report.
+
 - **spec** (if listed) — **first, check whether the card already carries the spec.**
   **The test — all three, or it fails:** the description **already contains the full spec**
   only when `### Outcome`, `### Scope`, and `### Testing & acceptance criteria` each occur

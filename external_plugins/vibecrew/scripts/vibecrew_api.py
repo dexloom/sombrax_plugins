@@ -313,6 +313,28 @@ def build_parser():
     p.add_argument("card_id")
     p.add_argument("--relationship-id", required=True)
 
+    p = sub.add_parser(
+        "comments",
+        help="GET /api/cards/:id/comments — the card's comments, oldest-first "
+        "(chronological, newest last).",
+    )
+    p.add_argument("card_id")
+
+    p = sub.add_parser(
+        "comment",
+        help="POST /api/cards/:id/comments — leave a note on the card (the "
+        "inter-agent/operator communication surface; never write into the card "
+        "description). --body <text> only — there is no --body-file.",
+    )
+    p.add_argument("card_id")
+    p.add_argument("--body", required=True)
+    p.add_argument(
+        "--kind", choices=["agent", "orchestrator", "operator"], default="agent",
+        help="author_kind (default: agent)",
+    )
+    p.add_argument("--label", help="optional author_label")
+    p.add_argument("--run-id", help="optional run_id for traceability")
+
     # -- workspaces / launch / runs (slice 3) --------------------------------
     p = sub.add_parser("workspaces", help="GET /api/workspaces[?card_id=<id>]")
     p.add_argument("--card-id")
@@ -605,6 +627,20 @@ def main(argv=None):
         call(base, "DELETE",
              build_path("api", "cards", args.card_id, "relationships",
                         args.relationship_id))
+        return
+
+    if cmd == "comments":
+        call(base, "GET", build_path("api", "cards", args.card_id, "comments"))
+        return
+
+    if cmd == "comment":
+        body = {"body": args.body, "author_kind": args.kind}
+        if args.label is not None:
+            body["author_label"] = args.label
+        if args.run_id is not None:
+            body["run_id"] = args.run_id
+        call(base, "POST", build_path("api", "cards", args.card_id, "comments"),
+             body=body)
         return
 
     if cmd == "workspaces":

@@ -61,7 +61,7 @@ prompt = "MODEL CHECK FIRST — pick the coder model WITHIN this pipeline's own 
 id = "code-review"
 label = "Review via Codex"
 default_enabled = false
-prompt = "After implementing, run an independent Codex review of the card's diff (the `codex-review` skill / Codex CLI), iterating until it reports no significant findings. Address confirmed findings and re-verify before marking the card ready."
+prompt = "After implementing, run an independent Codex review of the card's diff (the `codex-review` skill / Codex CLI), iterating until it reports no significant findings. Address confirmed findings and re-verify before marking the card ready. After the review, leave a one-line comment on the card summarizing the findings status (`vibecrew_api.py comment $VIBECREW_CARD_ID --body \"code review: …\"`)."
 
 [[stage]]
 id = "update-docs"
