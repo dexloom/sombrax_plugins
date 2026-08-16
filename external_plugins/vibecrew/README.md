@@ -91,7 +91,8 @@ client:
 
 The full subcommand surface: `health config projects repos cards card
 card-create card-update card-prs workspaces start follow-up sessions runs run
-stop approvals-pending approval-respond merge rebase push pr`. Run
+stop approvals-pending approval-respond merge rebase push pr merge-record
+pr-record`. Run
 `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/vibecrew_api.py --help` (or `<subcommand>
 --help`) for the full flag reference; the `vibecrew` skill documents the core
 recipes end to end.
@@ -100,9 +101,9 @@ Two load-bearing details, both grounded against the merged VibeCrew server
 routes (not assumed): `approval-respond` requires `--execution-process-id`
 (the run id) and sends `status` as a **nested** object
 (`{"status": {"status": "approved"}}`, never a bare string); the delivery ops
-(`merge`/`rebase`/`push`/`pr`) always send a JSON object body — `{}` at
-minimum — never an absent body, because those routes decode a body
-unconditionally.
+(`merge`/`rebase`/`push`/`pr` and the recording twins `merge-record`/
+`pr-record`) always send a JSON object body — `{}` at minimum — never an
+absent body, because those routes decode a body unconditionally.
 
 ## Orchestrator directives (opt-in)
 

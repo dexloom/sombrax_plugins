@@ -16,7 +16,7 @@ permissions`). There is no live session to idle inside while parked — a Wait-f
 approval gate means committing, emitting the marker, and letting the PROCESS EXIT.
 The operator's resume arrives as a fresh process via a `follow-up` into the same
 session. Merge/PR are performed by the agent itself, either with git/gh directly or
-via `vibecrew_api.py merge|pr $VIBECREW_WORKSPACE_ID` using the env the server
+via `vibecrew_api.py merge|pr|merge-record|pr-record $VIBECREW_WORKSPACE_ID` using the env the server
 injects into every spawned agent.
 -->
 You own this task end to end. Work it to completion **yourself** — do not stop after
@@ -213,15 +213,20 @@ Notes for other agents or the operator go to card comments (`vibecrew_api.py com
       `{{BASE_BRANCH}}` (the CAS protocol below, or `vibecrew_api.py merge
       $VIBECREW_WORKSPACE_ID`), **confirm it landed**, push the updated base branch
       **only if this repo has a remote**, and report what you merged. **After a
-      successful DIRECT merge (no PR), your final completion report MUST include a line
-      `merge_commit: <sha>`** — the SHA the `merge` call returns (the `merge_commit`
-      field) or `git rev-parse HEAD` on the base after the merge. This is the **sole**
-      Done signal the orchestrator can key off for a merge-only card — VibeCrew has **no
-      queryable merge record** (unlike a PR, whose `status` the orchestrator reads via
-      `card-prs`), so a completion report that claims a merge **without** the
-      `merge_commit: <sha>` line will **not** advance the card to `done`.
+      successful DIRECT merge (no PR), record it durably — call `vibecrew_api.py
+      merge-record $VIBECREW_WORKSPACE_ID --sha <sha>` right after the merge lands
+      (idempotent; pass `--repo-id` on a multi-repo workspace) — and your final
+      completion report MUST include a line `merge_commit: <sha>`** — the SHA the
+      `merge` call returns (the `merge_commit` field) or `git rev-parse HEAD` on the
+      base after the merge. The `merge-record` call creates the durable, queryable
+      merge record (a `merges` row keyed workspace/repo/sha), and the report line
+      remains **mandatory** belt to the record's braces — a completion report that
+      claims a merge **without** the `merge_commit: <sha>` line will **not** advance
+      the card to `done`.
     - **pr** → commit everything outstanding, **push your branch and open a pull request**
-      (`gh pr create`, or `vibecrew_api.py pr $VIBECREW_WORKSPACE_ID`); report the PR URL.
+      (`gh pr create`, or `vibecrew_api.py pr $VIBECREW_WORKSPACE_ID`); after the PR is
+      opened, record it durably — call `vibecrew_api.py pr-record
+      $VIBECREW_WORKSPACE_ID --number <n> --url <u>` — and report the PR URL.
       (PR delivery needs no `merge_commit` line — the orchestrator reads the PR's
       `status == "merged"` via `card-prs`.)
 
@@ -307,13 +312,16 @@ Notes for other agents or the operator go to card comments (`vibecrew_api.py com
      residue is **not** a backup worth keeping: the pre-merge tip lives on in the
      reflog, so restoring the original content is
      `git -C "$base_wt" reset --hard "{{BASE_BRANCH}}@{1}"`, not a dirty checkout.
-     **If any guard fails, touch nothing** — report that the base checkout carries
-     residue plus possible operator work and needs a manual
-     `git -C <path> reset --hard HEAD`. This step is the **one** sanctioned reach into
-     another worktree; everywhere else the rule stands. Then
-     `rmdir /tmp/vk-merge-lock-<repo>` — **even on failure** — and report what you
-     merged, whether you left the base checkout clean, and the required
-     `merge_commit: <sha>` line for a direct merge.
+      **If any guard fails, touch nothing** — report that the base checkout carries
+      residue plus possible operator work and needs a manual
+      `git -C <path> reset --hard HEAD`. This step is the **one** sanctioned reach into
+      another worktree; everywhere else the rule stands. Then
+      `rmdir /tmp/vk-merge-lock-<repo>` — **even on failure** — and report what you
+      merged, whether you left the base checkout clean, and the required
+      `merge_commit: <sha>` line for a direct merge. Right after the merge lands,
+      also record it durably — `vibecrew_api.py merge-record
+      $VIBECREW_WORKSPACE_ID --sha <sha>` (idempotent; `--repo-id` on a multi-repo
+      workspace) — so the delivery evidence is queryable, not just prose.
 
   Worked example (fill in `<repo>`, the card id and summary, and your real checks):
   ```sh
@@ -361,6 +369,8 @@ Notes for other agents or the operator go to card comments (`vibecrew_api.py com
   fi
 
   echo "merge_commit: $(git rev-parse {{BASE_BRANCH}})"  # REQUIRED in your completion report
+  python3 ${CLAUDE_PLUGIN_ROOT}/scripts/vibecrew_api.py merge-record \
+    "$VIBECREW_WORKSPACE_ID" --sha "$(git rev-parse {{BASE_BRANCH}})"  # durable record (idempotent)
   rmdir "$lock" 2>/dev/null                              # unlock (the trap covers failure paths)
 
   # push the base only if this repo actually has that remote:

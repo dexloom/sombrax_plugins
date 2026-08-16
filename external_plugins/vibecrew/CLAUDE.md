@@ -199,7 +199,8 @@ These lines ride in card descriptions and run reports; keep them byte-stable.
   `VIBECREW_WORKSPACE_ID`, `VIBECREW_SESSION_ID`, `VIBECREW_RUN_ID` (injected by
   the server's launcher; `VIBECREW_CARD_ID` present whenever the workspace has a
   linked card). Prompts/agents rely on these for callbacks (e.g.
-  `vibecrew_api.py merge $VIBECREW_WORKSPACE_ID`) instead of re-resolving ids.
+  `vibecrew_api.py merge`/`vibecrew_api.py merge-record
+  $VIBECREW_WORKSPACE_ID`) instead of re-resolving ids.
 
 ## Canonical stage ordering (Orchestrate first)
 
@@ -251,15 +252,23 @@ decision is made **up front**, by ticking (or not ticking) the default-off
 
 A **PR** is durably queryable via `card-prs` (`PullRequestRecord.status`, domain
 exactly `open`/`merged`/`closed`; **landed = `status == "merged"` only** —
-`closed` is closed-unmerged, not landed, and stays at `inreview`), but a
-**direct merge** writes **no** client-queryable record (no `merges` GET route in
-`WorkspaceService+Merge.swift`) — so a merge-only card's only durable delivery
-evidence is a concrete **`merge_commit: <sha>` line** in the run's completion
-report (`final_message`), which `prompts/pipeline.md` is required to emit after
-a successful direct merge. A completion report **without** that line — a bare
-"done"/"merged into base" prose claim — is **not** a delivery signal and does
-**not** move the card to `done`. The orchestrator's Done gate keys off exactly
-these two signals (a merged PR, or a SHA-bearing report), and nothing weaker.
+`closed` is closed-unmerged, not landed, and stays at `inreview`), and a
+**direct merge** now is too: the coding agent records it via
+`vibecrew_api.py merge-record $VIBECREW_WORKSPACE_ID --sha <sha>` (an
+idempotent upsert into the `merges` table, keyed workspace/repo/sha;
+`--repo-id` on a multi-repo workspace), and non-API PRs via `pr-record`
+(number/url/status, keyed workspace/repo/number) — both recording calls
+perform nothing, and both are wired into the `merge`/`pr` stage prompts of
+every bundled pipeline and `prompts/pipeline.md`. Belt to the record's
+braces, a merge-only card's completion report still MUST carry a concrete
+**`merge_commit: <sha>` line** (`final_message`), which `prompts/pipeline.md`
+is required to emit after a successful direct merge. A completion report
+**without** that line — a bare "done"/"merged into base" prose claim — is
+**not** a delivery signal and does **not** move the card to `done`. The
+orchestrator's Done gate keys off exactly these two signals (a merged PR via
+`card-prs`, or a SHA-bearing report), and nothing weaker — the recorded
+`merges` row is durable corroborating evidence, not a third gate (the gate
+semantics are unchanged by this card).
 
 The same two signals gate **workspace deletion**, which is strictly more
 dangerous than a column move: `workspace-delete` force-removes the worktree and

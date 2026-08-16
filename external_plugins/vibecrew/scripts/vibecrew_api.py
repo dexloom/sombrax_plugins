@@ -493,6 +493,31 @@ def build_parser():
     p.add_argument("--body")
     p.add_argument("--target-branch")
 
+    p = sub.add_parser(
+        "merge-record",
+        help="POST /api/workspaces/:id/merge-record — records an "
+        "already-performed merge; performs nothing, idempotent per "
+        "workspace/repo/sha. Always sends a JSON object body.",
+    )
+    p.add_argument("workspace_id")
+    p.add_argument("--sha", required=True, help="the merge commit sha (wire key merge_commit)")
+    p.add_argument("--repo-id", help="required on a multi-repo workspace")
+    p.add_argument("--target", help="target branch override (wire key target_branch)")
+    p.add_argument("--message")
+
+    p = sub.add_parser(
+        "pr-record",
+        help="POST /api/workspaces/:id/pr-record — records an already-opened "
+        "PR; performs nothing, idempotent per workspace/repo/number. Always "
+        "sends a JSON object body.",
+    )
+    p.add_argument("workspace_id")
+    p.add_argument("--number", required=True, type=int)
+    p.add_argument("--url", required=True)
+    p.add_argument("--status")
+    p.add_argument("--repo-id", help="required on a multi-repo workspace")
+    p.add_argument("--title")
+
     return parser
 
 
@@ -778,6 +803,30 @@ def main(argv=None):
         if args.target_branch is not None:
             body["target_branch"] = args.target_branch
         call(base, "POST", build_path("api", "workspaces", args.workspace_id, "pr"), body=body)
+        return
+
+    if cmd == "merge-record":
+        body = {"merge_commit": args.sha}
+        if args.repo_id is not None:
+            body["repo_id"] = args.repo_id
+        if args.target is not None:
+            body["target_branch"] = args.target
+        if args.message is not None:
+            body["message"] = args.message
+        call(base, "POST", build_path("api", "workspaces", args.workspace_id, "merge-record"),
+             body=body)
+        return
+
+    if cmd == "pr-record":
+        body = {"number": args.number, "url": args.url}
+        if args.status is not None:
+            body["status"] = args.status
+        if args.repo_id is not None:
+            body["repo_id"] = args.repo_id
+        if args.title is not None:
+            body["title"] = args.title
+        call(base, "POST", build_path("api", "workspaces", args.workspace_id, "pr-record"),
+             body=body)
         return
 
     parser.error(f"unknown subcommand: {cmd}")
