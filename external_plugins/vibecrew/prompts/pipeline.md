@@ -208,25 +208,28 @@ Notes for other agents or the operator go to card comments (`vibecrew_api.py com
   needed. **Do exactly the stage(s) your card lists, and nothing more:** `merge`
   listed → merge (do **not** open a PR); `pr` listed → open the PR (do **not**
   merge); **both** listed → do both, in the order the `## Pipeline` gives them, and say so
-  in your report; neither listed → do neither.
+  in your report; neither listed → do neither — and still end your final message
+  with a `SHIPPING-REPORT:` block carrying `delivered: none` (the operator delivers).
     - **merge** → commit everything outstanding, merge your branch onto
       `{{BASE_BRANCH}}` (the CAS protocol below, or `vibecrew_api.py merge
       $VIBECREW_WORKSPACE_ID`), **confirm it landed**, push the updated base branch
       **only if this repo has a remote**, and report what you merged. **After a
       successful DIRECT merge (no PR), record it durably — call `vibecrew_api.py
       merge-record $VIBECREW_WORKSPACE_ID --sha <sha>` right after the merge lands
-      (idempotent; pass `--repo-id` on a multi-repo workspace) — and your final
-      completion report MUST include a line `merge_commit: <sha>`** — the SHA the
-      `merge` call returns (the `merge_commit` field) or `git rev-parse HEAD` on the
-      base after the merge. The `merge-record` call creates the durable, queryable
-      merge record (a `merges` row keyed workspace/repo/sha), and the report line
-      remains **mandatory** belt to the record's braces — a completion report that
-      claims a merge **without** the `merge_commit: <sha>` line will **not** advance
-      the card to `done`.
+      (idempotent; pass `--repo-id` on a multi-repo workspace) — and end your final
+      message with a `SHIPPING-REPORT:` block carrying `delivered: merge` and
+      `merge_commit: <sha>`** — the SHA the `merge` call returns (the
+      `merge_commit` field) or `git rev-parse HEAD` on the base after the merge.
+      The `merge-record` call creates the durable, queryable merge record (a
+      `merges` row keyed workspace/repo/sha), and the report line remains
+      **mandatory** belt to the record's braces — a completion report that claims
+      a merge **without** the `SHIPPING-REPORT:` block (and its `merge_commit:
+      <sha>` line) will **not** advance the card to `done`.
     - **pr** → commit everything outstanding, **push your branch and open a pull request**
       (`gh pr create`, or `vibecrew_api.py pr $VIBECREW_WORKSPACE_ID`); after the PR is
       opened, record it durably — call `vibecrew_api.py pr-record
-      $VIBECREW_WORKSPACE_ID --number <n> --url <u>` — and report the PR URL.
+      $VIBECREW_WORKSPACE_ID --number <n> --url <u>` — and end your final message with a
+      `SHIPPING-REPORT:` block carrying `delivered: pr` and `pr: <url>`.
       (PR delivery needs no `merge_commit` line — the orchestrator reads the PR's
       `status == "merged"` via `card-prs`.)
 
@@ -368,9 +371,12 @@ Notes for other agents or the operator go to card comments (`vibecrew_api.py com
     git -C "$base_wt" reset --hard HEAD
   fi
 
-  echo "merge_commit: $(git rev-parse {{BASE_BRANCH}})"  # REQUIRED in your completion report
   python3 ${CLAUDE_PLUGIN_ROOT}/scripts/vibecrew_api.py merge-record \
     "$VIBECREW_WORKSPACE_ID" --sha "$(git rev-parse {{BASE_BRANCH}})"  # durable record (idempotent)
+  # REQUIRED in your completion report — end your final message with this block:
+  echo "SHIPPING-REPORT:"
+  echo "delivered: merge"
+  echo "merge_commit: $(git rev-parse {{BASE_BRANCH}})"
   rmdir "$lock" 2>/dev/null                              # unlock (the trap covers failure paths)
 
   # push the base only if this repo actually has that remote:
@@ -420,8 +426,10 @@ Keep going on your own through the whole pipeline. Stop and surface only when:
   (park semantics, same as the approval gate — advance no later stage; the operator
   re-routes the card and resumes or re-dispatches you). Do **not** re-route or push
   through yourself, or
-- the pipeline is **complete** — report done. (A card listing `merge`/`pr` has already had
-  you perform it by this point; a card listing neither ends here, and the operator
-  delivers.)
+- the pipeline is **complete** — report done. End your final message with a
+  `SHIPPING-REPORT:` block on **every** completion: `delivered: merge` +
+  `merge_commit: <sha>` after a direct merge, `delivered: pr` + `pr: <url>` after
+  opening a PR, or `delivered: none` when the card lists neither (the operator
+  delivers).
 
 Otherwise: don't check in between steps — just run the next stage.

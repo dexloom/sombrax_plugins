@@ -159,6 +159,19 @@ These lines ride in card descriptions and run reports; keep them byte-stable.
   pipeline, then `follow-up` "re-routed — re-read the card and continue", or
   archive the workspace for a fresh dispatch). Case-sensitive, matched as a
   first-line prefix.
+- **`SHIPPING-REPORT:`** — the structured completion report a coding agent ends
+  its final message with. Grammar: the introducing literal line
+  `SHIPPING-REPORT:` (byte-stable), followed by `key: value` lines —
+  `delivered: merge|pr|none` (required), plus when applicable
+  `merge_commit: <sha>`, `pr: <url>`, `commits: <n>`, `tests:
+  <pass|fail|not-run>`, `docs: <updated|none-needed|skipped>`, `remaining: <one
+  line>`, `deviations: <one line>`. Unknown keys are ignored; the block ends at
+  end of message. Producer: the coding agent's final message (required by the
+  bundled merge/pr stage prompts + `prompts/pipeline.md`). Consumer: the server
+  parses it once at run completion and upserts it into `card_shipping_reports`
+  (per card, latest-wins), served by `GET /api/cards/:id/shipping-report` and
+  joined into the ship-plan snapshot; the orchestrator's Done gate reads it
+  (see *Delivery-signal asymmetry*).
 
 ## VibeCrew semantics
 
@@ -260,15 +273,19 @@ idempotent upsert into the `merges` table, keyed workspace/repo/sha;
 (number/url/status, keyed workspace/repo/number) — both recording calls
 perform nothing, and both are wired into the `merge`/`pr` stage prompts of
 every bundled pipeline and `prompts/pipeline.md`. Belt to the record's
-braces, a merge-only card's completion report still MUST carry a concrete
-**`merge_commit: <sha>` line** (`final_message`), which `prompts/pipeline.md`
-is required to emit after a successful direct merge. A completion report
-**without** that line — a bare "done"/"merged into base" prose claim — is
-**not** a delivery signal and does **not** move the card to `done`. The
-orchestrator's Done gate keys off exactly these two signals (a merged PR via
-`card-prs`, or a SHA-bearing report), and nothing weaker — the recorded
-`merges` row is durable corroborating evidence, not a third gate (the gate
-semantics are unchanged by this card).
+braces, a merge-only card's completion report still MUST carry the
+`SHIPPING-REPORT:` block — `delivered: merge` and a concrete
+**`merge_commit: <sha>` line** — which the server parses once at run
+completion into the **`card_shipping_reports`** table (per card, latest-wins),
+served by `GET /api/cards/:id/shipping-report`. The orchestrator's Done gate
+reads that report **first** — `delivered == "merge"` with a non-empty
+`merge_commit`, or `delivered == "pr"` corroborated by `card-prs` showing
+`status == "merged"` — and keeps the prose `merge_commit: <sha>` grep in the
+terminal run's `final_message` as an **explicit fallback for pre-table runs**.
+A completion report with neither signal — a bare "done"/"merged into base"
+prose claim — is **not** a delivery signal and does **not** move the card to
+`done`. The recorded `merges` row is durable corroborating evidence, not a
+third gate.
 
 The same two signals gate **workspace deletion**, which is strictly more
 dangerous than a column move: `workspace-delete` force-removes the worktree and

@@ -71,7 +71,7 @@
       "id": "vibecrew-orchestrator",
       "name": "VibeCrew Orchestrator",
       "kind": "agent",
-      "version": "2.0.0",
+      "version": "2.1.0",
       "description": "The board-driving orchestrator agent. Host-ticked: VibeCrew's runtime owns the timer and delivers each tick with a status digest; the agent reflects card status, closes finished workspaces, dispatches ready cards, nudges stalled ones, and replies with a CADENCE line. Installs an agent definition both CLIs can launch; arms no cron of its own.",
       "targets": [
         "claude",

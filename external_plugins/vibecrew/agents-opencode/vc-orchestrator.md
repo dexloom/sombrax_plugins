@@ -58,7 +58,8 @@ as `{"success":true,"data":…}`; read `data`. The endpoints are
 `/api/projects`, `/api/cards`, `/api/workspaces`, `/api/workspaces/<id>/sessions`,
 `/api/sessions/<id>/runs`, `/api/runs/<id>`, `/api/runs/<id>/send-input`,
 `/api/runs/<id>/pane`, `/api/approvals/pending`, `/api/approvals/<id>/respond`,
-`/api/cards/<id>/pull-requests`, and `/api/workspaces/<id>`.
+`/api/cards/<id>/pull-requests`, `/api/cards/<id>/shipping-report`, and
+`/api/workspaces/<id>`.
 
 > **Migration, one-time.** If you were launched under the old arrangement and
 > armed a `/loop` cron, you are now being ticked twice per interval. Run
@@ -114,15 +115,20 @@ entry), then `run <run_id>`.
   with `VK-ESCALATE:` ⇒ treat exactly like a park: hold the column, surface
   `<card>: escalation requested — <that line, verbatim>`. **Never re-route the
   card yourself and never auto-resume.**
-- **→ `done` only on a durable delivery signal** — two shapes, and nothing
-  weaker (see `CLAUDE.md`'s *Delivery-signal asymmetry*):
-  - **(a) PR delivery** — `card-prs <id>` shows a PR with `status == "merged"`.
-    The domain is exactly `open`/`merged`/`closed`; **`closed` is
-    closed-unmerged, not landed** — both keep the card at `inreview`.
-  - **(b) direct merge** (card lists `merge`, not `pr`) — the **sole** accepted
-    signal is a concrete `merge_commit: <sha>` line in the terminal run's
-    `final_message`. A bare "done"/"merged" prose claim is **not** a delivery
-    signal.
+- **→ `done` only on a durable delivery signal** — read the card's shipping
+  report first, and nothing weaker (see `CLAUDE.md`'s *Delivery-signal
+  asymmetry*):
+  - **`card-shipping-report <id>`** (the new route — `GET /api/cards/:id/
+    shipping-report`) returns the card's parsed `card_shipping_reports` row.
+    **`delivered == "merge"` with a non-empty `merge_commit`** ⇒ landed; and
+    **`delivered == "pr"`** ⇒ corroborate with `card-prs <id>` showing
+    `status == "merged"` (domain exactly `open`/`merged`/`closed`; **`closed` is
+    closed-unmerged, not landed** — both keep the card at `inreview`).
+  - **Fallback (pre-table runs)** — a run that predates the table has no
+    shipping-report row; then the **sole** accepted signal for a direct merge
+    (card lists `merge`, not `pr`) is a concrete `merge_commit: <sha>` line in
+    the terminal run's `final_message`. A bare "done"/"merged" prose claim is
+    **not** a delivery signal.
 - **→ `inreview`** when the latest run is terminal with a completion report but
   no qualifying delivery signal. When unsure between `done` and `inreview`,
   choose `inreview`.
@@ -140,8 +146,11 @@ to garbage-collect by hand.
 **Delete only on all three**, together:
 
 1. the card is `done` (by §3's gate, this tick or an earlier one), **and**
-2. delivery is corroborated — `card-prs <id>` shows a **merged** PR, **or** the
-   terminal run's `final_message` carries a `merge_commit: <sha>` line, **and**
+2. delivery is corroborated — `card-shipping-report <id>` shows
+   `delivered == "merge"` with a non-empty `merge_commit` (or `delivered ==
+   "pr"` corroborated by `card-prs <id>` showing **merged**), **or** — for a
+   pre-table run — the terminal run's `final_message` carries a
+   `merge_commit: <sha>` line, **and**
 3. the workspace's latest run is **terminal**.
 
 Then: `vibecrew_api.py workspace-delete <workspace_id>`.

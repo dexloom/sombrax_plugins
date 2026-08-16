@@ -283,6 +283,15 @@ def build_parser():
     p.add_argument("card_id")
 
     p = sub.add_parser(
+        "card-shipping-report",
+        help="GET /api/cards/:id/shipping-report — the card's parsed "
+        "SHIPPING-REPORT completion report (delivered, merge_commit, pr_url, "
+        "commits, tests, docs, remaining, deviations). success:false (exit 1) "
+        "when the card has no report yet, or the card is unknown.",
+    )
+    p.add_argument("card_id")
+
+    p = sub.add_parser(
         "card-relationships",
         help="GET /api/cards/:id/relationships — OUTGOING rows only "
         "(WHERE card_id = :id): a card's own list shows who IT blocks, never "
@@ -633,6 +642,10 @@ def main(argv=None):
 
     if cmd == "card-prs":
         call(base, "GET", build_path("api", "cards", args.card_id, "pull-requests"))
+        return
+
+    if cmd == "card-shipping-report":
+        call(base, "GET", build_path("api", "cards", args.card_id, "shipping-report"))
         return
 
     if cmd == "card-relationships":
