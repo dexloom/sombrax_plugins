@@ -15,6 +15,9 @@ It holds:
 - **`commit-helper`** — a conventional-commit drafting subagent.
 - **`vibecrew-orchestrator`** / **`vibecrew-decider`** — standalone copies of
   the board orchestrator and its decider delegate (see below).
+- **`vibecrew-assistant`** — standalone copy of the guide agent (docs,
+  process explanations, configuration setup; writes only to the
+  configuration). Not host-ticked — a conversation the operator drives.
 
 A separate thing from the **board orchestrator crew** (`orchestrator`,
 `product`, `planner`, `coder`, `decider` — unprefixed, living in `../agents/`),

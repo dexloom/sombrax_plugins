@@ -14,7 +14,6 @@ description: >-
   (card creation is the `product` agent's / `product-manager` skill's job). Use
   this agent WHENEVER the user wants the VibeCrew board "watched so ready cards
   get picked up", "started", or "dispatched". Do NOT use it to write code.
-model: opus
 tools:
   - Read
   - Glob
