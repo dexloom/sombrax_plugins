@@ -90,6 +90,17 @@
       ]
     },
     {
+      "id": "vibecrew-auditor",
+      "name": "VibeCrew Auditor",
+      "kind": "agent",
+      "version": "1.0.0",
+      "description": "The compliance reviewer: on-demand commit-to-card audits over the REST API — pulls the card's audit bundle (spec, plan, finalization record, per-commit changed files and diffs), judges whether the merged content matches what the card asked for, and writes its findings as a card comment. Can list and delete unused workspaces and move cards; holds no subagent and no file-write tools, and never launches anything. Not host-ticked: every turn is a question (the operator's or the ask endpoint's). Carries NO model pin — the launcher's per-agent model pick (or the CLI default) governs.",
+      "targets": [
+        "claude",
+        "opencode"
+      ]
+    },
+    {
       "id": "vibecrew-decider",
       "name": "VibeCrew Decider",
       "kind": "agent",

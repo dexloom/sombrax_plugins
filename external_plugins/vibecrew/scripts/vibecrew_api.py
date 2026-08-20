@@ -338,11 +338,44 @@ def build_parser():
     p.add_argument("card_id")
     p.add_argument("--body", required=True)
     p.add_argument(
-        "--kind", choices=["agent", "orchestrator", "operator"], default="agent",
-        help="author_kind (default: agent)",
+        "--kind", choices=["agent", "orchestrator", "operator", "auditor"], default="agent",
+        help="author_kind (default: agent; auditor = the compliance reviewer's findings)",
     )
     p.add_argument("--label", help="optional author_label")
     p.add_argument("--run-id", help="optional run_id for traceability")
+
+    p = sub.add_parser(
+        "card-audit",
+        help="GET /api/cards/:id/audit — the card's audit evidence bundle: "
+        "card, spec/plan paperwork, finalization record (shipping report + "
+        "merges + PRs + delivery signals), per-commit changed files, "
+        "deterministic checks (has_spec/has_plan/delivered/paperwork_clean/"
+        "merge_commits_resolvable), and the last final message. --diff adds "
+        "full per-commit diffs (capped).",
+    )
+    p.add_argument("card_id")
+    p.add_argument("--diff", action="store_true", help="include capped full diff text")
+
+    p = sub.add_parser(
+        "audit-unused-workspaces",
+        help="GET /api/audit/unused-workspaces — workspaces with a "
+        "conservative unused-reason (archived / worktree_deleted / ephemeral "
+        "/ terminal card with corroborated delivery), newest-first, each "
+        "with reasons, pinned, has_active_runs, and a deletable verdict. "
+        "Deletion itself goes through workspace-delete, only for "
+        "deletable:true rows.",
+    )
+
+    p = sub.add_parser(
+        "auditor-ask",
+        help="POST /api/auditor/ask — deliver a question to the LIVE auditor "
+        "session (never spawns anything). 404 = no auditor launched; "
+        "409 not_ready_for_input = mid-turn, retry later; 410 = its terminal "
+        "is gone; 422 = not interactive.",
+    )
+    g = p.add_mutually_exclusive_group(required=True)
+    g.add_argument("--text")
+    g.add_argument("--text-file")
 
     # -- workspaces / launch / runs (slice 3) --------------------------------
     p = sub.add_parser("workspaces", help="GET /api/workspaces[?card_id=<id>]")
@@ -679,6 +712,24 @@ def main(argv=None):
             body["run_id"] = args.run_id
         call(base, "POST", build_path("api", "cards", args.card_id, "comments"),
              body=body)
+        return
+
+    if cmd == "card-audit":
+        query = {"diff": "1"} if args.diff else None
+        call(base, "GET", build_path("api", "cards", args.card_id, "audit"),
+             query=query)
+        return
+
+    if cmd == "audit-unused-workspaces":
+        call(base, "GET", "/api/audit/unused-workspaces")
+        return
+
+    if cmd == "auditor-ask":
+        text = args.text
+        if text is None:
+            with open(args.text_file, "r", encoding="utf-8") as handle:
+                text = handle.read()
+        call(base, "POST", "/api/auditor/ask", body={"question": text})
         return
 
     if cmd == "workspaces":
