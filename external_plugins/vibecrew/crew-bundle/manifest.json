@@ -82,7 +82,7 @@
       "id": "vibecrew-assistant",
       "name": "VibeCrew Assistant",
       "kind": "agent",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "description": "The operator's guide agent: answers from the documentation, explains VibeCrew's processes, and performs configuration setup over the REST API. It can ONLY write to the configuration — every other endpoint is read-only to it, and it ships no file-write tools. Not host-ticked: a conversation the operator drives. Carries NO model pin — the launcher's per-agent model pick (or the CLI default) governs.",
       "targets": [
         "claude",
