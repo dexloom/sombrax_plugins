@@ -231,9 +231,33 @@ def build_parser():
     )
     sub = parser.add_subparsers(dest="subcommand", required=True)
 
-    # -- health / config / projects / repos (slice 1) -----------------------
+    # -- health / config / pipelines / projects / repos (slice 1) ----------
     sub.add_parser("health", help="GET /health — the connectivity probe itself.")
     sub.add_parser("config", help="GET /api/config — the config.*-prefixed KV rows.")
+    sub.add_parser(
+        "pipelines",
+        help="GET /api/pipelines — every pipeline (bundled defaults + user "
+        "overrides): name, source, agent, stage ids.",
+    )
+    p = sub.add_parser(
+        "pipeline",
+        help="GET /api/pipelines/:name — one pipeline's summary, binding "
+        "tables (models/agents/efforts), and the raw TOML (the user "
+        "override when one exists, else the bundled default).",
+    )
+    p.add_argument("name")
+    p = sub.add_parser(
+        "pipeline-put",
+        help="PUT /api/pipelines/:name — validate + write a user pipeline "
+        "TOML (creates one, or overrides the bundled default of the same "
+        "name; the server refuses TOML that does not parse, or whose name = "
+        "does not match the route). The TOML is read from --file, --toml, "
+        "or stdin — RAW TOML on stdin, not JSON; the client wraps it.",
+    )
+    p.add_argument("name")
+    g = p.add_mutually_exclusive_group()
+    g.add_argument("--file", help="path to a TOML file, or - for stdin (default: stdin)")
+    g.add_argument("--toml", help="inline TOML text")
     sub.add_parser("projects", help="GET /api/projects")
     sub.add_parser("repos", help="GET /api/repos — repo ids for `start --repo-id`.")
 
@@ -580,6 +604,26 @@ def main(argv=None):
 
     if cmd == "config":
         call(base, "GET", "/api/config")
+        return
+    if cmd == "pipelines":
+        call(base, "GET", "/api/pipelines")
+        return
+    if cmd == "pipeline":
+        call(base, "GET", build_path("api", "pipelines", args.name))
+        return
+    if cmd == "pipeline-put":
+        if args.toml is not None:
+            toml_text = args.toml
+        elif args.file not in (None, "-"):
+            try:
+                toml_text = Path(args.file).read_text(encoding="utf-8")
+            except OSError as e:
+                print(f"cannot read --file: {e}", file=sys.stderr)
+                sys.exit(2)
+        else:
+            toml_text = sys.stdin.read()
+        call(base, "PUT", build_path("api", "pipelines", args.name),
+             body={"toml": toml_text})
         return
     if cmd == "projects":
         call(base, "GET", "/api/projects")
