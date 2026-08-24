@@ -504,6 +504,16 @@ def build_parser():
     )
     p.add_argument("run_id")
 
+    p = sub.add_parser(
+        "run-logs",
+        help="GET /api/runs/:id/logs — the run's log rows as ONE JSON payload "
+        "(a tail: ?limit= rows, default 500, in insertion order) plus "
+        "total/returned counts. The one-shot diagnostics read; "
+        "total > returned means the run holds more rows than shown.",
+    )
+    p.add_argument("run_id")
+    p.add_argument("--limit", type=int, help="tail length (default 500, server caps at 5000)")
+
     p = sub.add_parser("stop", help="POST /api/runs/:id/stop — no body.")
     p.add_argument("run_id")
 
@@ -583,6 +593,17 @@ def build_parser():
     p.add_argument("--status")
     p.add_argument("--repo-id", help="required on a multi-repo workspace")
     p.add_argument("--title")
+
+    p = sub.add_parser(
+        "issue-create",
+        help="POST /api/issues — file an issue on VibeCrew's public tracker "
+        "(dexloom/vibecrew_sh; the repo is pinned server-side, never chosen "
+        "by the caller). Returns {number, url, repository}.",
+    )
+    p.add_argument("--title", required=True)
+    p.add_argument("--body")
+    p.add_argument("--label", action="append", dest="labels",
+                   help="issue label; repeat the flag for multiple labels")
 
     return parser
 
@@ -836,6 +857,11 @@ def main(argv=None):
         call(base, "GET", build_path("api", "runs", args.run_id))
         return
 
+    if cmd == "run-logs":
+        query = {"limit": str(args.limit)} if args.limit else None
+        call(base, "GET", build_path("api", "runs", args.run_id, "logs"), query=query)
+        return
+
     if cmd == "stop":
         probe_health(base)
         status, raw = request(base, "POST", build_path("api", "runs", args.run_id, "stop"), body=None)
@@ -935,6 +961,15 @@ def main(argv=None):
             body["title"] = args.title
         call(base, "POST", build_path("api", "workspaces", args.workspace_id, "pr-record"),
              body=body)
+        return
+
+    if cmd == "issue-create":
+        body = {"title": args.title}
+        if args.body is not None:
+            body["body"] = args.body
+        if args.labels:
+            body["labels"] = args.labels
+        call(base, "POST", "/api/issues", body=body)
         return
 
     parser.error(f"unknown subcommand: {cmd}")
