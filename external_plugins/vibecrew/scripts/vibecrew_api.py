@@ -259,7 +259,10 @@ def build_parser():
     g.add_argument("--file", help="path to a TOML file, or - for stdin (default: stdin)")
     g.add_argument("--toml", help="inline TOML text")
     sub.add_parser("projects", help="GET /api/projects")
-    sub.add_parser("repos", help="GET /api/repos — repo ids for `start --repo-id`.")
+    sub.add_parser(
+        "repos",
+        help="GET /api/repos — repo ids (for per-repo delivery commands; a "
+        "normal `start` needs none — its scope comes from the card's project).")
 
     # -- cards (slice 2) ------------------------------------------------------
     p = sub.add_parser(
@@ -408,13 +411,19 @@ def build_parser():
     p = sub.add_parser(
         "start",
         help="POST /api/workspaces/start -> 201 {workspace, session, run}. "
+        "Repository scope is derived from the card's project (every linked "
+        "repo: one worktree each on a shared branch). "
         "--branch is decoded but NOT forwarded by the server (known "
         "limitation — accepted here only for forward-compat).",
     )
     p.add_argument("--card-id", required=True)
     p.add_argument("--prompt-file", required=True)
     p.add_argument("--executor", required=True)
-    p.add_argument("--repo-id")
+    p.add_argument(
+        "--repo-id",
+        help="deliberate operator-only pin of ONE repository — never pass "
+        "this on a routine dispatch: on a multi-repo project it narrows the "
+        "workspace to that single repo")
     p.add_argument("--branch", help="decoded but NOT forwarded by the server today")
     p.add_argument("--name")
     p.add_argument("--variant")

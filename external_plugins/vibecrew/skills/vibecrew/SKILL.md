@@ -52,7 +52,7 @@ re-resolving.
 Never invent IDs — they are opaque strings. Before any `card-create`,
 `card-update`, or `start`, discover the real entities:
 
-- `python3 …/vibecrew_api.py repos` → repo ids (needed for `start --repo-id`).
+- `python3 …/vibecrew_api.py repos` → repo ids (for the per-repo delivery commands and the deliberate `start --repo-id` single-repo pin — a normal `start` needs none).
 - `python3 …/vibecrew_api.py projects` → project ids (needed to scope cards).
 - `python3 …/vibecrew_api.py cards --project-id <id> [--status <s>]` → card
   ids + full descriptions. `--status` filters **client-side** — the route has
@@ -113,8 +113,14 @@ already in flight. Spawn (below) only when nothing is running for it.
 ```
 python3 ${CLAUDE_PLUGIN_ROOT}/scripts/vibecrew_api.py start --card-id <id> \
   --prompt-file <filled-pipeline-prompt.md> --executor CLAUDE_CODE \
-  [--repo-id <id>] [--branch <b>] [--name <n>] [--variant <v>] [--model-id <m>]
+  [--branch <b>] [--name <n>] [--variant <v>] [--model-id <m>]
 ```
+Repository scope is derived from the card's project at spawn time — omit
+`--repo-id`: one linked repo spawns the usual flat workspace; several spawn
+ONE multi-repo workspace (a worktree per repo under one container, all on a
+shared branch). Pass `--repo-id` ONLY when the operator explicitly asks to
+pin a single repository — on a multi-repo project it silently narrows the
+workspace to that one repo.
 `--prompt-file` is the **filled** `${CLAUDE_PLUGIN_ROOT}/prompts/pipeline.md`
 kickoff (`{{TASK}}` / `{{BASE_BRANCH}}` substituted) — write it to a temp file
 first. Executor resolution order: the card's executor-pin line (see

@@ -217,9 +217,15 @@ which is what the template mostly interpolates anyway. Write it to a temp file
 and:
 
 ```
-vibecrew_api.py start --card-id <id> --prompt-file <f> --executor <resolved> [--repo-id <id>]
+vibecrew_api.py start --card-id <id> --prompt-file <f> --executor <resolved>
 vibecrew_api.py card-update <id> --status inprogress    # skip if already inprogress
 ```
+
+Repository scope comes from the card's project — never pass `--repo-id` on a
+dispatch. The server materializes every repo the project links into ONE
+workspace (one worktree per repo on a shared branch); naming a repo would
+silently narrow a multi-repo project to that repo alone. `--repo-id` exists
+only as an operator-issued single-repo pin, which a dispatch is not.
 
 Name the tier in the report line, e.g.
 `dispatched CARD-12 (light → Async OpenCode GLM, OPENCODE_HEADED)`; say
