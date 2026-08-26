@@ -571,6 +571,33 @@ def build_parser():
     p.add_argument("--remote-url")
     p.add_argument("--force", action="store_true")
 
+    p = sub.add_parser(
+        "workspace-repos",
+        help="GET /api/workspaces/:id/repos — one entry per repo the "
+        "workspace spans: working/target branch, ahead/behind vs target and "
+        "upstream, uncommitted/untracked counts, conflict state. The read "
+        "that grounds a commit/push/discard decision.")
+    p.add_argument("workspace_id")
+
+    p = sub.add_parser(
+        "commit",
+        help="POST /api/workspaces/:id/commit — git add -A + git commit in "
+        "the workspace's worktree (save the working tree's changes). "
+        "Returns {committed: true}, or {committed: false} when the tree was "
+        "already clean (no-op success).")
+    p.add_argument("workspace_id")
+    p.add_argument("--repo-id", help="required on a multi-repo workspace")
+    p.add_argument("--message", help="commit message (default: 'Workspace changes')")
+
+    p = sub.add_parser(
+        "discard",
+        help="POST /api/workspaces/:id/discard — clean the working tree: "
+        "git restore . + git clean -fd. DESTRUCTIVE and irreversible: "
+        "uncommitted changes are lost and untracked files removed (ignored "
+        "files preserved). Read workspace-repos first and name what will go.")
+    p.add_argument("workspace_id")
+    p.add_argument("--repo-id", help="required on a multi-repo workspace")
+
     p = sub.add_parser("pr", help="POST /api/workspaces/:id/pr -> 201. Always sends a JSON object body.")
     p.add_argument("workspace_id")
     p.add_argument("--repo-id")
@@ -933,6 +960,26 @@ def main(argv=None):
         if args.force:
             body["force"] = True
         call(base, "POST", build_path("api", "workspaces", args.workspace_id, "push"), body=body)
+        return
+
+    if cmd == "workspace-repos":
+        call(base, "GET", build_path("api", "workspaces", args.workspace_id, "repos"))
+        return
+
+    if cmd == "commit":
+        body = {}
+        if args.repo_id is not None:
+            body["repo_id"] = args.repo_id
+        if args.message is not None:
+            body["message"] = args.message
+        call(base, "POST", build_path("api", "workspaces", args.workspace_id, "commit"), body=body)
+        return
+
+    if cmd == "discard":
+        body = {}
+        if args.repo_id is not None:
+            body["repo_id"] = args.repo_id
+        call(base, "POST", build_path("api", "workspaces", args.workspace_id, "discard"), body=body)
         return
 
     if cmd == "pr":
