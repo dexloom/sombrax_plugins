@@ -71,33 +71,36 @@
       "id": "vibecrew-orchestrator",
       "name": "VibeCrew Orchestrator",
       "kind": "agent",
-      "version": "2.3.0",
+      "version": "2.4.0",
       "description": "The board-driving orchestrator agent. Host-ticked: VibeCrew's runtime owns the timer and delivers each tick with a status digest; the agent reflects card status, closes finished workspaces, dispatches ready cards, nudges stalled ones, and replies with a CADENCE line. Installs an agent definition both CLIs can launch; arms no cron of its own. Carries NO model pin — the launcher's per-agent model pick (or the CLI default) governs.",
       "targets": [
         "claude",
-        "opencode"
+        "opencode",
+        "codex"
       ]
     },
     {
       "id": "vibecrew-assistant",
       "name": "VibeCrew Assistant",
       "kind": "agent",
-      "version": "1.5.0",
+      "version": "1.6.0",
       "description": "The operator's guide agent: answers from the documentation, explains VibeCrew's processes, performs configuration and pipeline setup over the REST API, tidies the board on request — moves cards between columns, sweeps stuck cards to the column the evidence supports (Done or In Review), and cleans up unused workspaces (deletable-only, reversibly archiving when evidence is incomplete) — maintains a workspace's repository on request (reads its state, commits its changes, pushes its branch, cleans its working tree — server-performed, liveness-gated, never forced) — and runs diagnostics (fleet snapshot, run logs, the API failure log), filing what it found as an issue on VibeCrew's public tracker (dexloom/vibecrew_sh) on an explicit request. Outside configuration, the pipeline catalog, those on-request actions, and issue creation, every other endpoint is read-only to it, and it ships no file-write tools. Not host-ticked: a conversation the operator drives. Carries NO model pin — the launcher's per-agent model pick (or the CLI default) governs.",
       "targets": [
         "claude",
-        "opencode"
+        "opencode",
+        "codex"
       ]
     },
     {
       "id": "vibecrew-auditor",
       "name": "VibeCrew Auditor",
       "kind": "agent",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "description": "The compliance reviewer: on-demand commit-to-card audits over the REST API — pulls the card's audit bundle (spec, plan, finalization record, per-commit changed files and diffs), judges whether the merged content matches what the card asked for, and writes its findings as a card comment. Can list and delete unused workspaces and move cards; holds no subagent and no file-write tools, and never launches anything. Not host-ticked: every turn is a question (the operator's or the ask endpoint's). Carries NO model pin — the launcher's per-agent model pick (or the CLI default) governs.",
       "targets": [
         "claude",
-        "opencode"
+        "opencode",
+        "codex"
       ]
     },
     {

@@ -1,24 +1,17 @@
 #!/usr/bin/env python3
-"""Generate the plugin's override pipeline TOMLs from VibeCrew's bundled ones.
+"""Copy VibeCrew's bundled pipeline TOMLs into the plugin's override set.
 
-Reads the app's DefaultPipelines (byte-identical async prompts, asserted by the
-app's BundledPipelineTests) and applies the routing-design edits:
+The app bundle is now CANONICAL (`reference/routing.md` §7.1): every edit this
+script used to apply — merge default-enabled, the `PLAN-FACTS:` line, the
+`PLAN-GATE:` plan-size gate, the `CODER-MODEL:` step-up check, the merge
+artifact gate, the never-commit-paperwork clauses — already lives in the
+bundled files. So this script no longer transforms anything; it COPIES, stamps
+the override banner, and ASSERTS that each canonical marker is still present.
 
-  1. `merge` becomes default-enabled in every pipeline (squash-merge on by
-     default; `pr` stays the opt-in swap).
-  2. The plan stage reports a `PLAN-FACTS:` line (size / steps / files / open
-     decisions) — the input to the two late-binding gates below.
-  3. `plan-review-codex` gains the plan-size GATE (skip small, closed plans)
-     and a two-pass cap.
-  4. `code-subagent` gains the CODER-MODEL check (step up within the pipeline's
-     own family; never cross OpenCode <-> Claude Code).
-  5. `merge` gains the artifact gate (no SPEC.md / IMPLEMENTATION_PLAN.md /
-     PRIOR_KNOWLEDGE.md on the base branch).
-  6. spec / plan / code stages: pipeline paperwork is never committed
-     (git info/exclude).
-
-Every replacement asserts it fired, so upstream prompt drift breaks the build
-of these overrides instead of silently producing stale files.
+Keeping it as a copier (rather than deleting it) preserves the two things it is
+actually for: a one-command refresh of `pipelines/` after the app's TOMLs
+change, and a tripwire that fails loudly if a canonical clause is dropped
+upstream.
 
 Usage:
   python3 generate_pipeline_overrides.py \
@@ -32,22 +25,27 @@ import argparse
 import pathlib
 import sys
 
-# source filename -> output filename. Claude-family outputs are renamed
-# async-claude-* for symmetry with async-opencode-*; the `name =` values are
-# deliberately NOT touched — the app's registry shadows bundled pipelines by
-# `name =`, so changing a name would stop overriding the bundled pipeline and
-# leave a stale merge-off duplicate in the picker. Renaming display names is
-# an app-side follow-up (rename the bundled TOMLs).
+# source filename -> output filename. Identity: the app's own TOMLs are already
+# named `async-claude-*` / `async-opencode-*` / `async-pi-*` / `async-codex-*`,
+# and the `name =` values are deliberately NOT touched — the app's registry
+# shadows bundled pipelines by `name =`, so changing one would stop overriding
+# the bundled pipeline and leave a stale duplicate in the picker.
 ASYNC_FILES = {
-    "async-sonnet.toml": "async-claude-sonnet.toml",
-    "async-opus.toml": "async-claude-opus.toml",
-    "async-fable.toml": "async-claude-fable.toml",
-    "async-opencode-glm.toml": "async-opencode-glm.toml",
-    "async-opencode-glm-minimax.toml": "async-opencode-glm-minimax.toml",
-    "async-opencode-kimi-minimax.toml": "async-opencode-kimi-minimax.toml",
-    "async-pi-glm.toml": "async-pi-glm.toml",
-    "async-pi-glm-minimax.toml": "async-pi-glm-minimax.toml",
-    "async-pi-kimi-minimax.toml": "async-pi-kimi-minimax.toml",
+    name: name
+    for name in (
+        "async-claude-sonnet.toml",
+        "async-claude-opus.toml",
+        "async-claude-fable.toml",
+        "async-opencode-glm.toml",
+        "async-opencode-glm-minimax.toml",
+        "async-opencode-kimi-minimax.toml",
+        "async-pi-glm.toml",
+        "async-pi-glm-minimax.toml",
+        "async-pi-kimi-minimax.toml",
+        "async-codex-terra.toml",
+        "async-codex-sol-terra.toml",
+        "async-codex-sol.toml",
+    )
 }
 
 HEADER = (
@@ -56,147 +54,31 @@ HEADER = (
     "# scripts/generate_pipeline_overrides.py. Do not hand-edit; regenerate.\n\n"
 )
 
-MERGE_OFF = (
-    '[[stage]]\nid = "merge"\nlabel = "Merge to base"\ndefault_enabled = false\n'
-)
-MERGE_ON = (
-    '[[stage]]\nid = "merge"\nlabel = "Merge to base"\ndefault_enabled = true\n'
-)
-
-PLAN_TAIL_OLD = (
-    "re-delegate with the concrete gaps rather than writing the plan in the main loop.\""
-)
-PLAN_TAIL_NEW = (
-    "re-delegate with the concrete gaps rather than writing the plan in the main loop. "
-    "When the plan is verified, measure it and report the single line "
-    "`PLAN-FACTS: <size> KB, <n> steps, <n> files, <n> open decisions` — the byte size of "
-    "`IMPLEMENTATION_PLAN.md`, its numbered steps, the distinct files its steps name, and the "
-    "open items in its Risks / open questions section; the next two stages read this line. "
-    "`IMPLEMENTATION_PLAN.md` is pipeline paperwork, not a deliverable: never commit it — add it "
-    "to the repo's exclude file (append the name to the file at `git rev-parse --git-path info/exclude`) "
-    "right after it is written.\""
-)
-
-REVIEW_HEAD_OLD = 'prompt = "Before any code is written, have Codex independently review'
-REVIEW_HEAD_NEW = (
-    'prompt = "GATE FIRST — read the plan stage\'s PLAN-FACTS line (measure '
-    "`IMPLEMENTATION_PLAN.md` yourself if it is missing): if the plan is under 40 KB AND has 0 "
-    "open decisions AND the card's **Routing:** line (when it carries one) does not force the "
-    "review with plan-review: yes, SKIP this stage — report the single line "
-    "`PLAN-GATE: plan-review skipped (<size> KB, <n> open decisions)` and move on; a small, "
-    "closed plan does not repay an independent review, which routinely costs more than the plan "
-    "itself. Otherwise report `PLAN-GATE: plan-review running (<size> KB, <n> open decisions)` "
-    "and proceed: have Codex independently review"
-)
-
-REVIEW_CAP_OLD = "Iterate until Codex reports no significant findings."
-REVIEW_CAP_NEW = (
-    "Iterate until Codex reports no significant findings, capped at TWO review passes — findings "
-    "still open after the second pass mean the plan (or the spec above it) is mis-scoped: revise "
-    "the plan (re-run the planning stage) or escalate; never pay a third pass."
-)
-
-CODE_HEAD_OLD = 'prompt = "Do NOT write the implementation yourself.'
-CODE_HEAD_NEW = (
-    'prompt = "MODEL CHECK FIRST — pick the coder model WITHIN this pipeline\'s own family '
-    "before delegating: if the plan blew its envelope (PLAN-FACTS at or above 40 KB, or open "
-    "design decisions surfaced during planning), step the coder model up one tier inside the "
-    "family — on a Claude Code pipeline sonnet steps up to opus; on an OpenCode pipeline "
-    "MiniMax-M3 steps up to glm-5.2; a coder already at its family ceiling stays put. NEVER "
-    "cross families: OpenCode and Pi pipelines run MiniMax / GLM / Kimi models only, Claude Code "
-    "pipelines run Sonnet / Opus / Fable models only — Codex appears on both, but only ever as "
-    "the reviewer, never as a build model. An operator's card-level model pin always beats this "
-    "advice. Report the single line `CODER-MODEL: <model> — <one-phrase reason>`. Then: "
-    "Do NOT write the implementation yourself."
-)
-
-CODE_TAIL_OLD = 'rather than fixing the code in the main loop."'
-CODE_TAIL_NEW = (
-    "rather than fixing the code in the main loop. The delegate must never commit pipeline "
-    "paperwork — `SPEC.md`, `IMPLEMENTATION_PLAN.md`, `PRIOR_KNOWLEDGE.md` stay out of every "
-    'commit."'
-)
-
-MERGE_TAIL_OLD = "gating, when wanted, is the Wait-for-approval stage's job.\""
-MERGE_TAIL_NEW = (
-    "gating, when wanted, is the Wait-for-approval stage's job. Run the artifact gate before "
-    "merging: the squash diff must not add or modify pipeline paperwork — `SPEC.md`, "
-    "`IMPLEMENTATION_PLAN.md`, `PRIOR_KNOWLEDGE.md` — unless the card's task is explicitly about "
-    "those files; if it does, remove them from the branch (restore the base version or delete, "
-    'and commit) before merging. Never leave pipeline artifacts on the base branch."'
-)
-
-SPEC_TAIL_OLD = (
-    "re-delegate with the concrete gaps rather than writing the spec in the main loop.\""
-)
-SPEC_TAIL_NEW = (
-    "re-delegate with the concrete gaps rather than writing the spec in the main loop. "
-    "`SPEC.md` is pipeline paperwork, not a deliverable: never commit it — add it to the repo's "
-    "exclude file (append the name to the file at `git rev-parse --git-path info/exclude`) right "
-    "after it is written.\""
-)
-
-ASYNC_EDITS = [
-    (MERGE_OFF, MERGE_ON),
-    (PLAN_TAIL_OLD, PLAN_TAIL_NEW),
-    (REVIEW_HEAD_OLD, REVIEW_HEAD_NEW),
-    (REVIEW_CAP_OLD, REVIEW_CAP_NEW),
-    (CODE_HEAD_OLD, CODE_HEAD_NEW),
-    (CODE_TAIL_OLD, CODE_TAIL_NEW),
-    (MERGE_TAIL_OLD, MERGE_TAIL_NEW),
-    (SPEC_TAIL_OLD, SPEC_TAIL_NEW),
+# Canonical clauses that MUST survive upstream. A miss means the app's bundled
+# TOMLs lost something these overrides exist to carry — fail loudly rather than
+# ship a silently weaker pipeline.
+ASYNC_ASSERT_CONTAINS = [
+    # The four-family coder rule, including Codex's own step-up rung.
+    "on a Codex pipeline gpt-5.6-terra steps up to gpt-5.6-sol",
+    "PLAN-FACTS:",
+    "PLAN-GATE:",
+    "CODER-MODEL:",
+    "merge-record",
 ]
 
-BASIC_EDITS = [
-    (MERGE_OFF, MERGE_ON),
-    (
-        'prompt = "Write a technical spec for this card and save it to `SPEC.md` at the repo root '
-        'before implementing."',
-        'prompt = "Write a technical spec for this card and save it to `SPEC.md` at the repo root '
-        "before implementing. `SPEC.md` is pipeline paperwork, not a deliverable: never commit it — "
-        "add it to the repo's exclude file (append the name to the file at "
-        '`git rev-parse --git-path info/exclude`) right after it is written."',
-    ),
-    (
-        'prompt = "Write a step-by-step implementation plan and save it to '
-        '`IMPLEMENTATION_PLAN.md` at the repo root."',
-        'prompt = "Write a step-by-step implementation plan and save it to '
-        "`IMPLEMENTATION_PLAN.md` at the repo root. When it is written, measure it and report the "
-        "single line `PLAN-FACTS: <size> KB, <n> steps, <n> files, <n> open decisions`. "
-        "`IMPLEMENTATION_PLAN.md` is pipeline paperwork, not a deliverable: never commit it — add "
-        'it to the same exclude file as `SPEC.md`."',
-    ),
-    (
-        'prompt = "Have the implementation plan reviewed (e.g. a codex plan review, read-only) '
-        'and resolve blockers before writing code."',
-        'prompt = "GATE FIRST — read the PLAN-FACTS line (measure `IMPLEMENTATION_PLAN.md` '
-        "yourself if it is missing): if the plan is under 40 KB AND has 0 open decisions AND no "
-        "**Routing:** line forces the review with plan-review: yes, SKIP this stage with the "
-        "single line `PLAN-GATE: plan-review skipped (<size> KB, <n> open decisions)`. Otherwise "
-        "have the implementation plan reviewed (e.g. a codex plan review, read-only), capped at "
-        'two passes, and resolve blockers before writing code."',
-    ),
-    (
-        'prompt = "When the work is implemented and reviewed, merge this card\'s branch into the '
-        'base branch."',
-        'prompt = "When the work is implemented and reviewed, squash-merge this card\'s branch '
-        "into the base branch yourself — this stage being listed is your authorization, so do not "
-        "wait for a go-ahead; gating, when wanted, is the Wait-for-approval stage's job. Run the "
-        "artifact gate before merging: the squash diff must not add or modify pipeline paperwork — "
-        "`SPEC.md`, `IMPLEMENTATION_PLAN.md`, `PRIOR_KNOWLEDGE.md` — unless the card's task is "
-        "explicitly about those files; if it does, remove them from the branch (restore the base "
-        'version or delete, and commit) before merging. Never leave pipeline artifacts on the base branch."',
-    ),
+BASIC_ASSERT_CONTAINS = [
+    "PLAN-FACTS:",
+    "merge-record",
 ]
 
 
-def apply(text: str, edits, fname: str) -> str:
-    for old, new in edits:
-        n = text.count(old)
-        if n != 1:
-            sys.exit(f"{fname}: expected exactly 1 occurrence of {old[:60]!r}…, found {n} — "
-                     "upstream pipeline text drifted; realign the generator.")
-        text = text.replace(old, new)
+def assert_contains(text: str, needles, fname: str) -> str:
+    for needle in needles:
+        if needle not in text:
+            sys.exit(
+                f"{fname}: missing canonical clause {needle!r} — the app's bundled "
+                "pipeline drifted; realign the generator (and the app) before shipping."
+            )
     return text
 
 
@@ -220,8 +102,9 @@ def main() -> None:
     outputs["basic.toml"] = "basic.toml"
     for src_name, out_name in outputs.items():
         src = (args.source / src_name).read_text(encoding="utf-8")
-        edits = BASIC_EDITS if src_name == "basic.toml" else ASYNC_EDITS
-        (args.out / out_name).write_text(header + apply(src, edits, src_name), encoding="utf-8")
+        needles = BASIC_ASSERT_CONTAINS if src_name == "basic.toml" else ASYNC_ASSERT_CONTAINS
+        (args.out / out_name).write_text(
+            header + assert_contains(src, needles, src_name), encoding="utf-8")
         print(f"generated {out_name}  (from {src_name})")
 
 

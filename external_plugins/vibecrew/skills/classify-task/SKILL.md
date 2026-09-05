@@ -46,18 +46,20 @@ line back to your caller.
 
 ## Step 1 — resolve the FAMILY (before any scoring)
 
-VibeCrew pipelines come in three families, split by executor, **never mixed**:
+VibeCrew pipelines come in four families, split by executor, **never mixed**:
 
 | Family | Executor | Build models (spec/plan/code) | Pipelines |
 |---|---|---|---|
 | **Claude Code** | `CLAUDE_CODE_HEADED` | Sonnet / Opus / Fable — only these | Async Sonnet, Async Opus, Async Fable |
 | **OpenCode** | `OPENCODE_HEADED` | MiniMax / GLM / Kimi — only these | Async OpenCode GLM, Async OpenCode GLM-MiniMax, Async OpenCode Kimi-MiniMax |
 | **Pi** *(explicit-ask-only, uncalibrated)* | `PI_HEADED` | GLM / Kimi / MiniMax — only these | Async Pi GLM, Async Pi GLM-MiniMax, Async Pi Kimi-MiniMax |
+| **Codex** *(uncalibrated, n=0 — but auto-routable)* | `CODEX_HEADED` | GPT-5.6 sol / terra / luna — only these | Async Codex Terra, Async Codex Sol-Terra, Async Codex Sol |
 
 - **Basic** is family-neutral (no executor binding, no model table): it runs
   on whichever executor the card pins or the config defaults to.
-- **Codex is the shared reviewer** — `plan-review-codex` / `code-review` run
-  on Codex in EVERY family. Codex is never a build model.
+- **Codex is the shared reviewer in every family, and a build model only on
+  its own** — `plan-review-codex` / `code-review` run on Codex in EVERY family;
+  on Claude Code / OpenCode / Pi cards that is the ONLY thing Codex does.
 - **The never-mix invariant:** no stage, pin, or advice may name a model from
   another family. A Claude Code card never runs a GLM coder; an OpenCode
   card never runs an Opus coder. If the operator's words contradict the
@@ -70,15 +72,23 @@ VibeCrew pipelines come in three families, split by executor, **never mixed**:
   maps in Step 3 — you NEVER auto-route to Pi. An operator selects Pi ONLY by
   naming a `async-pi-*` pipeline or a `PI`/`PI_HEADED` executor (step 1/2 of the
   ladder); an explicit Pi ask always wins, the same override rule as any family.
+- **Codex is uncalibrated but auto-routable.** It has no telemetry either
+  (n = 0), but unlike Pi it IS on the ladder and IS in the tier→pipeline map:
+  an operator whose default executor is Codex — typically because a ChatGPT
+  subscription is the only thing they have — must get a working route without
+  naming a pipeline every time. Say "Codex family, uncalibrated (n=0)" in the
+  report so the choice is visible.
 
 Resolution ladder, first hit wins:
 
 1. **Operator names a pipeline** → that pipeline's family, done (a `async-pi-*`
-   name → Pi).
+   name → Pi; a `async-codex-*` name → Codex).
 2. **Operator names an executor or a family model** ("on opencode", "with
-   glm", "on sonnet", "on pi") → that family. A model name implies its family.
+   glm", "on sonnet", "on pi", "on codex", "with gpt-5.6") → that family. A
+   model name implies its family.
 3. **The config's default executor** (`vibecrew_api.py config` →
-   `executor_profile`): `OPENCODE*` → OpenCode; `CLAUDE*` → Claude Code.
+   `executor_profile`): `OPENCODE*` → OpenCode; `CLAUDE*` → Claude Code;
+   `CODEX*` → Codex.
 4. Nothing resolvable → **Claude Code** (the app's own final fallback).
 
 ## Step 2 — the five axes, scored 0 / 1 / 2
@@ -127,13 +137,18 @@ most efficient measured coder; MiniMax-M3 is the weak arm (worst fresh/LOC,
 needed a follow-up debug card); Async Fable and the Kimi arm have **zero**
 completed-card data. Hence:
 
-| Tier | Claude Code family | OpenCode family |
-|---|---|---|
-| **trivial** | **Basic** (default state: implement + merge) | **Basic** + executor pin `OPENCODE_HEADED` |
-| **light** | **Async Sonnet** | **Async OpenCode GLM** |
-| **medium** | **Async Opus** | **Async OpenCode GLM** |
-| **heavy** | **Async Opus** + code-review, `pr` instead of `merge` | **Async OpenCode GLM** + code-review, `pr` instead of `merge` |
+| Tier | Claude Code family | OpenCode family | Codex family *(uncalibrated)* |
+|---|---|---|---|
+| **trivial** | **Basic** (default state: implement + merge) | **Basic** + executor pin `OPENCODE_HEADED` | **Basic** + executor pin `CODEX_HEADED` |
+| **light** | **Async Sonnet** | **Async OpenCode GLM** | **Async Codex Terra** |
+| **medium** | **Async Opus** | **Async OpenCode GLM** | **Async Codex Sol-Terra** |
+| **heavy** | **Async Opus** + code-review, `pr` instead of `merge` | **Async OpenCode GLM** + code-review, `pr` instead of `merge` | **Async Codex Sol** + code-review, `pr` instead of `merge` |
 
+- **The Codex column is uncalibrated (n = 0).** It mirrors the other families'
+  shape rather than any measurement: Terra for light, a Sol-reasoning /
+  Terra-coding split for medium, all-Sol for heavy. Route to it when the ladder
+  resolves to Codex and say the tier is unmeasured; promote once telemetry
+  lands.
 - **Async Fable, GLM-MiniMax, and Kimi-MiniMax are explicit-ask arms only** —
   Fable and Kimi are uncalibrated (n = 0) and MiniMax is measured-weak; route
   to them only when the operator names them, and say so in the report.

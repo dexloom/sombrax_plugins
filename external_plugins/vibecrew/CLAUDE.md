@@ -92,17 +92,34 @@ shared parser and the stage-number tracking.
 | **Claude Code** | `CLAUDE_CODE_HEADED` | Sonnet / Opus / Fable only | Async Sonnet, Async Opus, Async Fable |
 | **OpenCode** | `OPENCODE_HEADED` | MiniMax / GLM / Kimi only | Async OpenCode GLM, Async OpenCode GLM-MiniMax, Async OpenCode Kimi-MiniMax |
 | **Pi** *(explicit-ask-only, uncalibrated)* | `PI_HEADED` | GLM / Kimi / MiniMax only | Async Pi GLM, Async Pi GLM-MiniMax, Async Pi Kimi-MiniMax |
+| **Codex** *(uncalibrated, n=0)* | `CODEX_HEADED` | GPT-5.6 sol / terra / luna only | Async Codex Terra, Async Codex Sol-Terra, Async Codex Sol |
 
 **Basic** is family-neutral (no `agent`, no `[models]`) and runs on whichever
 executor the card pins or the config defaults to. **Codex is the shared
-reviewer**: `plan-review-codex` / `code-review` bind to `CODEX` via `[agents]`
-in EVERY family — Codex is never a build model. **The never-mix invariant:**
+reviewer in every family and a build model only on its own**:
+`plan-review-codex` / `code-review` bind to `CODEX` via `[agents]` in EVERY
+family, and on the other three families that is the ONLY thing Codex does.
+**The never-mix invariant:**
 no stage, pin, or advice may name a model from another family; a model pin
 must belong to the card's pipeline family, and a contradiction is surfaced,
 never composed. Which pipeline a card gets when the operator names none is the
 `classify-task` skill's job (family from the executor ladder, tier from the
 five-axis rubric); the design record with the telemetry evidence is
 `reference/routing.md`.
+
+**Delegation on the Codex family is a nested `codex exec`.** Codex has no
+subagent surface, so `{{DELEGATE}}` renders as a one-shot
+`codex exec -m <stage model> [-c model_reasoning_effort=<effort>] --sandbox
+workspace-write "<brief>" < /dev/null` run from the workspace root — which is
+also the only way a per-stage model or effort is honored, since the main
+loop's `-m` is fixed for the session. The `< /dev/null` is mandatory (Codex
+reads stdin when given no positional). **Nested exec needs network access**, so
+a Codex pipeline's main loop must run under AUTO or a sandbox that permits the
+network; under a restrictive sandbox the delegated stages fall back to the main
+loop, and the launch says so in the run's dialog. Codex is also the one
+executor that can ride a ChatGPT subscription rather than an API key, which is
+what makes the Codex family a complete VibeCrew for an operator who has only
+that.
 
 **Pi is the explicit-ask-only arm.** It runs the same model set OpenCode uses
 (Z.ai GLM / Kimi / MiniMax via the `pi` CLI) but has **zero telemetry** (n=0 on

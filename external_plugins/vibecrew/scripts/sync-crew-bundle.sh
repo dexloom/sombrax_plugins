@@ -16,8 +16,9 @@
 #
 # This is a DEV-TIME script — it is never run by the app or at install time.
 # Run it whenever agents/orchestrator.md, agents/assistant.md,
-# agents/decider.md, agents/auditor.md, or the agents-opencode/ twins
-# change, then bump the changed agent's `version` in crew-bundle/manifest.json
+# agents/decider.md, agents/auditor.md, or the agents-opencode/ /
+# agents-codex/ twins change, then bump the changed agent's `version` in
+# crew-bundle/manifest.json
 # so installed copies show "Update available" after the app syncs.
 #
 # Usage:
@@ -29,11 +30,14 @@ BUNDLE="crew-bundle"
 
 mkdir -p "${BUNDLE}/vibecrew-orchestrator/claude" \
          "${BUNDLE}/vibecrew-orchestrator/opencode" \
+         "${BUNDLE}/vibecrew-orchestrator/codex" \
          "${BUNDLE}/vibecrew-decider/claude" \
          "${BUNDLE}/vibecrew-assistant/claude" \
          "${BUNDLE}/vibecrew-assistant/opencode" \
+         "${BUNDLE}/vibecrew-assistant/codex" \
          "${BUNDLE}/vibecrew-auditor/claude" \
-         "${BUNDLE}/vibecrew-auditor/opencode"
+         "${BUNDLE}/vibecrew-auditor/opencode" \
+         "${BUNDLE}/vibecrew-auditor/codex"
 
 cp agents/orchestrator.md              "${BUNDLE}/vibecrew-orchestrator/claude/agent.md"
 cp agents-opencode/vc-orchestrator.md  "${BUNDLE}/vibecrew-orchestrator/opencode/agent.md"
@@ -42,6 +46,9 @@ cp agents/assistant.md                 "${BUNDLE}/vibecrew-assistant/claude/agen
 cp agents-opencode/va-assistant.md     "${BUNDLE}/vibecrew-assistant/opencode/agent.md"
 cp agents/auditor.md                   "${BUNDLE}/vibecrew-auditor/claude/agent.md"
 cp agents-opencode/va-auditor.md       "${BUNDLE}/vibecrew-auditor/opencode/agent.md"
+cp agents-codex/vc-orchestrator.md     "${BUNDLE}/vibecrew-orchestrator/codex/agent.md"
+cp agents-codex/va-assistant.md        "${BUNDLE}/vibecrew-assistant/codex/agent.md"
+cp agents-codex/va-auditor.md          "${BUNDLE}/vibecrew-auditor/codex/agent.md"
 
 # The one field that CANNOT be copied verbatim (see header): rewrite the
 # plugin-namespaced `name:` to the standalone id the app launches/delegates by.
@@ -53,6 +60,16 @@ cp agents-opencode/va-auditor.md       "${BUNDLE}/vibecrew-auditor/opencode/agen
   "${BUNDLE}/vibecrew-assistant/claude/agent.md"
 /usr/bin/sed -i '' '1,10s/^name: auditor$/name: vibecrew-auditor/' \
   "${BUNDLE}/vibecrew-auditor/claude/agent.md"
+# The codex copies carry the same `name:` field, for the same reason: VibeCrew
+# reads the installed file by id and hands the body to the CLI as
+# `-c developer_instructions=<body>`, and the contract test asserts the
+# declared name matches the id it was installed under.
+/usr/bin/sed -i '' '1,10s/^name: orchestrator$/name: vibecrew-orchestrator/' \
+  "${BUNDLE}/vibecrew-orchestrator/codex/agent.md"
+/usr/bin/sed -i '' '1,10s/^name: assistant$/name: vibecrew-assistant/' \
+  "${BUNDLE}/vibecrew-assistant/codex/agent.md"
+/usr/bin/sed -i '' '1,10s/^name: auditor$/name: vibecrew-auditor/' \
+  "${BUNDLE}/vibecrew-auditor/codex/agent.md"
 
 echo "Refreshed standalone copies in ${BUNDLE}"
 echo
@@ -63,9 +80,15 @@ shasum -a 256 "${BUNDLE}/vibecrew-orchestrator/claude/agent.md" \
               "${BUNDLE}/vibecrew-assistant/claude/agent.md" \
               "${BUNDLE}/vibecrew-assistant/opencode/agent.md" \
               "${BUNDLE}/vibecrew-auditor/claude/agent.md" \
-              "${BUNDLE}/vibecrew-auditor/opencode/agent.md"
+              "${BUNDLE}/vibecrew-auditor/opencode/agent.md" \
+              "${BUNDLE}/vibecrew-orchestrator/codex/agent.md" \
+              "${BUNDLE}/vibecrew-assistant/codex/agent.md" \
+              "${BUNDLE}/vibecrew-auditor/codex/agent.md"
 echo
 echo "Contract version lines:"
 grep -m1 'VC-ORCH-CONTRACT' "${BUNDLE}/vibecrew-orchestrator/claude/agent.md" || echo "  (orchestrator missing!)"
 grep -m1 'VC-ASSIST-CONTRACT' "${BUNDLE}/vibecrew-assistant/claude/agent.md" || echo "  (assistant missing!)"
 grep -m1 'VC-AUDIT-CONTRACT' "${BUNDLE}/vibecrew-auditor/claude/agent.md" || echo "  (auditor missing!)"
+grep -m1 'VC-ORCH-CONTRACT' "${BUNDLE}/vibecrew-orchestrator/codex/agent.md" || echo "  (codex orchestrator missing!)"
+grep -m1 'VC-ASSIST-CONTRACT' "${BUNDLE}/vibecrew-assistant/codex/agent.md" || echo "  (codex assistant missing!)"
+grep -m1 'VC-AUDIT-CONTRACT' "${BUNDLE}/vibecrew-auditor/codex/agent.md" || echo "  (codex auditor missing!)"

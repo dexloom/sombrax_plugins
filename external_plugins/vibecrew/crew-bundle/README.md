@@ -26,15 +26,24 @@ which drives the board from the operator's session.
 ## Layout
 
 ```
-crew-bundle/manifest.json                  # the catalog (same schema the app parses)
-crew-bundle/<id>/{claude,opencode}/agent.md   (subagents)
+crew-bundle/manifest.json                            # the catalog (same schema the app parses)
+crew-bundle/<id>/{claude,opencode}/agent.md          (pipeline subagents)
+crew-bundle/vibecrew-{orchestrator,assistant,auditor}/{claude,opencode,codex}/agent.md
 crew-bundle/code-review-checklist/{claude,opencode,pi}/SKILL.md
 ```
 
-- The **body is identical** across `claude/` and `opencode/` — only the
-  frontmatter format differs (Claude Code: `name:` + flat `tools:`/`allowed-tools:`
-  list; opencode: `description:` + `mode:` + `permission:` map). Edit one, mirror
-  the other; a drift check enforces it.
+- The **body is identical** across `claude/`, `opencode/` and `codex/` — only
+  the frontmatter format differs (Claude Code: `name:` + flat
+  `tools:`/`allowed-tools:` list; opencode: `description:` + `mode:` +
+  `permission:` map; codex: `name:` + `description:` only, since Codex has no
+  tool-grant frontmatter). Edit one, mirror the others; a drift check enforces
+  it.
+- The `codex/` payload exists only for the three HOST agents, and Codex does
+  NOT discover it natively: VibeCrew reads the installed
+  `~/.codex/agents/<id>.md`, strips the frontmatter, and hands the body to the
+  CLI as `-c developer_instructions=<body>` at launch. The pipeline
+  `vibecrew-<role>` agents deliberately do not ship a `codex` target — a Codex
+  pipeline's delegate is a nested `codex exec`, not an installed subagent.
 - The `pi/` payload is the same body with plain `name:`/`description:`
   frontmatter (Pi implements the Agent Skills standard; no tools list). Only
   skills target `pi` today — Pi pipelines self-execute stages, so the
@@ -50,11 +59,12 @@ crew-bundle/code-review-checklist/{claude,opencode,pi}/SKILL.md
 | **Names** | unprefixed (`orchestrator`, `decider`…) | prefixed (`vibecrew-orchestrator`…) |
 | **Runs** | in the operator's session, drives the board | installed by the app into each CLI's global config dir |
 | **Model** | carries its own `model:` frontmatter | orchestrator/decider keep theirs; pipeline agents pin **no** model |
-| **Lives** | `../agents/*.md`, `../agents-opencode/` | `<id>/{claude,opencode}/agent.md` |
+| **Lives** | `../agents/*.md`, `../agents-opencode/`, `../agents-codex/` | `<id>/{claude,opencode[,codex]}/agent.md` |
 
-The `vibecrew-orchestrator`/`vibecrew-decider` payloads are DERIVED from
-`../agents/orchestrator.md`, `../agents-opencode/vc-orchestrator.md`, and
-`../agents/decider.md`. Never edit them by hand — run:
+The `vibecrew-orchestrator`/`vibecrew-assistant`/`vibecrew-auditor`/
+`vibecrew-decider` payloads are DERIVED from `../agents/*.md`,
+`../agents-opencode/*.md`, and `../agents-codex/*.md`. Never edit them by
+hand — run:
 
 ```bash
 scripts/sync-crew-bundle.sh

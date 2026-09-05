@@ -16,9 +16,13 @@ VibeCrew's bundled pipelines split by executor, and the split is absolute:
 - **Pi** (`PI_HEADED`): Async Pi GLM / GLM-MiniMax / Kimi-MiniMax — same build
   models as OpenCode (**MiniMax / GLM / Kimi only**), via the `pi` CLI.
   **Explicit-ask-only and uncalibrated** — see below.
+- **Codex** (`CODEX_HEADED`): Async Codex Terra / Sol-Terra / Sol — build
+  models are the **GPT-5.6 family (sol / terra / luna) only**, via the `codex`
+  CLI. **Uncalibrated (n=0) but auto-routable** — see below.
 - **Basic** is family-neutral (no `agent`, no `[models]`).
-- **Codex is the shared reviewer** — `plan-review-codex` / `code-review` bind
-  to `CODEX` in every family; Codex is never a build model.
+- **Codex is also the shared reviewer** — `plan-review-codex` / `code-review`
+  bind to `CODEX` in every family; on the other three families that is the
+  only thing Codex does.
 
 **Never mix.** No stage, pin, or advice may name a model from another
 family. When the operator names no pipeline, the **executor picks the
@@ -35,6 +39,19 @@ with no subagents, so per-stage model bindings on a Pi pipeline are advisory
 and the CODER-MODEL step-up stays inside the MiniMax / GLM / Kimi set. When Pi
 accumulates real telemetry it can be promoted into the tier maps like any
 calibrated arm.
+
+**Codex is uncalibrated but auto-routable — deliberately unlike Pi.** It has
+n=0 telemetry too, and its tier map (§4) mirrors the other families' shape
+rather than any measurement. It is still on the executor ladder and in the
+tier→pipeline maps, because the family exists precisely for an operator whose
+only subscription is ChatGPT: excluding it from auto-routing would leave that
+operator naming a pipeline on every card, which is the failure the family was
+added to remove. Say "Codex family, uncalibrated (n=0)" in the routing report
+so the choice stays visible; promote the tier boundaries once telemetry lands.
+Delegation on a Codex pipeline is a nested one-shot `codex exec` (Codex has no
+subagent surface), which needs network access — a Codex card's main loop must
+run under AUTO or a sandbox that permits it, or the delegated stages fall back
+to the main loop.
 
 ## 2. The telemetry, with receipts
 
