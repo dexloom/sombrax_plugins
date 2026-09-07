@@ -203,10 +203,12 @@ Three boundaries to know: a PUT writes the USER override in
 `~/.vibecrew/pipelines/` — it never edits the app's bundled defaults, and
 deleting the override in Settings ▸ Pipelines restores the bundled
 behavior. It affects only cards composed AFTER the write; a card that
-already carries a `## Pipeline` block keeps what it has. And the model you
-bind must belong to the pipeline's family — never mix a Claude model into
-an OpenCode pipeline or vice versa; surface a contradiction instead of
-composing it. `handbook/05-pipelines-and-crews.md` covers the shape.
+already carries a `## Pipeline` block keeps what it has. And a step's model
+must belong to that step's agent (`[agents]` names the agent, `[models]` the
+model, both keyed by stage id) — surface a mismatch instead of composing it.
+`GET /api/pipelines/:name` returns the resolved `stages[]` binding, and
+`POST /api/pipelines/:name/compose` renders a card block for a binding without
+writing a file. `handbook/05-pipelines-and-crews.md` covers the shape.
 
 ## Moving cards
 

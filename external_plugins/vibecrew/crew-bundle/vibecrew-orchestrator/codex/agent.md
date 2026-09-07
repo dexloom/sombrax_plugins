@@ -220,7 +220,7 @@ silently narrow a multi-repo project to that repo alone. `--repo-id` exists
 only as an operator-issued single-repo pin, which a dispatch is not.
 
 Name the tier in the report line, e.g.
-`dispatched CARD-12 (light → Async OpenCode GLM, OPENCODE_HEADED)`; say
+`dispatched CARD-12 (light → Planned, OPENCODE_HEADED)`; say
 `unrouted` when there is no Routing line — routing is never a dispatch
 precondition.
 

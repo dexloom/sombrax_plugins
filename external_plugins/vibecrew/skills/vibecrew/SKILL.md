@@ -80,11 +80,48 @@ opt-in) from one call. `--status` is applied client-side over that list.
 python3 ${CLAUDE_PLUGIN_ROOT}/scripts/vibecrew_api.py card-create --project-id <id> --title "<t>" --description-file <f>
 python3 ${CLAUDE_PLUGIN_ROOT}/scripts/vibecrew_api.py card-update <card_id> --status inprogress
 python3 ${CLAUDE_PLUGIN_ROOT}/scripts/vibecrew_api.py card-update <card_id> --description-file <f>
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/vibecrew_api.py card-update <card_id> --extension-metadata '<json>'
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/vibecrew_api.py card-update <card_id> --extension-metadata-file <f>
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/vibecrew_api.py card-update <card_id> --clear-extension-metadata
 ```
 Status **ids** (not display names): `todo`, `inprogress`, `inreview`, `done`,
 `cancelled` — `card-create` defaults to `todo`. Use `--description-file` (not
 `--description`) whenever the body is a full markdown card (e.g. one carrying
 a `## Pipeline` block) so it round-trips byte-exact.
+
+`--extension-metadata` takes a JSON **object** and is sent pre-serialized (the
+store column is JSON text). It **replaces** the whole blob, so if the card
+already carries other keys, fetch it with `card <id>` and merge client-side
+first. `--extension-metadata-file` reads the same JSON from a file (or `-` for
+stdin) — reach for it when the JSON is too quote-heavy for argv.
+`--clear-extension-metadata` writes NULL. The usual source of the JSON is
+`pipeline-compose` below.
+
+### Pipelines — inspect one, or compose a card's block
+```
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/vibecrew_api.py pipelines
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/vibecrew_api.py pipeline <name>
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/vibecrew_api.py pipeline-put <name> --file <toml>
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/vibecrew_api.py pipeline-compose <name> \
+  --enabled-ids spec,plan,plan-review,code,merge \
+  --executor CLAUDE_CODE_HEADED [--model <id>] \
+  [--stage-agent plan=CODEX] [--stage-model plan=gpt-5.6-sol] [--custom-text "<t>"]
+```
+Three pipeline types ship bundled — `Basic`, `Planned`, `Async` — plus any user
+pipelines; `pipelines` lists them and `pipeline <name>` returns the binding
+tables, the resolved `stages[]`, and the raw TOML. The twelve per-model
+pipeline names this set replaced are **404** on the API (the app still aliases
+them for old cards' labels) — list first, never guess a name.
+
+`pipeline-compose` writes nothing: it renders the card's `## Pipeline` block for
+a set of ticked stages and per-step bindings and returns
+`{block, extension_metadata, steps}`. `--stage-agent`/`--stage-model` are
+repeatable `STAGE=VALUE` pairs over the stages that carry a delegable role; an
+empty value (`--stage-agent plan-review=`) clears the pipeline file's own
+binding so the stage inherits the main loop. It runs the same code path as the
+app's composer, so a card filed this way is byte-identical to one filed from the
+UI. The two-call flow is: `card-create` with the block in the description, then
+`card-update <id> --extension-metadata '<the returned extension_metadata>'`.
 
 ### Lanes — card↔card dependencies
 ```

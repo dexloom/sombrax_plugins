@@ -220,6 +220,57 @@ def read_description(args):
     return getattr(args, "description", None)
 
 
+def parse_stage_pairs(pairs, flag):
+    """Parse repeated `STAGE=VALUE` flags into {stage: value-or-None}.
+
+    An empty value (`--stage-agent plan-review=`) sends JSON `null`, which the
+    compose endpoint reads as "clear the pipeline file's own entry for this
+    stage" so the step inherits the main loop.
+    """
+    out = {}
+    for pair in pairs or []:
+        stage, sep, value = pair.partition("=")
+        stage = stage.strip()
+        if not sep or not stage:
+            print(f"{flag} expects STAGE=VALUE (got {pair!r})", file=sys.stderr)
+            sys.exit(2)
+        value = value.strip()
+        out[stage] = value or None
+    return out
+
+
+def read_extension_metadata(args):
+    """Resolve --extension-metadata / --extension-metadata-file into a
+    pre-serialized JSON string, or None.
+
+    `UpdateCardBody.extensionMetadata` is a `String?` on the server (the store
+    column is JSON text), so the object is re-serialized here — which also
+    validates it before the request goes out.
+    """
+    text = getattr(args, "extension_metadata", None)
+    if text is None:
+        path = getattr(args, "extension_metadata_file", None)
+        if not path:
+            return None
+        if path == "-":
+            text = sys.stdin.read()
+        else:
+            try:
+                text = Path(path).read_text(encoding="utf-8")
+            except OSError as e:
+                print(f"cannot read --extension-metadata-file: {e}", file=sys.stderr)
+                sys.exit(2)
+    try:
+        parsed = json.loads(text)
+    except ValueError as e:
+        print(f"--extension-metadata is not valid JSON: {e}", file=sys.stderr)
+        sys.exit(2)
+    if not isinstance(parsed, dict):
+        print("--extension-metadata must be a JSON object", file=sys.stderr)
+        sys.exit(2)
+    return json.dumps(parsed)
+
+
 def build_parser():
     parser = argparse.ArgumentParser(
         prog="vibecrew_api.py",
@@ -258,6 +309,33 @@ def build_parser():
     g = p.add_mutually_exclusive_group()
     g.add_argument("--file", help="path to a TOML file, or - for stdin (default: stdin)")
     g.add_argument("--toml", help="inline TOML text")
+    p = sub.add_parser(
+        "pipeline-compose",
+        help="POST /api/pipelines/:name/compose — render the card's "
+        "`## Pipeline` block and its extension_metadata for a set of enabled "
+        "stages and per-step agent/model bindings, WITHOUT writing anything. "
+        "Returns {block, extension_metadata, steps}: put `block` under the "
+        "spec in the card description, then PATCH `extension_metadata` onto "
+        "the created card with `card-update --extension-metadata`. Same code "
+        "path as the app's composer, so a plugin-filed card and a UI-filed "
+        "card are byte-identical for the same inputs.",
+    )
+    p.add_argument("name", help="pipeline name: Basic, Planned, Async, or a user pipeline "
+                   "(removed legacy names 404 — list them with `pipelines`)")
+    p.add_argument("--enabled-ids", required=True,
+                   help="comma-separated stage ids to tick, e.g. "
+                   "spec,plan,plan-review,code,merge")
+    p.add_argument("--executor", help="main-loop executor raw value "
+                   "(CLAUDE_CODE_HEADED, OPENCODE_HEADED, CODEX, PI, …)")
+    p.add_argument("--model", help="main-loop model id")
+    p.add_argument("--stage-agent", action="append", default=[], metavar="STAGE=RAW",
+                   help="bind one delegable stage to another agent, e.g. "
+                   "plan=CODEX. Repeatable. `STAGE=` (empty value) clears the "
+                   "pipeline file's own binding so the stage inherits the main loop.")
+    p.add_argument("--stage-model", action="append", default=[], metavar="STAGE=ID",
+                   help="bind one delegable stage's model, e.g. "
+                   "plan=gpt-5.6-sol. Repeatable. `STAGE=` clears the file's entry.")
+    p.add_argument("--custom-text", help="custom instructions appended to the block")
     sub.add_parser("projects", help="GET /api/projects")
     sub.add_parser(
         "repos",
@@ -300,6 +378,19 @@ def build_parser():
     p.add_argument("--position", type=float)
     p.add_argument("--parent-card-id")
     p.add_argument("--parent-position", type=float)
+    g = p.add_mutually_exclusive_group()
+    g.add_argument("--extension-metadata", metavar="JSON",
+                   help="the card's extension_metadata as a JSON OBJECT, sent "
+                   "pre-serialized (the store column is JSON text). Typically "
+                   "the `extension_metadata` returned by `pipeline-compose`, "
+                   "e.g. --extension-metadata '{\"pipeline\": {…}}'. This "
+                   "REPLACES the whole blob — merge client-side first if the "
+                   "card already carries other keys (fetch it with `card`).")
+    g.add_argument("--extension-metadata-file", metavar="PATH",
+                   help="same, read from a file (or - for stdin) — use this "
+                   "when the JSON is too big or too quote-heavy for argv")
+    g.add_argument("--clear-extension-metadata", action="store_true",
+                   help="write NULL over the card's extension_metadata")
 
     p = sub.add_parser(
         "card-prs",
@@ -682,6 +773,27 @@ def main(argv=None):
         call(base, "PUT", build_path("api", "pipelines", args.name),
              body={"toml": toml_text})
         return
+    if cmd == "pipeline-compose":
+        enabled = [sid.strip() for sid in args.enabled_ids.split(",") if sid.strip()]
+        if not enabled:
+            print("--enabled-ids needs at least one stage id", file=sys.stderr)
+            sys.exit(2)
+        body = {"enabled_ids": enabled}
+        if args.executor is not None:
+            body["executor"] = args.executor
+        if args.model is not None:
+            body["model"] = args.model
+        stage_agents = parse_stage_pairs(args.stage_agent, "--stage-agent")
+        if stage_agents:
+            body["stage_agents"] = stage_agents
+        stage_models = parse_stage_pairs(args.stage_model, "--stage-model")
+        if stage_models:
+            body["stage_models"] = stage_models
+        if args.custom_text is not None:
+            body["custom_text"] = args.custom_text
+        call(base, "POST", build_path("api", "pipelines", args.name, "compose"),
+             body=body)
+        return
     if cmd == "projects":
         call(base, "GET", "/api/projects")
         return
@@ -744,6 +856,11 @@ def main(argv=None):
             body["parent_card_id"] = args.parent_card_id
         if args.parent_position is not None:
             body["parent_position"] = args.parent_position
+        extension_metadata = read_extension_metadata(args)
+        if extension_metadata is not None:
+            body["extension_metadata"] = extension_metadata
+        if args.clear_extension_metadata:
+            body["clear_extension_metadata"] = True
         call(base, "PATCH", build_path("api", "cards", args.card_id), body=body)
         return
 

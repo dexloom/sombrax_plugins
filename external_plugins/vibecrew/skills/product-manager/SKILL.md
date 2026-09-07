@@ -15,8 +15,9 @@ description: >-
   use it proactively when a build request is vague, bundles several concerns,
   or leaves design decisions open — surface and resolve those gaps here, then
   capture the result as a card. Every card is classified via the
-  `classify-task` skill (family + complexity tier) and carries the routed
-  pipeline by default; a multi-deliverable brief or roadmap is decomposed into
+  `classify-task` skill (main agent + complexity tier → Basic / Planned / Async
+  plus per-step agent and model bindings) and carries the routed pipeline by
+  default; a multi-deliverable brief or roadmap is decomposed into
   LANES — a parent epic, sub-cards, and `blocking` relationships — so the
   orchestrator can run independent chains in parallel. Do NOT use it to write
   the implementation plan
@@ -129,22 +130,24 @@ the spec *before* it lands on the board.
 ### 5. Classify and route the card
 
 With the spec drafted, invoke the **`classify-task`** skill
-(`vibecrew:classify-task`): it resolves the pipeline **family** first (OpenCode
-vs Claude Code, from the executor ladder — never mixed), scores five bounded
-axes to a complexity tier (trivial / light / medium / heavy), and returns the
-routed pipeline, the stage toggles, and the one-line `**Routing:**` record.
-Render that line under the spec in the same inline review — the user corrects
-a wrong tier or family with one word, the same way they correct a wrong scope
-bullet. Overrides, and only these: a pipeline / executor / model / tier the
-**user named** wins outright (note the disagreement if the rubric says
-otherwise) — this is how a **Pi** card is filed (Pi is explicit-ask-only and
-uncalibrated; `classify-task` never auto-routes to it, so it appears only when
-the user names a `async-pi-*` pipeline or `PI`/`PI_HEADED` executor) — and "just
-the spec, don't file it" skips routing along with the card. **Codex** is the
-fourth family (`async-codex-*` pipelines, `CODEX`/`CODEX_HEADED` executor): it
-is uncalibrated too (n = 0), but unlike Pi it IS auto-routed whenever the
-executor ladder resolves to Codex — an operator whose only subscription is
-ChatGPT must get a working route without naming a pipeline every time.
+(`vibecrew:classify-task`): it resolves the **main agent** first (Claude Code /
+OpenCode / Codex / Pi, from the executor ladder), scores five bounded axes to a
+complexity tier (trivial / light / medium / heavy), maps that tier to a pipeline
+type (`Basic` / `Planned` / `Async`), and returns the per-step agent and model
+bindings, the stage toggles, and the one-line `**Routing:**` record. Render that
+line under the spec in the same inline review — the user corrects a wrong tier,
+main agent, or step binding with one word, the same way they correct a wrong
+scope bullet. Overrides, and only these: a pipeline / executor / model / tier /
+per-step binding the **user named** wins outright (note the disagreement if the
+rubric says otherwise) — this is how a **Pi** card is filed (Pi is
+explicit-ask-only and uncalibrated; `classify-task` never auto-routes to it as a
+main agent or as a step, so it appears only when the user names `PI`/`PI_HEADED`
+or asks for a step "on pi") — and "just the spec, don't file it" skips routing
+along with the card. **Codex** is uncalibrated too (n = 0), but unlike Pi it IS
+auto-routed whenever the executor ladder resolves to it, and it is the default
+`plan-review`/`code-review` agent on `Planned` and `Async` — an operator whose
+only subscription is ChatGPT must get a working route without naming a pipeline
+every time.
 
 ### 6. Resolve the project, then create the card
 
@@ -275,51 +278,80 @@ restructure existing cards as a side effect — if the brief implies touching
 other cards, surface that and let the user decide. (This client has no
 delete-card subcommand at all.)
 
-## Attaching a pipeline (routed by default, composed from the TOML)
+## Attaching a pipeline (routed by default, composed by the server)
 
 **Every card you file carries a pipeline by default** — the one `classify-task`
 routed in step 5 — so a roadmap can flow onto the board and ship without a
 human naming a pipeline per card. Only an explicit "no pipeline" / "just the
 spec" files a card bare (routing still runs and is reported, so the tier is on
-record). An operator-named pipeline ("run it with Async Fable", "use Basic")
-beats the routed choice — note the disagreement if the rubric scored
-differently.
+record). An operator-named pipeline ("run it with Basic", "use Planned") beats
+the routed choice — note the disagreement if the rubric scored differently.
 
-Compose the block **from the pipeline's TOML file**, inline:
+**Do not compose the block by hand.** The app exposes the composer that the
+New-issue dialog itself uses, so a card you file and a card the user files by
+hand are byte-identical for the same inputs:
 
-- **Source of truth.** `~/.vibecrew/pipelines/*.toml` — the plugin's deployed
-  overrides (`async-claude-*`, `async-opencode-*`, `basic`; user files shadow
-  the app's bundled pipelines by `name =`). Read the routed pipeline's file;
-  never invent or paraphrase stage text.
-- **Stage selection.** Start from the file's `default_enabled = true` set
-  (which already includes `merge` — squash-merge is the default delivery),
-  then apply `classify-task`'s toggles: tick `code-review` when the toggle
-  says `yes`; for `completion: pr` un-tick `merge` and tick `pr`. The
-  `orchestrate` stage is added **only** on an explicit auto-drive ask
-  ("execute this", "auto-drive it") — never by default, never by routing.
-- **Block shape** (the grammar lives in `CLAUDE.md` — follow it exactly):
-  start/end markers, `## Pipeline` heading, the order-instruction line, the
-  pin bullets (executor pin first, then model pin, both only when pinned),
-  then one **numbered** item `N. <stage prompt>` per selected stage in the
-  file's order, with `{{DELEGATE}}` / `{{model_name}}` rendered from the
-  TOML's `subagent` / `[models]` values.
-- **Executor pin.** Basic has no executor binding — always add the executor-pin
-  line for the resolved family (`CLAUDE_CODE_HEADED` / `OPENCODE_HEADED` /
-  `PI_HEADED` / `CODEX_HEADED`) on a Basic card. Async pipelines carry their family in the TOML's
-  `agent =`; add the pin line when the user named an executor explicitly.
-- **Model pin.** Only when the user names a model — and it must belong to the
-  card's pipeline family (OpenCode/Pi: MiniMax / GLM / Kimi; Claude Code:
-  Sonnet / Opus / Fable; Codex: GPT-5.6 sol / terra / luna — **never mixed**;
-  on the other three families Codex is only ever the reviewer). Use
-  the model-pin template from `CLAUDE.md`. A family contradiction is surfaced,
-  not composed.
-- **Placement.** The `**Routing:**` line from step 5, then the composed block,
-  appended to the end of the rendered spec (after the last section, e.g.
-  Risks) before writing the description file — the Routing line sits directly
-  **above** the block, outside the delimiters.
+```
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/vibecrew_api.py pipeline-compose <Basic|Planned|Async> \
+  --enabled-ids <the ticked stage ids, comma-separated> \
+  --executor <main agent raw value> \
+  [--model <main-loop model>] \
+  [--stage-agent <stage>=<RAW> …] [--stage-model <stage>=<model id> …] \
+  [--custom-text "<extra instructions>"]
+```
 
-Report the routed (or operator-named) pipeline, the family, the ticked stages,
-and any pins, so the user can see the block matches the routing in one glance.
+It writes nothing and returns `{block, extension_metadata, steps}`. Then:
+
+1. Write the description file: the rendered spec, then the `**Routing:**` line
+   from step 5, then the returned `block` verbatim (the Routing line sits
+   directly **above** the block, outside its delimiters).
+2. `card-create … --description-file <tmpfile>` as in *Creating the card*.
+3. `python3 …/vibecrew_api.py card-update <new card id> --extension-metadata
+   '<the returned extension_metadata JSON>'` — this is what makes the card's
+   pipeline editable in the app and what the launcher reads for the executor,
+   the model, and the subagent definitions. A card with a block but no metadata
+   still runs, but the app cannot re-open its pipeline editor on the right
+   selections. Use `--extension-metadata-file` when the JSON is big or
+   quote-heavy.
+
+Details that decide the flags:
+
+- **Source of truth.** The server's registry: the bundled `Basic` / `Planned` /
+  `Async` plus any user pipelines in `~/.vibecrew/pipelines/*.toml` (user files
+  shadow bundled pipelines by `name =`). `vibecrew_api.py pipelines` lists them
+  and `pipeline <name>` returns the stage roster with each stage's resolved
+  binding. Never invent or paraphrase stage text, and never guess a name —
+  removed per-model pipeline names 404.
+- **Stage selection (`--enabled-ids`).** Start from the pipeline's
+  `default_enabled = true` set — `Basic`: `merge`; `Planned`:
+  `spec, plan, plan-review, merge`; `Async`:
+  `spec, plan, plan-review, code, merge` — then apply `classify-task`'s
+  toggles: tick `code-review` when the toggle says `yes`; for `completion: pr`
+  drop `merge` and add `pr`. The `orchestrate` stage is added **only** on an
+  explicit auto-drive ask ("execute this", "auto-drive it") — never by default,
+  never by routing.
+- **Executor (`--executor`).** Always pass it: the three bundled pipelines are
+  agent-neutral, so the main agent is the card's, not the pipeline's. Use the
+  raw value for the agent `classify-task` resolved — `CLAUDE_CODE_HEADED`,
+  `OPENCODE_HEADED`, `CODEX_HEADED`, `PI_HEADED`.
+- **Per-step bindings (`--stage-agent` / `--stage-model`).** Only for stages
+  that carry a delegable role (`spec`, `plan`, `plan-review`, `code`,
+  `code-review`) — the endpoint rejects a binding on a role-less stage with a
+  400. `Planned` and `Async` already bind both reviews to `CODEX`, so leave them
+  alone unless the user asked otherwise; pass `--stage-agent plan-review=` (empty
+  value) to clear a shipped binding and let the step inherit the main loop.
+  Model ids for OpenCode and Pi steps must be provider-qualified
+  (`zai-coding-plan/glm-5.2`, `minimax/MiniMax-M3`, `kimi-coding/k3`).
+- **Model pin (`--model`).** Only when the user names a model for the card as a
+  whole; it pins the main loop. A model named **for a step** is a
+  `--stage-model` on that stage, and it is validated against the agent **that
+  step** is bound to — pinning `gpt-5.6-sol` on a step means that step runs on
+  Codex, `opus` means Claude Code. If the user pairs a model with an agent that
+  cannot run it, surface the contradiction instead of composing it.
+
+Report the routed (or operator-named) pipeline type, the main agent, the
+per-step bindings, the ticked stages, and any pins, so the user can see the
+block matches the routing in one glance.
 
 ## Lanes — decompose big work so it can run in parallel
 

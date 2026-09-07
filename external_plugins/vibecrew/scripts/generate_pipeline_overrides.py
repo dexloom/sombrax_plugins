@@ -25,26 +25,21 @@ import argparse
 import pathlib
 import sys
 
-# source filename -> output filename. Identity: the app's own TOMLs are already
-# named `async-claude-*` / `async-opencode-*` / `async-pi-*` / `async-codex-*`,
-# and the `name =` values are deliberately NOT touched — the app's registry
-# shadows bundled pipelines by `name =`, so changing one would stop overriding
-# the bundled pipeline and leave a stale duplicate in the picker.
-ASYNC_FILES = {
+# The app ships exactly three bundled pipeline types — `Basic` (`basic.toml`),
+# `Planned` (`planned.toml`) and `Async` (`async.toml`). The twelve per-model
+# variants this set replaced are gone: a single agent-neutral `async.toml`
+# carries their bindings per step, in its `[agents]` / `[models]` tables.
+#
+# Filenames are identity mappings and the `name =` values are deliberately NOT
+# touched — the app's registry shadows bundled pipelines by `name =`, so
+# changing one would stop overriding the bundled pipeline and leave a stale
+# duplicate in the picker.
+PIPELINE_FILES = {
     name: name
     for name in (
-        "async-claude-sonnet.toml",
-        "async-claude-opus.toml",
-        "async-claude-fable.toml",
-        "async-opencode-glm.toml",
-        "async-opencode-glm-minimax.toml",
-        "async-opencode-kimi-minimax.toml",
-        "async-pi-glm.toml",
-        "async-pi-glm-minimax.toml",
-        "async-pi-kimi-minimax.toml",
-        "async-codex-terra.toml",
-        "async-codex-sol-terra.toml",
-        "async-codex-sol.toml",
+        "async.toml",
+        "basic.toml",
+        "planned.toml",
     )
 }
 
@@ -54,22 +49,32 @@ HEADER = (
     "# scripts/generate_pipeline_overrides.py. Do not hand-edit; regenerate.\n\n"
 )
 
-# Canonical clauses that MUST survive upstream. A miss means the app's bundled
-# TOMLs lost something these overrides exist to carry — fail loudly rather than
-# ship a silently weaker pipeline.
-ASYNC_ASSERT_CONTAINS = [
-    # The four-family coder rule, including Codex's own step-up rung.
-    "on a Codex pipeline gpt-5.6-terra steps up to gpt-5.6-sol",
-    "PLAN-FACTS:",
-    "PLAN-GATE:",
-    "CODER-MODEL:",
-    "merge-record",
-]
-
-BASIC_ASSERT_CONTAINS = [
-    "PLAN-FACTS:",
-    "merge-record",
-]
+# Canonical clauses that MUST survive upstream, per file. A miss means the app's
+# bundled TOMLs lost something these overrides exist to carry — fail loudly
+# rather than ship a silently weaker pipeline.
+#
+# `{{DELEGATE}}` is the per-step delegation placeholder, so only the delegating
+# types (`Async`, `Planned`) assert it; `CODER-MODEL:` belongs to the `code`
+# stage, which only `Async` has (Planned keeps implementation in the main loop).
+ASSERT_CONTAINS = {
+    "async.toml": [
+        "PLAN-FACTS:",
+        "PLAN-GATE:",
+        "{{DELEGATE}}",
+        "CODER-MODEL:",
+        "merge-record",
+    ],
+    "planned.toml": [
+        "PLAN-FACTS:",
+        "PLAN-GATE:",
+        "{{DELEGATE}}",
+        "merge-record",
+    ],
+    "basic.toml": [
+        "PLAN-FACTS:",
+        "merge-record",
+    ],
+}
 
 
 def assert_contains(text: str, needles, fname: str) -> str:
@@ -98,11 +103,9 @@ def main() -> None:
     args.out.mkdir(parents=True, exist_ok=True)
     header = HEADER if args.header == "plugin" else ""
 
-    outputs = dict(ASYNC_FILES)
-    outputs["basic.toml"] = "basic.toml"
-    for src_name, out_name in outputs.items():
+    for src_name, out_name in PIPELINE_FILES.items():
         src = (args.source / src_name).read_text(encoding="utf-8")
-        needles = BASIC_ASSERT_CONTAINS if src_name == "basic.toml" else ASYNC_ASSERT_CONTAINS
+        needles = ASSERT_CONTAINS[src_name]
         (args.out / out_name).write_text(
             header + assert_contains(src, needles, src_name), encoding="utf-8")
         print(f"generated {out_name}  (from {src_name})")

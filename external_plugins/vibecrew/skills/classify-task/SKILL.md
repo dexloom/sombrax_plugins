@@ -1,36 +1,38 @@
 ---
 name: classify-task
 description: >-
-  Route a VibeCrew card: resolve the pipeline FAMILY first (OpenCode vs Claude
-  Code — decided by the executor, never mixed), then score the task on five
-  bounded axes to a complexity tier — trivial / light / medium / heavy — and
-  map tier → pipeline within that family (Basic / Async Sonnet / Async Opus /
-  Async OpenCode GLM), plus the stage toggles (plan-review yes-vs-gate,
-  code-review, merge-vs-pr) and the one-line `**Routing:**` record for the
-  card. Use this skill WHENEVER a vibecrew card is being created or a pipeline
-  attached and the operator did NOT explicitly name a pipeline — the
-  `product-manager` skill and the `product` agent invoke it right after the
-  spec is drafted. It is the SINGLE SOURCE OF TRUTH for the family rule, the
-  rubric, the tier→pipeline maps, the toggle rules, and the Routing line
-  format. It does NOT compose the `## Pipeline` block (the caller does, from
-  the pipeline TOML), write specs, or create cards. An operator-named
-  pipeline, executor, model, or tier ALWAYS overrides this skill's verdict —
-  classification fills silence, it never argues.
+  Route a VibeCrew card: resolve the MAIN AGENT first (Claude Code / OpenCode /
+  Codex / Pi — decided by the executor), then score the task on five bounded
+  axes to a complexity tier — trivial / light / medium / heavy — and map tier →
+  pipeline type (Basic / Planned / Async) plus the per-step agent and model
+  defaults, the stage toggles (plan-review yes-vs-gate, code-review,
+  merge-vs-pr) and the one-line `**Routing:**` record for the card. Use this
+  skill WHENEVER a vibecrew card is being created or a pipeline attached and
+  the operator did NOT explicitly name a pipeline — the `product-manager` skill
+  and the `product` agent invoke it right after the spec is drafted. It is the
+  SINGLE SOURCE OF TRUTH for the main-agent ladder, the rubric, the tier→type
+  map, the default per-step binding table, the toggle rules, and the Routing
+  line format. It does NOT compose the `## Pipeline` block (the caller does,
+  through `POST /api/pipelines/:name/compose`), write specs, or create cards.
+  An operator-named pipeline, executor, model, per-step binding, or tier ALWAYS
+  overrides this skill's verdict — classification fills silence, it never
+  argues.
 ---
 
-# classify-task — family first, then tier, telemetry-grounded
+# classify-task — main agent first, then tier, telemetry-grounded
 
 ## What this skill is for
 
 Every card pays for the process it runs, not the process it needs. This skill
 converts the task text plus the executor context into one explicit, auditable
-routing decision at card creation — family, pipeline, toggles — and records it
-on the card. The evidence behind every threshold here is the measured board
-telemetry summarized in `reference/routing.md`; when you change a rule, change
-it there too, with numbers.
+routing decision at card creation — main agent, pipeline type, per-step
+bindings, toggles — and records it on the card. The evidence behind every
+threshold here is the measured board telemetry summarized in
+`reference/routing.md`; when you change a rule, change it there too, with
+numbers.
 
-You classify; you do not persist. Hand the family, tier, toggles, and Routing
-line back to your caller.
+You classify; you do not persist. Hand the main agent, tier, pipeline type,
+per-step bindings, toggles, and Routing line back to your caller.
 
 ## Inputs
 
@@ -44,52 +46,67 @@ line back to your caller.
   exploration session just to classify — if an axis can't be scored from the
   text, score it 1 and say so in the report.
 
-## Step 1 — resolve the FAMILY (before any scoring)
+## Step 1 — resolve the MAIN AGENT (before any scoring)
 
-VibeCrew pipelines come in four families, split by executor, **never mixed**:
+Every card runs on one **main agent** — the executor its main loop launches
+with. There are four, and each one can also be bound to an individual step:
 
-| Family | Executor | Build models (spec/plan/code) | Pipelines |
-|---|---|---|---|
-| **Claude Code** | `CLAUDE_CODE_HEADED` | Sonnet / Opus / Fable — only these | Async Sonnet, Async Opus, Async Fable |
-| **OpenCode** | `OPENCODE_HEADED` | MiniMax / GLM / Kimi — only these | Async OpenCode GLM, Async OpenCode GLM-MiniMax, Async OpenCode Kimi-MiniMax |
-| **Pi** *(explicit-ask-only, uncalibrated)* | `PI_HEADED` | GLM / Kimi / MiniMax — only these | Async Pi GLM, Async Pi GLM-MiniMax, Async Pi Kimi-MiniMax |
-| **Codex** *(uncalibrated, n=0 — but auto-routable)* | `CODEX_HEADED` | GPT-5.6 sol / terra / luna — only these | Async Codex Terra, Async Codex Sol-Terra, Async Codex Sol |
+| Main agent | Executor | Model catalog |
+|---|---|---|
+| **Claude Code** | `CLAUDE_CODE_HEADED` | Sonnet / Opus / Fable |
+| **OpenCode** | `OPENCODE_HEADED` | `zai-coding-plan/glm-5.2`, `minimax/MiniMax-M3`, `kimi-coding/k3` |
+| **Pi** *(explicit-ask-only, uncalibrated)* | `PI_HEADED` | same provider-qualified ids as OpenCode |
+| **Codex** *(uncalibrated, n=0 — but auto-routable)* | `CODEX_HEADED` | `gpt-5.6-sol` / `gpt-5.6-terra` / `gpt-5.6-luna` |
 
-- **Basic** is family-neutral (no executor binding, no model table): it runs
-  on whichever executor the card pins or the config defaults to.
-- **Codex is the shared reviewer in every family, and a build model only on
-  its own** — `plan-review-codex` / `code-review` run on Codex in EVERY family;
-  on Claude Code / OpenCode / Pi cards that is the ONLY thing Codex does.
-- **The never-mix invariant:** no stage, pin, or advice may name a model from
-  another family. A Claude Code card never runs a GLM coder; an OpenCode
-  card never runs an Opus coder. If the operator's words contradict the
-  family (e.g. names an OpenCode pipeline *and* an Opus model), surface the
-  contradiction in your report and follow the pipeline's family — never
-  compose a mixed binding.
-- **Pi is explicit-ask-only and uncalibrated.** It shares OpenCode's model
-  set (GLM / Kimi / MiniMax, via the `pi` CLI) but has **no telemetry** (n=0)
-  and is **not** on the resolution ladder below and **not** in the tier→pipeline
-  maps in Step 3 — you NEVER auto-route to Pi. An operator selects Pi ONLY by
-  naming a `async-pi-*` pipeline or a `PI`/`PI_HEADED` executor (step 1/2 of the
-  ladder); an explicit Pi ask always wins, the same override rule as any family.
-- **Codex is uncalibrated but auto-routable.** It has no telemetry either
-  (n = 0), but unlike Pi it IS on the ladder and IS in the tier→pipeline map:
-  an operator whose default executor is Codex — typically because a ChatGPT
-  subscription is the only thing they have — must get a working route without
-  naming a pipeline every time. Say "Codex family, uncalibrated (n=0)" in the
-  report so the choice is visible.
+- The three bundled pipelines are **agent-neutral**: `Basic`, `Planned`, and
+  `Async` carry no executor binding and no model table, so every delegable step
+  inherits the main agent unless a step is bound to another one. The main agent
+  is therefore the seed for the whole card, not a pipeline property.
+- **A step may run on a different agent than the main loop.** `[agents]` names
+  the agent per stage id, `[models]` the model; the runtime renders a one-shot
+  clause on that step's own CLI, run from the main loop. That is a supported,
+  first-class configuration — spec on Claude Code, plan on Codex, code on Pi is
+  a legal card.
+- **A model belongs to the agent of the step it is bound to.** Pinning
+  `gpt-5.6-sol` on a step means that step runs on Codex; pinning `opus` on a
+  step means Claude Code. If the operator's words pair a model with an agent
+  that cannot run it, surface the contradiction in your report rather than
+  composing it.
+- **Codex is the default reviewer.** `Planned` and `Async` ship with
+  `plan-review` and `code-review` bound to `CODEX`. Leave them there unless the
+  operator says otherwise; on a Codex main loop they are simply same-agent.
+- **Pi is explicit-ask-only and uncalibrated.** It shares OpenCode's provider
+  catalog (GLM / Kimi / MiniMax via the `pi` CLI) but has **no telemetry**
+  (n = 0), is **not** on the resolution ladder below, and is never auto-routed —
+  as a main agent or as a step binding. An operator selects Pi ONLY by naming a
+  `PI`/`PI_HEADED` executor or asking for a step "on pi"; an explicit Pi ask
+  always wins, the same override rule as any agent.
+- **Codex is uncalibrated but auto-routable.** It has no completed-card
+  telemetry either (n = 0), but unlike Pi it IS on the ladder and IS in the
+  default binding table: an operator whose default executor is Codex — typically
+  because a ChatGPT subscription is the only thing they have — must get a working
+  route without naming a pipeline every time. Say "Codex main loop, uncalibrated
+  (n=0)" in the report so the choice is visible.
 
 Resolution ladder, first hit wins:
 
-1. **Operator names a pipeline** → that pipeline's family, done (a `async-pi-*`
-   name → Pi; a `async-codex-*` name → Codex).
-2. **Operator names an executor or a family model** ("on opencode", "with
-   glm", "on sonnet", "on pi", "on codex", "with gpt-5.6") → that family. A
-   model name implies its family.
+1. **Operator names a pipeline** → that pipeline's own `agent =` when it has
+   one (user pipelines may pin one); the bundled three do not, so fall through
+   to the next rung for the main agent and keep the named pipeline as the type.
+2. **Operator names an executor or a model** ("on opencode", "with glm", "on
+   sonnet", "on pi", "on codex", "with gpt-5.6") → that agent. A model name
+   implies the agent that runs it.
 3. **The config's default executor** (`vibecrew_api.py config` →
    `executor_profile`): `OPENCODE*` → OpenCode; `CLAUDE*` → Claude Code;
-   `CODEX*` → Codex.
+   `CODEX*` → Codex; `PI*` → Pi.
 4. Nothing resolvable → **Claude Code** (the app's own final fallback).
+
+**Per-step overrides are first class.** An operator naming an agent or a model
+*for a step* — "plan on codex", "code on pi", "review with sonnet" — is not a
+main-agent signal and must not move rung 2. Record it as a per-step binding on
+that stage id and carry it into the Routing line's `steps:` clause; it overrides
+the default binding table in Step 3 exactly the way a named pipeline overrides
+the tier map.
 
 ## Step 2 — the five axes, scored 0 / 1 / 2
 
@@ -115,9 +132,9 @@ tokens; misrouting down risks rework, the expensive failure.
 
 **Hard overrides**, applied around the score:
 
-1. **Operator names a pipeline, model, executor, or tier** → use it verbatim;
-   still score and note any disagreement ("routed Async Fable by operator;
-   rubric says medium/4"). Never argue, never silently re-route.
+1. **Operator names a pipeline, model, executor, tier, or per-step binding** →
+   use it verbatim; still score and note any disagreement ("routed Basic by
+   operator; rubric says medium/4"). Never argue, never silently re-route.
 2. **Force-trivial:** typo / rename / version bump / doc tweak / dependency
    bump, or a fix whose exact location and change are both named — *and*
    R = 0 → tier `trivial`.
@@ -128,35 +145,60 @@ tokens; misrouting down risks rework, the expensive failure.
 Total = S+D+R+N+V. **trivial**: ≤ 1 with D = 0 and R = 0 · **light**: ≤ 3 ·
 **medium**: 4–6 · **heavy**: ≥ 7.
 
-## Step 3 — tier → pipeline, within the family
+## Step 3 — tier → pipeline type, then the default bindings
 
 Telemetry receipts (details in `reference/routing.md`): Basic ships a light
-card for ~191K fresh tokens; full ceremony on Async OpenCode GLM costs ~507K
-fresh (the old "ceremony tax" was a model-price artifact); GLM-5.2 is the
-most efficient measured coder; MiniMax-M3 is the weak arm (worst fresh/LOC,
-needed a follow-up debug card); Async Fable and the Kimi arm have **zero**
-completed-card data. Hence:
+card for ~191K fresh tokens; a full fan-out costs ~507K fresh (the old
+"ceremony tax" was a model-price artifact); GLM-5.2 is the most efficient
+measured coder; MiniMax-M3 is the weak arm (worst fresh/LOC, needed a follow-up
+debug card); Fable and the Kimi arm have **zero** completed-card data. Hence:
 
-| Tier | Claude Code family | OpenCode family | Codex family *(uncalibrated)* |
+| Tier | Pipeline type | Shape |
+|---|---|---|
+| **trivial** | **Basic** + executor pin | default state: implement + merge, no delegation |
+| **light** | **Planned** | delegated spec → plan → plan review; the main loop writes the code |
+| **medium** | **Async** | full fan-out: spec → plan → plan review → code → code review |
+| **heavy** | **Async** | + code-review ticked, `pr` instead of `merge` |
+
+- **`light → Planned` is a deliberate re-route** and the only routing-outcome
+  change of the unified-pipeline card: a light task used to buy a full fan-out
+  on a cheaper coder, and now buys delegated planning with main-loop coding.
+  It is **flagged for recalibration** — see `reference/routing.md` §7 — so say
+  "light → Planned (recalibration pending)" in the report until telemetry lands.
+- Pipeline source of truth: the app's bundled set plus `~/.vibecrew/pipelines/*.toml`
+  (user files shadow bundled pipelines by `name =`). Confirm with
+  `vibecrew_api.py pipelines` when unsure; never invent stages, and never guess
+  a name — the removed per-model pipeline names no longer resolve.
+
+### Default per-step bindings
+
+Once the type is chosen, bind the delegable steps. These defaults transpose the
+per-model pipelines this card's design replaced; they are **defaults, not
+rules** — any operator word about a step wins outright.
+
+| Main agent | spec / plan | coder (`code`) | reviews (`plan-review`, `code-review`) |
 |---|---|---|---|
-| **trivial** | **Basic** (default state: implement + merge) | **Basic** + executor pin `OPENCODE_HEADED` | **Basic** + executor pin `CODEX_HEADED` |
-| **light** | **Async Sonnet** | **Async OpenCode GLM** | **Async Codex Terra** |
-| **medium** | **Async Opus** | **Async OpenCode GLM** | **Async Codex Sol-Terra** |
-| **heavy** | **Async Opus** + code-review, `pr` instead of `merge` | **Async OpenCode GLM** + code-review, `pr` instead of `merge` | **Async Codex Sol** + code-review, `pr` instead of `merge` |
+| **Claude Code** | `sonnet` (light) · `opus` (medium, heavy) | `sonnet` (light, medium) · `opus` (heavy) | `CODEX` |
+| **OpenCode** | `zai-coding-plan/glm-5.2`, effort `high` | `zai-coding-plan/glm-5.2` | `CODEX` |
+| **Pi** *(explicit ask only)* | `zai-coding-plan/glm-5.2`, effort `high` | `zai-coding-plan/glm-5.2` | `CODEX` |
+| **Codex** *(uncalibrated)* | `gpt-5.6-terra` (light) · `gpt-5.6-sol` (medium, heavy) | `gpt-5.6-terra` (light, medium) · `gpt-5.6-sol` (heavy) | `CODEX` (same agent) |
 
-- **The Codex column is uncalibrated (n = 0).** It mirrors the other families'
-  shape rather than any measurement: Terra for light, a Sol-reasoning /
-  Terra-coding split for medium, all-Sol for heavy. Route to it when the ladder
-  resolves to Codex and say the tier is unmeasured; promote once telemetry
-  lands.
-- **Async Fable, GLM-MiniMax, and Kimi-MiniMax are explicit-ask arms only** —
-  Fable and Kimi are uncalibrated (n = 0) and MiniMax is measured-weak; route
-  to them only when the operator names them, and say so in the report.
-- Pipeline source of truth: `~/.vibecrew/pipelines/*.toml` (the plugin's
-  deployed overrides; user files shadow bundled pipelines by `name =`). If a
-  routed pipeline file is missing there AND the app's bundled set lacks it,
-  route one tier up to the nearest existing pipeline and report it — never
-  invent stages.
+- **OpenCode and Pi model ids are provider-qualified.** The bundled pipelines
+  carry no `[models] provider`, so a bare `glm-5.2` would be passed through
+  unresolved — always write `zai-coding-plan/glm-5.2`. The `kimi-coding/k3` and
+  `minimax/MiniMax-M3` arms are explicit-ask only (Kimi uncalibrated, MiniMax
+  measured-weak); Claude Code's `fable` is likewise explicit-ask (n = 0).
+- **A step with no model binding inherits.** Same agent as the main loop ⇒ it
+  inherits the card's model; a different agent ⇒ that CLI's own default. Leaving
+  a step unbound is a legitimate choice — bind only what the tier table above
+  or the operator actually calls for.
+- **Reviews stay on Codex** unless the operator says otherwise; that is already
+  the shipped `[agents]` default of `Planned` and `Async`, so it needs no
+  `--stage-agent` flag.
+- **Effort is TOML-only.** There is no per-step effort control in any dialog or
+  in the compose endpoint, so `effort: high` for an OpenCode/Pi spec or plan is
+  something you **record in the report** (and an operator can pin in a user
+  pipeline's `[effort]` table) — never something you pass as a binding.
 
 ## Step 4 — stage toggles (orthogonal to tier)
 
@@ -184,9 +226,12 @@ Report each explicitly; the caller applies them against the pipeline's
   it) for R ≤ 1; **`pr`** for heavy or R = 2 — un-tick `merge`, tick `pr`, a
   human gate before landing.
 - **coder model:** NOT decided here — the runtime CODER-MODEL check binds it
-  after the plan exists, within the family (sonnet→opus / MiniMax→GLM step-up
-  on blown plans). Record the pipeline's default in the Routing line as
-  `coder: post-plan(<default>)`.
+  after the plan exists, stepping up **within the bound agent's own catalog**
+  (Claude Code: sonnet → opus; OpenCode/Pi: MiniMax-M3 → glm-5.2; Codex:
+  gpt-5.6-terra → gpt-5.6-sol) when the plan blows its envelope. Record the
+  Step 3 default in the Routing line as `coder: post-plan(<agent>/<model>)`,
+  naming the agent the `code` step is bound to. `Planned` has no `code` stage —
+  its coder is the main loop, so record `coder: main-loop(<main agent>)`.
 - **orchestrate:** not yours — the auto-drive opt-in requires the operator's
   explicit ask to execute, unchanged by routing.
 
@@ -196,14 +241,28 @@ Hand back exactly one line, placed in the card description directly **above**
 the `## Pipeline` block (outside its delimiters):
 
 ```
-**Routing:** <tier> → <pipeline> [<Claude Code|OpenCode>] — S<s> D<d> R<r> N<n> V<v> = <total><; forced by <trigger|operator>>; spec: <adopt|write|skip>; plan-review: <yes|gate>; code-review: <yes|no>; completion: <merge|pr>; coder: post-plan(<default model>)
+**Routing:** <tier> → <Basic|Planned|Async> [<main agent>] — S<s> D<d> R<r> N<n> V<v> = <total><; forced by <trigger|operator>>; spec: <adopt|write|skip>; plan-review: <yes|gate>; code-review: <yes|no>; completion: <merge|pr>; coder: post-plan(<agent>/<model>)<; steps: spec=<agent>/<model>, plan=…, plan-review=…, code=…, code-review=…>
 ```
 
-Example:
+The bracket is the **main agent**, not a pipeline property. Append the `steps:`
+clause **only when at least one step differs from the main agent** (a different
+agent, or a model the main loop would not have used); list just those steps,
+`<agent>/<model>` each, `<agent>/-` when only the agent is bound. Omit the whole
+clause when every step inherits.
+
+Examples:
 
 ```
-**Routing:** medium → Async OpenCode GLM [OpenCode] — S2 D1 R0 N0 V1 = 4; spec: write; plan-review: gate; code-review: no; completion: merge; coder: post-plan(glm-5.2)
+**Routing:** medium → Async [OpenCode] — S2 D1 R0 N0 V1 = 4; spec: write; plan-review: gate; code-review: no; completion: merge; coder: post-plan(OpenCode/zai-coding-plan/glm-5.2); steps: plan-review=Codex/-, code-review=Codex/-
 ```
+
+```
+**Routing:** medium → Async [Claude Code] — S2 D1 R1 N1 V1 = 6; spec: write; plan-review: gate; code-review: yes; completion: merge; coder: post-plan(Pi/kimi-coding/k3); steps: plan=Codex/gpt-5.6-sol, plan-review=OpenCode/-, code=Pi/kimi-coding/k3, code-review=Codex/-
+```
+
+The second line is the card's own worked example — a Claude Code main loop with
+planning on Codex, plan review on OpenCode, and coding on Pi — and every one of
+those bindings is an operator ask, not a default.
 
 The runtime reads two things from it: `plan-review: yes` forces the PLAN-GATE
 open, and the tier is the plan-size envelope the escalation tripwire checks.
@@ -222,25 +281,39 @@ case".
 
 - *"401 from x.ai when updating thesis — we should use `XAI_API_KEY` env var"*
   → S0 D0 R0 N0 V0 = 0 → **trivial → Basic** (default state: implement +
-  merge). (Historically this card ran a spec stage plus a coder subagent — pure
-  overhead.)
+  merge), executor pinned to the resolved main agent. (Historically this card
+  ran a spec stage plus a coder subagent — pure overhead.)
 - *"Markets page doesn't render content"* → S0 D1 (cause unknown) R0 N0 V0 =
-  1, D ≠ 0 → **light**; Claude executor → **Async Sonnet**, spec: write,
-  plan-review: gate.
+  1, D ≠ 0 → **light**; Claude Code main agent → **Planned [Claude Code]**,
+  spec/plan on `sonnet`, reviews on Codex (the shipped default), spec: write,
+  plan-review: gate, coder: main-loop(Claude Code). Flag the light → Planned
+  re-route as recalibration-pending.
 - *"Add Limitless as a fourth venue, cloning the `polymarket/` package; L0
-  probe first"* → S2 D1 R0 N0 V1 = 4 → **medium**; OpenCode default executor
-  → **Async OpenCode GLM [OpenCode]**, spec: adopt (full PM spec already on the
-  card), code-review: no.
+  probe first"* → S2 D1 R0 N0 V1 = 4 → **medium → Async [OpenCode]** (default
+  executor), spec/plan and coder on `zai-coding-plan/glm-5.2`, reviews on Codex,
+  spec: adopt (full PM spec already on the card), code-review: no.
 - *"Backtest replay engine + depth-aware fill sim + reports/CLI"* → S2 D2 R1
-  N2 V2 = 9 → **heavy → Async Opus [Claude Code]** + code-review, completion:
-  pr. (Async Fable only if the operator names it — uncalibrated.)
+  N2 V2 = 9 → **heavy → Async [Claude Code]** + code-review, completion: pr,
+  spec/plan and coder on `opus`. (`fable` only if the operator names it —
+  uncalibrated.)
+- *"Rethink the pipeline architecture — spec on Claude, plan on codex with
+  gpt-5.6-sol, plan review on opencode, code on pi"* → the tier still comes from
+  the rubric, but every named step is a first-class per-step override: main
+  agent Claude Code (rung 2 is silent about the main loop, so the config default
+  or the fallback decides), and the `steps:` clause carries
+  `plan=Codex/gpt-5.6-sol, plan-review=OpenCode/-, code=Pi/-`. Pi is auto-routed
+  never, asked-for always.
 
 ## Report facts (hand these to your caller)
 
-- The **family** and which ladder rung resolved it.
+- The **main agent** and which ladder rung resolved it.
 - The tier, five axis scores and total, any override that fired, with
   one-phrase evidence.
-- The routed pipeline and every stage toggle.
+- The routed pipeline type and every stage toggle.
+- The **per-step bindings**: agent and model per delegable stage id, marked
+  `default` (from the Step 3 table), `operator` (an explicit ask), or `inherit`
+  — plus any `effort` you would have set, since effort is TOML-only and cannot
+  be passed as a binding.
 - The composed Routing line, verbatim.
-- Any axis scored 1 for lack of signal, named plainly; any operator/family
-  contradiction you surfaced.
+- Any axis scored 1 for lack of signal, named plainly; any contradiction you
+  surfaced between an operator's words and the agent a model belongs to.

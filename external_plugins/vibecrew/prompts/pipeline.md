@@ -54,16 +54,19 @@ stage re-checks this with an artifact gate (below); paperwork must never land
 on the base branch.
 
 **Routing line (if the card carries one):** a description line
-`**Routing:** <tier> → <pipeline> [<family>] — …` directly above the Pipeline
-block records the card's complexity classification — why *this* pipeline with
-*these* stages. It is **informational, not a directive**: the stage list
-already reflects it, so never re-classify or add/drop stages because of it. It
-has exactly three runtime effects: `plan-review: yes` forces the PLAN-GATE
-open (below), the tier is the plan-size envelope the escalation tripwire
-checks, and the family bounds every model decision — **OpenCode and Pi
-pipelines run MiniMax / GLM / Kimi models only; Claude Code pipelines run
-Sonnet / Opus / Fable models only; never mix them** (Codex appears in every
-family, but only ever as the reviewer).
+`**Routing:** <tier> → <Basic|Planned|Async> [<main agent>] — …` directly above
+the Pipeline block records the card's complexity classification — why *this*
+pipeline with *these* stages, and which agent each step was bound to. It is
+**informational, not a directive**: the stage list already reflects it, so never
+re-classify or add/drop stages because of it. It has exactly three runtime
+effects: `plan-review: yes` forces the PLAN-GATE open (below), the tier is the
+plan-size envelope the escalation tripwire checks, and the bracket names the
+**main agent** your loop runs on. **Each step's rendered clause names the agent
+and the model that step runs on** — a step bound to another agent is a one-shot
+on that agent's own CLI, run from your loop and relayed back. A model must
+belong to the agent of the step it is named for; the `steps:` clause of the
+Routing line, when present, lists exactly the steps that differ from the main
+agent.
 
 **Board access — the bundled client, with a curl fallback.** Every board operation in
 this prompt is `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/vibecrew_api.py <subcommand> …`
@@ -113,16 +116,18 @@ Notes for other agents or the operator go to card comments (`vibecrew_api.py com
   of the file; steps/files/open decisions from its Plan facts section, or count
   them yourself) — the next two stages read this line. If the planner's report
   **leads with `VK-ESCALATE:`**, relay it and stop (see *When to stop*).
-- **plan-review / plan-review-codex** (if listed) — **GATE FIRST**: if the plan
+- **plan-review** (if listed) — **GATE FIRST**: if the plan
   is under **40 KB** AND has **0 open decisions** AND the card's Routing line
   does not force it with `plan-review: yes`, **skip this stage** — report the
   single line `PLAN-GATE: plan-review skipped (<size> KB, <n> open decisions)`
   and move on; a small, closed plan does not repay an independent review, which
   routinely costs more than the plan itself. Otherwise report
-  `PLAN-GATE: plan-review running (…)` and **have codex review the plan** (run
-  codex as the reviewer — `codex exec --sandbox read-only "<review prompt>"
-  < /dev/null` over `IMPLEMENTATION_PLAN.md`, or the `codex-review-plan` skill
-  if available). Do **not** review it yourself. Resolve blockers and revise the
+  `PLAN-GATE: plan-review running (…)` and **delegate the review to the
+  `reviewer` role on the agent this stage binds** — Codex by default, in which
+  case that is `codex exec --sandbox read-only "<review prompt>" < /dev/null`
+  over `IMPLEMENTATION_PLAN.md` (or the `codex-review-plan` skill if
+  available); if the stage names another agent, run that agent's own read-only
+  one-shot instead. Do **not** review it yourself. Resolve blockers and revise the
   plan, then **re-check by resuming the same codex session** — `codex exec
   resume --last "We fixed your findings: … verify each is resolved" < /dev/null`
   — instead of paying a fresh review; codex already has the plan and its
@@ -143,13 +148,13 @@ Notes for other agents or the operator go to card comments (`vibecrew_api.py com
   of each step (or whenever a meaningful chunk is done) so progress is checkpointed
   and never lost; don't let a large amount of work pile up uncommitted.
   **If a stage delegates the coding to a subagent** (e.g. the `coder` agent /
-  `code-subagent` stage), run the **MODEL CHECK first**: bind the coder model
-  **within your pipeline's own family** — if the plan blew its envelope
-  (PLAN-FACTS ≥ 40 KB, or open design decisions surfaced during planning), step
-  the coder up one tier inside the family (Claude Code: sonnet → opus;
-  OpenCode/Pi: MiniMax-M3 → glm-5.2; a coder already at its family ceiling stays
-  put), **never** a model from another family; an operator's card-level model
-  pin always wins. Report the single line
+  `code` stage), run the **MODEL CHECK first**: bind the coder model **within
+  the bound agent's own catalog** — if the plan blew its envelope (PLAN-FACTS ≥
+  40 KB, or open design decisions surfaced during planning), step the coder up
+  one tier inside that catalog (Claude Code: sonnet → opus; OpenCode/Pi:
+  MiniMax-M3 → glm-5.2; Codex: gpt-5.6-terra → gpt-5.6-sol; a coder already at
+  its ceiling stays put); an operator's per-step or card-level model pin always
+  wins. Report the single line
   `CODER-MODEL: <model> — <one-phrase reason>`, then spawn. That
   subagent **leaves the worktree dirty on purpose** — it never commits, because the
   calling agent owns the git ceremony. **You are that caller:** when it reports back,
@@ -391,17 +396,19 @@ implementation.
 
 ## Delegation, and the fallback when you can't
 - **You always do:** implement the task, apply review fixes, commit, and report.
-- **You delegate (when the stage is listed):** spec → `product`; plan → `planner`;
-  reviews → `codex`.
+- **You delegate (when the stage is listed):** spec → `product`; plan →
+  `planner`; code → `coder`; reviews → `reviewer` (on whichever agent the stage
+  binds — Codex by default).
 - **Model pin (if the card's `## Pipeline` block carries one):** a line
   `- Use the **<model>** model for this card unless a stage below names its own.` is a
   **block-level directive, not a stage**. Pass that `model:` on **every** Agent/subagent
   spawn — `product`, `planner`, `coder`, and any other — and it **overrides any model
   named inside a stage prompt** and the CODER-MODEL advice. **Absent a pin, nothing
-  changes:** spawn with whatever the stage prompt (or the MODEL CHECK) names. A pin
-  must belong to your pipeline's family (never mix families — OpenCode/Pi run
-  MiniMax / GLM / Kimi; Claude Code runs Sonnet / Opus / Fable);
-  if it doesn't, surface the contradiction instead of applying it.
+  changes:** spawn with whatever the stage prompt (or the MODEL CHECK) names. A
+  card-level pin applies to the main loop and to delegates running on the same
+  agent as the main loop; a step bound to another agent keeps its own model. If
+  a pin names a model the step's agent cannot run, surface the contradiction
+  instead of applying it.
 - **Fallback:** if you **can't** spawn the `product`/`planner` subagents — e.g. you're
   not a Claude Code agent, or have no Task/Agent tool or those subagents aren't
   available — then **write `SPEC.md` / `IMPLEMENTATION_PLAN.md` yourself** (follow the

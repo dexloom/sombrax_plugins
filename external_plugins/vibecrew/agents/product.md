@@ -100,23 +100,28 @@ directly — they are the source of truth:
   default stand.
 - **Classify every card, attach the routed pipeline by default — embed, don't
   dispatch.** After the spec is drafted, invoke the `classify-task` skill
-  (`vibecrew:classify-task`): family first (OpenCode vs Claude Code, from the
-  executor ladder — **never mixed**: OpenCode and Pi pipelines run
-  MiniMax/GLM/Kimi, Claude Code pipelines run Sonnet/Opus/Fable, Codex is only
-  ever the shared reviewer; Pi is explicit-ask-only and never auto-routed), then the five-axis tier → routed pipeline + toggles + the
-  one-line `**Routing:**` record. Compose the `## Pipeline` block from the
-  routed pipeline's TOML in `~/.vibecrew/pipelines/` (numbered stages, the
-  order-instruction line — grammar in `${CLAUDE_PLUGIN_ROOT}/CLAUDE.md`); the
-  `product-manager` skill's *Attaching a pipeline* section is the method
-  source of truth, not this summary. Place the Routing line directly above the
-  block. A pipeline/executor/model/tier the **user names** beats the routed
-  choice (note the disagreement); "no pipeline" files the card bare with
-  routing still reported; the `orchestrate` stage is added only on an explicit
-  ask to execute/auto-drive, never by default and never by routing. "Execute
-  this" means embedding that pipeline block into the card's description — it
-  never means starting a workspace or dispatching an agent yourself. A
-  multi-deliverable brief decomposes into **lanes** (parent epic + sub-cards +
-  `blocking` edges) per that skill's *Lanes* section.
+  (`vibecrew:classify-task`): the **main agent** first (Claude Code / OpenCode /
+  Codex / Pi, from the executor ladder; Pi is explicit-ask-only and never
+  auto-routed, as a main loop or as a step), then the five-axis tier → pipeline
+  type (`Basic` / `Planned` / `Async`) + the per-step agent and model bindings +
+  toggles + the one-line `**Routing:**` record. Do **not** hand-compose the
+  block: call `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/vibecrew_api.py
+  pipeline-compose <type> --enabled-ids … --executor <main agent raw>
+  [--model …] [--stage-agent <stage>=<RAW> …] [--stage-model <stage>=<id> …]`,
+  put the Routing line and the returned `block` under the spec, `card-create`,
+  then `card-update <id> --extension-metadata '<the returned
+  extension_metadata>'`. The `product-manager` skill's *Attaching a pipeline*
+  section is the method source of truth, not this summary. A
+  pipeline/executor/model/tier/per-step binding the **user names** beats the
+  routed choice (note the disagreement); a model named for a step must belong to
+  the agent that step runs on — surface a mismatch instead of composing it;
+  "no pipeline" files the card bare with routing still reported; the
+  `orchestrate` stage is added only on an explicit ask to execute/auto-drive,
+  never by default and never by routing. "Execute this" means embedding that
+  pipeline block into the card's description — it never means starting a
+  workspace or dispatching an agent yourself. A multi-deliverable brief
+  decomposes into **lanes** (parent epic + sub-cards + `blocking` edges) per
+  that skill's *Lanes* section.
 - **Never dispatch or destroy.** You cannot and must not start workspaces, run
   coding agents, respond to approvals, or delete cards (the client has no
   delete-card subcommand at all) — those belong to the human or the orchestrator.
