@@ -18,6 +18,7 @@ attention.
 | **`orchestrator` agent** | The **host-ticked board driver** (launched as the session agent via `claude --agent`; no `model:` pin — the launcher's per-agent model pick governs). It arms **no timer of its own**: VibeCrew's runtime owns the loop and delivers each tick as a prompt carrying a host-computed status digest — see [`reference/tick-contract.md`](reference/tick-contract.md). Every tick it reflects card status forward (`inreview`/`done`, per a delivery-signal gate honest about VibeCrew's asymmetric PR-vs-merge corroboration), **closes finished workspaces** (delete only on done + corroborated delivery + a terminal run; otherwise archive, loudly), dispatches ready cards, surfaces parked and stalled agents, applies opt-in directives, and ends its report with a `CADENCE:` line the host obeys (5m active ↔ 30m idle). All of it over the bundled client — no MCP tools, no subagent for the routine tick. It spawns `Agent(vibecrew:decider)` only for a direct "answer that questionnaire" request; a "create a card" instruction is bounced back to the operator — card creation stays operator-driven via `product`/`product-manager`. Byte-identical OpenCode and Codex twins live at `agents-opencode/vc-orchestrator.md` and `agents-codex/vc-orchestrator.md`. |
 | **`assistant` agent** | The **operator's guide** (not host-ticked — a conversation the operator drives). Answers from the documentation, explains VibeCrew's processes, performs configuration and pipeline setup over the REST API, and runs **diagnostics** on request (fleet snapshot, run logs via `run-logs`, the API failure log via `log show`). Its write boundary is the plugin's tightest: **the configuration and the pipeline catalog are the only things it may write on its own** (`GET`/`PUT /api/config`; `GET /api/pipelines[/:name]` + `PUT /api/pipelines/:name`); board hygiene (card status moves, unused-workspace deletion), filing an issue on the public tracker (`issue-create`, `dexloom/vibecrew_sh` — creation only), and **repository maintenance** (`workspace-repos` state read + `commit`/`push`/`discard` on a workspace — server-performed, liveness-gated, never forced) are **on-explicit-request** surfaces; every other endpoint read-only; no file-write tools in its grants. OpenCode and Codex twins live at `agents-opencode/va-assistant.md` and `agents-codex/va-assistant.md`. |
 | **`auditor` agent** | The **compliance reviewer** (not host-ticked — every turn is a question, from Crew Deck or `POST /api/auditor/ask`, which only delivers into the live session and never spawns). Pulls a card's audit bundle (`card-audit`: spec, plan, finalization record — shipping report + merges + PRs — per-commit changed files and diffs, deterministic checks) and judges whether what landed on main matches what the card asked for; findings land as card comments (`--kind auditor`). On request it lists (`audit-unused-workspaces`) and deletes unused workspaces, and moves cards — its ONLY write surfaces; no subagent tool, no file-write tools, no git mutations. OpenCode and Codex twins live at `agents-opencode/va-auditor.md` and `agents-codex/va-auditor.md`. |
+| **`pm` agent** | The **intake PM** — the Product host agent in Crew Deck (not host-ticked; every turn hands it a brief, GitHub links, or a plan link). Runs the Product Skills (`product-manager`, `classify-task`) as its method: spec inline, classify + route, pipeline block composed by the SERVER (`pipeline-compose`, so a plugin-filed card and a UI-filed card are byte-identical), card filed, and multi-deliverable work arranged as lanes (parent epic + sub-cards + `blocking` edges, `orchestrate` only on an explicit auto-drive ask). GitHub links decompose into cards; plan links decompose into cards or file ONE card on a pipeline with the `plan` stage ticked. Writes cards and pipeline blocks, never code; never launches anything. The app's catalog (`crew-bundle/`) ships it standalone as `vibecrew-pm` — distinct from the `vibecrew-product` spec-writer subagent — and ships the two Product Skills as standalone skill entries the app installs alongside it. OpenCode and Codex twins live at `agents-opencode/vp-pm.md` and `agents-codex/vp-pm.md`. |
 | **`product` agent** | Spec agent: produces a spec, as a dev-ready card (intake) or a written `SPEC.md` (when a coding agent spawns it for the spec stage). |
 | **`planner` agent** | Planning agent: a specced card → a grounded, step-by-step `IMPLEMENTATION_PLAN.md` written at the workspace root. |
 | **`coder` agent** | Executes `IMPLEMENTATION_PLAN.md` step by step in the worktree; produces a diff, not ceremony — the caller owns commits/board moves. |
@@ -44,18 +45,26 @@ external_plugins/vibecrew`, or use `scripts/orchestrator.sh` (see
 
 - Skills: `vibecrew:vibecrew`, `vibecrew:product-manager`,
   `vibecrew:classify-task`, `vibecrew:answer-questions`
-- Agents: `orchestrator`, `assistant`, `auditor`, `product`, `planner`,
+- Agents: `orchestrator`, `assistant`, `auditor`, `pm`, `product`, `planner`,
   `coder`, `decider`. The `orchestrator` is meant to be launched as the
   session agent (`claude --agent vibecrew:orchestrator`) — normally by
   VibeCrew itself, which then ticks it; `scripts/orchestrator.sh` is the
   standalone fallback. It owns the tick but **not** the timer, and holds no
-  board MCP tools at all (there are none in this plugin); the `assistant`
-  and `auditor` are operator-driven host agents (never ticked — questions
-  only); `product`/`planner` are
+  board MCP tools at all (there are none in this plugin); the `assistant`,
+  `auditor`, and `pm` are operator-driven host agents (never ticked — the
+  assistant answers, the auditor audits, the `pm` turns briefs, GitHub
+  links, and plan links into routed, chained cards); `product`/`planner` are
   spawned by a self-driving coding agent (and usable directly via the
   Task/Agent tool); `decider` is spawned by the orchestrator on an operator's
   "answer that questionnaire" request (and usable directly).
 - No MCP tools — every board operation is a `vibecrew_api.py` subcommand.
+- The app's own catalog (`crew-bundle/` — what VibeCrew installs from its
+  `~/.vibecrew/plugins` checkout) additionally ships the host agents
+  standalone (`vibecrew-orchestrator`, `vibecrew-assistant`,
+  `vibecrew-auditor`, `vibecrew-pm` — the `pm`, distinct from the
+  `vibecrew-product` spec-writer subagent) and the two Product Skills
+  (`product-manager`, `classify-task`) as standalone skills, refreshed from
+  this plugin's sources by `scripts/sync-crew-bundle.sh`.
 
 ## Prerequisites
 

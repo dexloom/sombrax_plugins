@@ -1,0 +1,426 @@
+---
+name: product-manager
+description: >-
+  Turn a short, rough task brief into a clear technical task spec AND file it as
+  a VibeCrew card on the board. The spec is rendered inline first so the user
+  can confirm nothing was missed, then created as a card via the bundled
+  `vibecrew_api.py` client (MCP-free, over the REST API). Use this skill
+  WHENEVER the user hands over a brief, rough, or one-paragraph task and wants
+  it fleshed out, scoped, sharpened, "PM'd", "made into a ticket / card /
+  issue", or "put on the board / kanban" before implementation — phrases like
+  "spec this out", "turn this into a proper task", "flesh this out", "write a
+  technical task for", "make this a real ticket", "create a card for this",
+  "add this to the backlog", or when they describe a feature/refactor and
+  clearly want scope and requirements confirmed before diving into code. Also
+  use it proactively when a build request is vague, bundles several concerns,
+  or leaves design decisions open — surface and resolve those gaps here, then
+  capture the result as a card. Every card is classified via the
+  `classify-task` skill (main agent + complexity tier → Basic / Planned / Async
+  plus per-step agent and model bindings) and carries the routed pipeline by
+  default; a multi-deliverable brief or roadmap is decomposed into
+  LANES — a parent epic, sub-cards, and `blocking` relationships — so the
+  orchestrator can run independent chains in parallel. Do NOT use it to write
+  the implementation plan
+  itself (the step-by-step "how/which files"); this produces the WHAT and
+  acceptance criteria a later planning step consumes. For raw board/agent
+  operations with no speccing involved (listing cards, starting a workspace,
+  dispatching or checking an agent), use the `vibecrew` skill instead.
+---
+
+# Product Manager: brief → technical task spec → VibeCrew card
+
+## What this skill is for
+
+Most rework on a task doesn't come from bad code — it comes from a brief that
+left things implicit. A design decision gets posed as a question inside the
+brief and silently guessed at. "Refactor X" has no testable definition of done.
+Two unrelated concerns ride in one sentence with no priority. An assumption
+about which file or flag is involved turns out wrong. Scope grows mid-build.
+
+This skill is the cheap insurance against all of that. It takes a rough brief,
+turns it into a **medium-length, easy-to-read technical task spec** that the user
+reads back and corrects in one pass, and then **files that spec as a card on the
+VibeCrew board** so the work is captured where it gets picked up. The whole
+point is to make the implicit explicit *now*, while changing it costs a sentence,
+and to land it somewhere durable instead of leaving it in chat scrollback.
+
+You are acting as a product manager here, not an engineer. Your job is to nail
+down **what** is being built, **why**, and **how we'll know it's done** — not to
+design the implementation. The card you produce is the input to a separate
+planning step the user (or an agent) runs later.
+
+## Hard constraints (these define the skill)
+
+- **The spec is reviewed inline, then becomes a card. Write no files.** Render
+  the spec in chat first so the user can catch anything wrong, then create a
+  VibeCrew card whose title + description carry it. Don't create `.md` files
+  or write to a `specs/`/`.sombrax/` folder — the board is the destination, not
+  the filesystem.
+- **Always end with a real card** (unless the user explicitly says "just the
+  spec, don't file it"). The card is the deliverable; a spec that only lives in
+  chat is the failure mode this version exists to fix.
+- **Touch code only lightly, and only to verify — never to explore or edit.**
+  You may run a quick `grep`/`glob`/single `read` to confirm that a file, flag,
+  function, table, or endpoint the brief names actually exists and means what the
+  brief assumes (wrong-integration assumptions are a top rework cause). Do not
+  read broadly, do not trace call graphs, do not open many files, and never edit.
+  If verifying would take more than a couple of quick lookups, don't — flag the
+  assumption in the spec instead.
+- **One focused round of clarifying questions, then draft.** Don't drip questions
+  across many turns. Gather the genuinely-blocking ambiguities, ask them once
+  (batched), then write the spec. The user can still iterate after.
+- **Medium size.** Aim for something that reads in under a minute or two —
+  roughly one screen, maybe two. Comprehensive on *decisions*, lean on prose. If
+  a section has nothing real to say, cut it rather than padding.
+
+## The flow
+
+### 1. Read the brief for what's missing, not just what's there
+
+Before asking anything, parse the brief through the lens of the failure modes
+this skill exists to catch. Look specifically for:
+
+- **Open design decisions phrased as questions or "maybe"s.** "introduce a
+  backend flag that's api/database or none?" is not a requirement — it's a
+  decision the user wants made. These *must* be resolved, not passed through.
+- **Vague verbs with no definition of done.** "rethink", "refactor",
+  "comprehensive", "clean up", "improve", "make it better" — each needs a
+  concrete, observable answer to "done looks like ___".
+- **Bundled concerns.** A brief that mixes a refactor + a new feature + a bug
+  fix needs them separated and prioritized, or at least explicitly acknowledged
+  as one unit. (If they're genuinely separate deliverables, it's fine to file
+  more than one card — see step 7.)
+- **Integration assumptions.** Names of files, flags, endpoints, jobs, tables,
+  config keys — the things most likely to be slightly wrong. These are your
+  candidates for a quick verification lookup.
+- **Unstated scope edges.** What's tempting to also do but is *out*? Naming the
+  out-of-scope items up front is the single best defense against scope creep.
+
+### 2. Do light, targeted verification (optional, fast)
+
+If the brief names concrete things you can cheaply check, do so — one or two
+quick lookups. The goal is to avoid baking a wrong assumption into the spec
+("the spec said modify `process_block`, but that function iterates the whole
+block, not transactions"). Confirm a flag exists in the CLI args, a function is
+where the brief implies, an endpoint path is real. If a check is fast and kills
+an assumption, do it. If it's not fast, skip it and list the assumption instead.
+Never let verification turn into a code-exploration session — that's the
+opposite of this skill.
+
+### 3. Ask one focused round of clarifying questions
+
+Use the `AskUserQuestion` tool — it lets the user pick fast. Ask only what
+genuinely changes the spec; don't ask things you can reasonably default (and when
+you default, say so in the spec rather than asking). Prioritize, in order: (a) the
+open design decisions you found, (b) the concrete meaning of any vague "done",
+(c) scope boundaries, (d) priority when concerns are bundled.
+
+If the brief is already crisp and nothing is genuinely blocking, skip the question
+round — but say "the brief was clear enough to spec directly; here's what I
+assumed" and lean on the Assumptions section. When in doubt, ask — a 30-second
+question round is far cheaper than a wrong spec (or a wrong card).
+
+### 4. Write the spec inline
+
+Use the template below. Fill every section with real content or cut it. Keep the
+language plain — the user should be able to skim it and immediately spot anything
+wrong. This inline render is the review surface: it's the user's chance to correct
+the spec *before* it lands on the board.
+
+### 5. Classify and route the card
+
+With the spec drafted, invoke the **`classify-task`** skill
+(`classify-task`): it resolves the **main agent** first (Claude Code /
+OpenCode / Codex / Pi, from the executor ladder), scores five bounded axes to a
+complexity tier (trivial / light / medium / heavy), maps that tier to a pipeline
+type (`Basic` / `Planned` / `Async`), and returns the per-step agent and model
+bindings, the stage toggles, and the one-line `**Routing:**` record. Render that
+line under the spec in the same inline review — the user corrects a wrong tier,
+main agent, or step binding with one word, the same way they correct a wrong
+scope bullet. Overrides, and only these: a pipeline / executor / model / tier /
+per-step binding the **user named** wins outright (note the disagreement if the
+rubric says otherwise) — this is how a **Pi** card is filed (Pi is
+explicit-ask-only and uncalibrated; `classify-task` never auto-routes to it as a
+main agent or as a step, so it appears only when the user names `PI`/`PI_HEADED`
+or asks for a step "on pi") — and "just the spec, don't file it" skips routing
+along with the card. **Codex** is uncalibrated too (n = 0), but unlike Pi it IS
+auto-routed whenever the executor ladder resolves to it, and it is the default
+`plan-review`/`code-review` agent on `Planned` and `Async` — an operator whose
+only subscription is ChatGPT must get a working route without naming a pipeline
+every time.
+
+### 6. Resolve the project, then create the card
+
+Once the spec reads right, file it as a VibeCrew card. See **Creating the
+card** below for the project-resolution ladder (resolve from context first, ask
+only as a last resort) and the field mapping. Report back the created card's
+id so the user can spot a wrong project pick.
+
+### 7. Multiple deliverables → lanes (only when warranted)
+
+If the brief genuinely contains separate deliverables that shouldn't share one
+card, say so and decompose — see **Lanes** below for how the cards are filed
+(parent epic, sub-cards, blocking edges) so the orchestrator can run
+independent lanes in parallel and always knows what to pick up next. Don't
+fragment a single coherent task into many cards — default to one card per
+spec.
+
+## Spec template
+
+Render the spec in chat using this structure. Keep headings; drop any section
+that has nothing substantive (note which you dropped and why, briefly). This same
+text becomes the card's title (the one-line title) and description (everything
+else).
+
+```
+## Task: <one-line title>
+
+**In one sentence:** <what this delivers and for whom, plainly>
+
+### Outcome — what's different when this is done
+<Observable behavior / state, NOT implementation. "Operator sees X", "Y is
+persisted with Z", "the pipeline no longer Q". 2–5 bullets. This is the part the
+user checks hardest: does this describe what they actually want?>
+
+### Scope
+**In scope:**
+- <bullet>
+**Explicitly out of scope:**
+- <the tempting-but-not-now items — this is what stops scope creep>
+
+### Technical requirements
+<Concrete, grounded constraints the solution must satisfy. Name the real files /
+flags / endpoints / tables you verified or that the brief specified. Mark
+anything unverified. Each should be checkable, not aspirational. 3–8 bullets.>
+
+### Decisions made
+<For every open decision you resolved (from the question round or by sensible
+default): the decision + a few words of why. This is where the user catches a
+choice they'd have made differently. If you defaulted without asking, mark it
+[assumed].>
+
+### Testing & acceptance criteria
+<How we'll know it works — concrete and checkable. Prefer "running <thing>
+produces <observable>" over "it should work". Include the obvious failure/edge
+cases worth covering. This converts vague verbs into a definition of done.>
+
+### Risks, dependencies & open assumptions
+<Anything that could derail it, anything it depends on landing first, and every
+assumption still unconfirmed (especially integration ones you couldn't cheaply
+verify). Keep it honest — a flagged assumption here is a gift to the planner.>
+```
+
+## Creating the card
+
+The board lives in VibeCrew and is reached over its REST API, MCP-free, through
+the bundled client: `python3 ~/.vibecrew/plugins/external_plugins/vibecrew/scripts/vibecrew_api.py
+<subcommand> …` (curl fallback documented in
+`~/.vibecrew/plugins/external_plugins/vibecrew/skills/vibecrew/SKILL.md`). If a call exits **3**, the
+backend isn't running — tell the user to start the VibeCrew app, and offer to
+hand them the finished spec inline in the meantime rather than losing the work.
+
+### Resolve which project the card belongs to (context first, ask last)
+
+Picking the wrong project is annoying to undo, but interrogating the user on
+every card is worse. Work down this ladder and stop at the first rung that gives
+a confident answer:
+
+1. **Linked workspace context.** If `$VIBECREW_CARD_ID` is set in your
+   environment (you're running inside a card-linked workspace), resolve it:
+   `python3 …/vibecrew_api.py card "$VIBECREW_CARD_ID"` → its `project_id`. This
+   is the strongest signal; trust it.
+2. **A project named in the brief or recent conversation.** If the user mentioned
+   a project (or a repo/product that obviously maps to one), call
+   `python3 …/vibecrew_api.py projects` and match by name, case-insensitive,
+   allowing a clear substring hit. Exactly one match → use it.
+3. **A sole project.** If `projects` returns exactly one project, use it.
+4. **Still ambiguous** (several projects, no contextual signal) → this is the one
+   case where you ask. Use `AskUserQuestion` with the actual project names from
+   `projects` as the options, so it's a single quick click rather than an
+   open-ended question. Don't guess between plausible projects — a misfiled card
+   is exactly the kind of silent error this skill is supposed to prevent.
+
+Whenever you resolve the project by inference (rungs 1–3), name the project you
+chose in your final report ("Filed in **Payments**"), so a wrong pick is caught
+in one glance. Resolve the project by inference *before* asking — only rung 4 ever
+prompts.
+
+### Map the spec onto the card and create it
+
+Write the rendered description to a temp file (so markdown — including a
+`## Pipeline` block, if any — round-trips byte-exact), then:
+
+```
+python3 ~/.vibecrew/plugins/external_plugins/vibecrew/scripts/vibecrew_api.py card-create \
+  --project-id <resolved-id> \
+  --title "<the spec's one-line title, without the 'Task:' prefix>" \
+  --description-file <tmpfile> \
+  [--priority urgent|high|medium|low]
+```
+
+- `--title`: the spec's one-line title. Keep it terse and scannable on a board.
+- `--description-file`: the rest of the rendered spec, verbatim — Outcome,
+  Scope, Technical requirements, Decisions, Acceptance, Risks (plus a `##
+  Pipeline` block, if you attached one — see below). Markdown is preserved.
+- `--priority`: set only when the brief clearly implies urgency, or when the
+  user told you in the question round. Otherwise omit and let the board
+  default stand — don't open a separate question just for this.
+
+After it's created, report the card's id (from the client's JSON output), the
+project it landed in, and the resolved status. That closes the loop: the user
+sees the spec *and* knows exactly where it now lives.
+
+### Don't surprise the user with side effects
+
+Creating board items is a real mutation. Creating the card is the expected end
+of this skill, so just do it and report back. But never delete, reassign, or
+restructure existing cards as a side effect — if the brief implies touching
+other cards, surface that and let the user decide. (This client has no
+delete-card subcommand at all.)
+
+## Attaching a pipeline (routed by default, composed by the server)
+
+**Every card you file carries a pipeline by default** — the one `classify-task`
+routed in step 5 — so a roadmap can flow onto the board and ship without a
+human naming a pipeline per card. Only an explicit "no pipeline" / "just the
+spec" files a card bare (routing still runs and is reported, so the tier is on
+record). An operator-named pipeline ("run it with Basic", "use Planned") beats
+the routed choice — note the disagreement if the rubric scored differently.
+
+**Do not compose the block by hand.** The app exposes the composer that the
+New-issue dialog itself uses, so a card you file and a card the user files by
+hand are byte-identical for the same inputs:
+
+```
+python3 ~/.vibecrew/plugins/external_plugins/vibecrew/scripts/vibecrew_api.py pipeline-compose <Basic|Planned|Async> \
+  --enabled-ids <the ticked stage ids, comma-separated> \
+  --executor <main agent raw value> \
+  [--model <main-loop model>] \
+  [--stage-agent <stage>=<RAW> …] [--stage-model <stage>=<model id> …] \
+  [--custom-text "<extra instructions>"]
+```
+
+It writes nothing and returns `{block, extension_metadata, steps}`. Then:
+
+1. Write the description file: the rendered spec, then the `**Routing:**` line
+   from step 5, then the returned `block` verbatim (the Routing line sits
+   directly **above** the block, outside its delimiters).
+2. `card-create … --description-file <tmpfile>` as in *Creating the card*.
+3. `python3 …/vibecrew_api.py card-update <new card id> --extension-metadata
+   '<the returned extension_metadata JSON>'` — this is what makes the card's
+   pipeline editable in the app and what the launcher reads for the executor,
+   the model, and the subagent definitions. A card with a block but no metadata
+   still runs, but the app cannot re-open its pipeline editor on the right
+   selections. Use `--extension-metadata-file` when the JSON is big or
+   quote-heavy.
+
+Details that decide the flags:
+
+- **Source of truth.** The server's registry: the bundled `Basic` / `Planned` /
+  `Async` plus any user pipelines in `~/.vibecrew/pipelines/*.toml` (user files
+  shadow bundled pipelines by `name =`). `vibecrew_api.py pipelines` lists them
+  and `pipeline <name>` returns the stage roster with each stage's resolved
+  binding. Never invent or paraphrase stage text, and never guess a name —
+  removed per-model pipeline names 404.
+- **Stage selection (`--enabled-ids`).** Start from the pipeline's
+  `default_enabled = true` set — `Basic`: `merge`; `Planned`:
+  `spec, plan, plan-review, merge`; `Async`:
+  `spec, plan, plan-review, code, merge` — then apply `classify-task`'s
+  toggles: tick `code-review` when the toggle says `yes`; for `completion: pr`
+  drop `merge` and add `pr`. The `orchestrate` stage is added **only** on an
+  explicit auto-drive ask ("execute this", "auto-drive it") — never by default,
+  never by routing.
+- **Executor (`--executor`).** Always pass it: the three bundled pipelines are
+  agent-neutral, so the main agent is the card's, not the pipeline's. Use the
+  raw value for the agent `classify-task` resolved — `CLAUDE_CODE_HEADED`,
+  `OPENCODE_HEADED`, `CODEX_HEADED`, `PI_HEADED`.
+- **Per-step bindings (`--stage-agent` / `--stage-model`).** Only for stages
+  that carry a delegable role (`spec`, `plan`, `plan-review`, `code`,
+  `code-review`) — the endpoint rejects a binding on a role-less stage with a
+  400. `Planned` and `Async` already bind both reviews to `CODEX`, so leave them
+  alone unless the user asked otherwise; pass `--stage-agent plan-review=` (empty
+  value) to clear a shipped binding and let the step inherit the main loop.
+  Model ids for OpenCode and Pi steps must be provider-qualified
+  (`zai-coding-plan/glm-5.2`, `minimax/MiniMax-M3`, `kimi-coding/k3`).
+- **Model pin (`--model`).** Only when the user names a model for the card as a
+  whole; it pins the main loop. A model named **for a step** is a
+  `--stage-model` on that stage, and it is validated against the agent **that
+  step** is bound to — pinning `gpt-5.6-sol` on a step means that step runs on
+  Codex, `opus` means Claude Code. If the user pairs a model with an agent that
+  cannot run it, surface the contradiction instead of composing it.
+
+Report the routed (or operator-named) pipeline type, the main agent, the
+per-step bindings, the ticked stages, and any pins, so the user can see the
+block matches the routing in one glance.
+
+## Lanes — decompose big work so it can run in parallel
+
+When a brief or roadmap genuinely decomposes into several cards (step 7), file
+it as **lanes** so the orchestrator can run independent chains concurrently
+and always knows what to pick up when a card finishes:
+
+- **One parent epic card** — a plain tracking card (short summary description;
+  **no** pipeline block, **no** orchestrate) so it is never dispatched. File
+  it first; its id is the `--parent-card-id` for every sub-card.
+- **One sub-card per deliverable**, each a full self-contained spec, each
+  classified and routed in its own right (step 5 per card — tiers may
+  differ), created with `--parent-card-id <epic-id>`.
+- **Dependencies are `blocking` relationships**, created on the **blocker**
+  (direction is blocker → blocked):
+  `python3 …/vibecrew_api.py card-relate <blocker-id> --related-card-id
+  <blocked-id> --type blocking`. Chain the cards *within* a lane; leave cards
+  in different lanes unlinked — the absence of an edge IS the parallelism.
+  Never create a cycle (A→B→A deadlocks both lanes; the orchestrator will
+  park them, not resolve them).
+- **A lane map in the epic's description** — a short human-readable list
+  (`Lane A: CARD-1 → CARD-2; Lane B: CARD-3`) so the operator sees the
+  structure at a glance; the machine-readable truth is the relationships, and
+  the app's board draws them as a dependency forest.
+- **Auto-drive**: when the user asked for execution, the `orchestrate` stage
+  goes on the **sub-cards** (they are what gets dispatched), never on the
+  epic. The orchestrator's dependency gate holds a blocked card back until
+  every card blocking it is `done` — so ticking orchestrate on the whole lane
+  up front is safe and is exactly how "file a roadmap and let it ship" works.
+
+Report the epic id, each sub-card id with its lane and tier, and the edges you
+created.
+
+## Examples of the transformation
+
+**Example 1 — a vague verb gets a definition of done, then a card**
+
+Input brief: *"refactor the dispatcher, it should be event driven"*
+
+The skill notices "refactor" + "event driven" have no testable meaning, and "the
+dispatcher" is bundled (which behaviors change?). It asks: what triggers an event
+today vs. what should? which behaviors are in scope? what does "done" look like —
+a specific observable? The **Outcome** becomes "dispatcher reacts to
+job-state-change events within Ns instead of polling every Ms", **Acceptance**
+becomes "with polling disabled, a finishing job still triggers the next stage",
+and that spec is filed as a card in the project the dispatcher lives in (resolved
+from context, not asked).
+
+**Example 2 — an open decision gets resolved, and the project is inferred**
+
+Input brief: *"publish sevm findings to the DB, introduce a backend flag api/database or none by default?"*
+
+The skill treats the trailing "?" as the most important thing in the brief — it's
+a decision, not a detail. It asks which default the user wants and whether all
+three modes are needed, records the answer under **Decisions made**, verifies the
+publish endpoint path exists, then files the card. There's only one project on the
+board, so it picks it silently and notes "Filed in **sevm**" in the report rather
+than interrupting to ask.
+
+## When NOT to use this skill
+
+- The user wants raw board or agent operations with no speccing — list cards,
+  start a workspace, dispatch or check a coding agent, respond to an approval.
+  That's the **`vibecrew`** skill; point there instead.
+- The user wants the actual implementation **plan** (which files, what order, the
+  diff strategy). That's a planning step that consumes this card's spec — point
+  them there instead of producing a plan here.
+- The task is genuinely trivial and unambiguous ("fix this typo", "bump this
+  version"). A spec is overhead; if they still want it tracked, just create a
+  one-line card directly rather than running the full flow.
+- The user is mid-implementation and asks a narrow question. Answer it; don't
+  stop to write a spec.

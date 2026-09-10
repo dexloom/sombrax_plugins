@@ -112,6 +112,40 @@
       "targets": [
         "claude"
       ]
+    },
+    {
+      "id": "vibecrew-pm",
+      "name": "VibeCrew Product",
+      "kind": "agent",
+      "version": "1.0.0",
+      "description": "The intake PM: turns tasks, GitHub links, and plan links into routed, chained cards over the REST API. Runs the Product Skills (product-manager, classify-task) as its method — spec inline, classify, pipeline composed by the server, card filed — and arranges multi-deliverable work as lanes (parent epic + sub-cards + blocking edges). Writes cards and pipeline blocks, never code; never launches anything. Not host-ticked: every turn is the operator's. Carries NO model pin — the launcher's per-agent model pick (or the CLI default) governs.",
+      "targets": [
+        "claude",
+        "opencode",
+        "codex"
+      ]
+    },
+    {
+      "id": "product-manager",
+      "name": "Product Manager",
+      "kind": "skill",
+      "version": "1.0.0",
+      "description": "The Product agent's intake method as a standalone skill: turn a rough brief into a technical task spec rendered inline, then file it as a VibeCrew card — classified via classify-task, carrying a server-composed pipeline block, decomposed into lanes (epic + sub-cards + blocking edges) when the work warrants it. The standalone copy resolves the bundled API client from the app's catalog checkout.",
+      "targets": [
+        "claude",
+        "opencode"
+      ]
+    },
+    {
+      "id": "classify-task",
+      "name": "Classify Task",
+      "kind": "skill",
+      "version": "1.0.0",
+      "description": "The Product agent's routing method as a standalone skill: resolve the main agent, score the five-axis complexity tier, map it to a pipeline type (Basic / Planned / Async) with per-step agent and model bindings and stage toggles, and emit the one-line Routing record. The standalone copy resolves the bundled API client from the app's catalog checkout.",
+      "targets": [
+        "claude",
+        "opencode"
+      ]
     }
   ]
 }

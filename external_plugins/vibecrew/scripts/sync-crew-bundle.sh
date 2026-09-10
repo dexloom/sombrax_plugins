@@ -16,8 +16,10 @@
 #
 # This is a DEV-TIME script — it is never run by the app or at install time.
 # Run it whenever agents/orchestrator.md, agents/assistant.md,
-# agents/decider.md, agents/auditor.md, or the agents-opencode/ /
-# agents-codex/ twins change, then bump the changed agent's `version` in
+# agents/decider.md, agents/auditor.md, agents/pm.md, or the
+# agents-opencode/ / agents-codex/ twins change — or whenever the
+# product-manager / classify-task SKILLs change (their standalone copies
+# ride along) — then bump the changed entry's `version` in
 # crew-bundle/manifest.json
 # so installed copies show "Update available" after the app syncs.
 #
@@ -37,7 +39,14 @@ mkdir -p "${BUNDLE}/vibecrew-orchestrator/claude" \
          "${BUNDLE}/vibecrew-assistant/codex" \
          "${BUNDLE}/vibecrew-auditor/claude" \
          "${BUNDLE}/vibecrew-auditor/opencode" \
-         "${BUNDLE}/vibecrew-auditor/codex"
+         "${BUNDLE}/vibecrew-auditor/codex" \
+         "${BUNDLE}/vibecrew-pm/claude" \
+         "${BUNDLE}/vibecrew-pm/opencode" \
+         "${BUNDLE}/vibecrew-pm/codex" \
+         "${BUNDLE}/product-manager/claude" \
+         "${BUNDLE}/product-manager/opencode" \
+         "${BUNDLE}/classify-task/claude" \
+         "${BUNDLE}/classify-task/opencode"
 
 cp agents/orchestrator.md              "${BUNDLE}/vibecrew-orchestrator/claude/agent.md"
 cp agents-opencode/vc-orchestrator.md  "${BUNDLE}/vibecrew-orchestrator/opencode/agent.md"
@@ -49,6 +58,9 @@ cp agents-opencode/va-auditor.md       "${BUNDLE}/vibecrew-auditor/opencode/agen
 cp agents-codex/vc-orchestrator.md     "${BUNDLE}/vibecrew-orchestrator/codex/agent.md"
 cp agents-codex/va-assistant.md        "${BUNDLE}/vibecrew-assistant/codex/agent.md"
 cp agents-codex/va-auditor.md          "${BUNDLE}/vibecrew-auditor/codex/agent.md"
+cp agents/pm.md                        "${BUNDLE}/vibecrew-pm/claude/agent.md"
+cp agents-opencode/vp-pm.md            "${BUNDLE}/vibecrew-pm/opencode/agent.md"
+cp agents-codex/vp-pm.md               "${BUNDLE}/vibecrew-pm/codex/agent.md"
 
 # The one field that CANNOT be copied verbatim (see header): rewrite the
 # plugin-namespaced `name:` to the standalone id the app launches/delegates by.
@@ -60,6 +72,8 @@ cp agents-codex/va-auditor.md          "${BUNDLE}/vibecrew-auditor/codex/agent.m
   "${BUNDLE}/vibecrew-assistant/claude/agent.md"
 /usr/bin/sed -i '' '1,10s/^name: auditor$/name: vibecrew-auditor/' \
   "${BUNDLE}/vibecrew-auditor/claude/agent.md"
+/usr/bin/sed -i '' '1,10s/^name: pm$/name: vibecrew-pm/' \
+  "${BUNDLE}/vibecrew-pm/claude/agent.md"
 # The codex copies carry the same `name:` field, for the same reason: VibeCrew
 # reads the installed file by id and hands the body to the CLI as
 # `-c developer_instructions=<body>`, and the contract test asserts the
@@ -70,6 +84,29 @@ cp agents-codex/va-auditor.md          "${BUNDLE}/vibecrew-auditor/codex/agent.m
   "${BUNDLE}/vibecrew-assistant/codex/agent.md"
 /usr/bin/sed -i '' '1,10s/^name: auditor$/name: vibecrew-auditor/' \
   "${BUNDLE}/vibecrew-auditor/codex/agent.md"
+/usr/bin/sed -i '' '1,10s/^name: pm$/name: vibecrew-pm/' \
+  "${BUNDLE}/vibecrew-pm/codex/agent.md"
+
+# The Product Skills ship as standalone SKILL copies so the app can install
+# the PM agent's method wherever it launches. Two rewrites, both because the
+# standalone install has no plugin root:
+#   1. the bundled API client resolves from the app's managed checkout of
+#      THIS repo (always present when an install succeeded — the catalog is
+#      read from it), not ${CLAUDE_PLUGIN_ROOT};
+#   2. sibling skills are named WITHOUT the `vibecrew:` plugin prefix.
+for SKILL in product-manager classify-task; do
+  for CLI in claude opencode; do
+    cp "skills/${SKILL}/SKILL.md" "${BUNDLE}/${SKILL}/${CLI}/SKILL.md"
+    /usr/bin/sed -i '' \
+      -e 's|\${CLAUDE_PLUGIN_ROOT}/scripts/vibecrew_api.py|~/.vibecrew/plugins/external_plugins/vibecrew/scripts/vibecrew_api.py|g' \
+      -e 's|\${CLAUDE_PLUGIN_ROOT}/skills/vibecrew/SKILL.md|~/.vibecrew/plugins/external_plugins/vibecrew/skills/vibecrew/SKILL.md|g' \
+      -e 's|vibecrew:vibecrew|vibecrew|g' \
+      -e 's|vibecrew:classify-task|classify-task|g' \
+      -e 's|vibecrew:product-manager|product-manager|g' \
+      -e 's|vibecrew:answer-questions|answer-questions|g' \
+      "${BUNDLE}/${SKILL}/${CLI}/SKILL.md"
+  done
+done
 
 echo "Refreshed standalone copies in ${BUNDLE}"
 echo
@@ -83,12 +120,23 @@ shasum -a 256 "${BUNDLE}/vibecrew-orchestrator/claude/agent.md" \
               "${BUNDLE}/vibecrew-auditor/opencode/agent.md" \
               "${BUNDLE}/vibecrew-orchestrator/codex/agent.md" \
               "${BUNDLE}/vibecrew-assistant/codex/agent.md" \
-              "${BUNDLE}/vibecrew-auditor/codex/agent.md"
+              "${BUNDLE}/vibecrew-auditor/codex/agent.md" \
+              "${BUNDLE}/vibecrew-pm/claude/agent.md" \
+              "${BUNDLE}/vibecrew-pm/opencode/agent.md" \
+              "${BUNDLE}/vibecrew-pm/codex/agent.md" \
+              "${BUNDLE}/product-manager/claude/SKILL.md" \
+              "${BUNDLE}/product-manager/opencode/SKILL.md" \
+              "${BUNDLE}/classify-task/claude/SKILL.md" \
+              "${BUNDLE}/classify-task/opencode/SKILL.md"
 echo
 echo "Contract version lines:"
 grep -m1 'VC-ORCH-CONTRACT' "${BUNDLE}/vibecrew-orchestrator/claude/agent.md" || echo "  (orchestrator missing!)"
 grep -m1 'VC-ASSIST-CONTRACT' "${BUNDLE}/vibecrew-assistant/claude/agent.md" || echo "  (assistant missing!)"
 grep -m1 'VC-AUDIT-CONTRACT' "${BUNDLE}/vibecrew-auditor/claude/agent.md" || echo "  (auditor missing!)"
+grep -m1 'VC-PM-CONTRACT' "${BUNDLE}/vibecrew-pm/claude/agent.md" || echo "  (pm missing!)"
 grep -m1 'VC-ORCH-CONTRACT' "${BUNDLE}/vibecrew-orchestrator/codex/agent.md" || echo "  (codex orchestrator missing!)"
 grep -m1 'VC-ASSIST-CONTRACT' "${BUNDLE}/vibecrew-assistant/codex/agent.md" || echo "  (codex assistant missing!)"
 grep -m1 'VC-AUDIT-CONTRACT' "${BUNDLE}/vibecrew-auditor/codex/agent.md" || echo "  (codex auditor missing!)"
+grep -m1 'VC-PM-CONTRACT' "${BUNDLE}/vibecrew-pm/codex/agent.md" || echo "  (codex pm missing!)"
+echo "Standalone skill copies are plugin-root-free:"
+grep -rl 'CLAUDE_PLUGIN_ROOT' "${BUNDLE}/product-manager" "${BUNDLE}/classify-task" && echo "  (PLUGIN_ROOT LEAK!)" || echo "  (clean)"
