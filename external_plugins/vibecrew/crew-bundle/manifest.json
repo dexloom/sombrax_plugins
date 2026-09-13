@@ -71,7 +71,7 @@
       "id": "vibecrew-orchestrator",
       "name": "VibeCrew Orchestrator",
       "kind": "agent",
-      "version": "2.4.1",
+      "version": "2.5.0",
       "description": "The board-driving orchestrator agent. Host-ticked: VibeCrew's runtime owns the timer and delivers each tick with a status digest; the agent reflects card status, closes finished workspaces, dispatches ready cards, nudges stalled ones, and replies with a CADENCE line. Installs an agent definition both CLIs can launch; arms no cron of its own. Carries NO model pin — the launcher's per-agent model pick (or the CLI default) governs.",
       "targets": [
         "claude",
@@ -83,7 +83,7 @@
       "id": "vibecrew-assistant",
       "name": "VibeCrew Assistant",
       "kind": "agent",
-      "version": "1.6.1",
+      "version": "1.7.0",
       "description": "The operator's guide agent: answers from the documentation, explains VibeCrew's processes, performs configuration and pipeline setup over the REST API, tidies the board on request — moves cards between columns, sweeps stuck cards to the column the evidence supports (Done or In Review), and cleans up unused workspaces (deletable-only, reversibly archiving when evidence is incomplete) — maintains a workspace's repository on request (reads its state, commits its changes, pushes its branch, cleans its working tree — server-performed, liveness-gated, never forced) — and runs diagnostics (fleet snapshot, run logs, the API failure log), filing what it found as an issue on VibeCrew's public tracker (dexloom/vibecrew_sh) on an explicit request. Outside configuration, the pipeline catalog, those on-request actions, and issue creation, every other endpoint is read-only to it, and it ships no file-write tools. Not host-ticked: a conversation the operator drives. Carries NO model pin — the launcher's per-agent model pick (or the CLI default) governs.",
       "targets": [
         "claude",
@@ -108,7 +108,7 @@
       "name": "VibeCrew Decider",
       "kind": "agent",
       "version": "1.0.0",
-      "description": "Answers a coding agent's pending question prompt on the operator's behalf, grounded in the card/spec/plan. The orchestrator delegates to this on an explicit 'answer that questionnaire' request, so it ships alongside it \u2014 an orchestrator that can name a delegate it cannot reach is worse than one that never offers.",
+      "description": "Answers a coding agent's pending question prompt on the operator's behalf, grounded in the card/spec/plan. The orchestrator delegates to this on an explicit 'answer that questionnaire' request, so it ships alongside it — an orchestrator that can name a delegate it cannot reach is worse than one that never offers.",
       "targets": [
         "claude"
       ]
@@ -145,6 +145,18 @@
       "targets": [
         "claude",
         "opencode"
+      ]
+    },
+    {
+      "id": "disk-cleanup",
+      "name": "Disk Cleanup (Time Machine snapshots)",
+      "kind": "skill",
+      "version": "1.0.0",
+      "description": "The assistant's disk-space method: inspect free space and Time Machine local snapshots, determine whether active workspaces are captured in the snapshots (snapshot dates vs workspace churn), and reclaim space by thinning/deleting local snapshots — safe by construction, never touching live files. Answers low-disk requests from the operator or the orchestrator over the inter-agent protocol with before/after free space and what was reclaimed; recommends (never silently applies) future TM exclusion of the workspaces root.",
+      "targets": [
+        "claude",
+        "opencode",
+        "codex"
       ]
     }
   ]

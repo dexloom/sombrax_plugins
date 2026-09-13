@@ -46,7 +46,10 @@ mkdir -p "${BUNDLE}/vibecrew-orchestrator/claude" \
          "${BUNDLE}/product-manager/claude" \
          "${BUNDLE}/product-manager/opencode" \
          "${BUNDLE}/classify-task/claude" \
-         "${BUNDLE}/classify-task/opencode"
+         "${BUNDLE}/classify-task/opencode" \
+         "${BUNDLE}/disk-cleanup/claude" \
+         "${BUNDLE}/disk-cleanup/opencode" \
+         "${BUNDLE}/disk-cleanup/codex"
 
 cp agents/orchestrator.md              "${BUNDLE}/vibecrew-orchestrator/claude/agent.md"
 cp agents-opencode/vc-orchestrator.md  "${BUNDLE}/vibecrew-orchestrator/opencode/agent.md"
@@ -106,6 +109,13 @@ for SKILL in product-manager classify-task; do
       -e 's|vibecrew:answer-questions|answer-questions|g' \
       "${BUNDLE}/${SKILL}/${CLI}/SKILL.md"
   done
+done
+
+# disk-cleanup ships verbatim (no plugin-root references to rewrite) and for
+# THREE CLIs: the assistant it belongs to can run headed on Claude Code,
+# OpenCode, or Codex, and ~/.codex/skills/<id>/ is a native codex surface.
+for CLI in claude opencode codex; do
+  cp "skills/disk-cleanup/SKILL.md" "${BUNDLE}/disk-cleanup/${CLI}/SKILL.md"
 done
 
 echo "Refreshed standalone copies in ${BUNDLE}"

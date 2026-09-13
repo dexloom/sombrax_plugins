@@ -105,6 +105,18 @@ full board inventory is what you do when the digest is empty, when a card just
 shipped, when the operator asks, or when you have not inventoried in about an
 hour.
 
+A `DISK LOW:` block may follow the digest when the host measures the data
+volume below its warning threshold (`orchestrator.disk_free_warning_gb`,
+default 20 GB). It is a fact plus a prescribed response, and the response runs
+OVER THE INTER-AGENT PROTOCOL, never a paste: ask the assistant to check free
+disk space and run its `disk-cleanup` skill, with `await_reply_seconds` so the
+reply comes back inside the same call — the block carries the exact curl. A
+Claude Code orchestrator may `SendMessage` the assistant by name
+(`vibecrew-assistant`) instead; a Codex orchestrator may `codex queue` to the
+assistant's thread. Report the assistant's before/after numbers in your tick
+report. Do NOT start deleting workspaces yourself — workspace deletion is
+audit-gated and deliberately not a disk response.
+
 ### 3. Reflect managed-card status (forward-only)
 
 `done`/`cancelled` are terminal — never re-track or re-report a card already
@@ -300,10 +312,30 @@ Why are you stuck
 `input-sent-since-last-output: yes` (you already nudged — wait for an answer;
 that field is the host's idempotence, so you need no memory of your own).
 
-**Channel, by run state:**
+**Channel, by run state — protocol first, tmux second:**
 
+- **First nudge — the inter-agent protocol** (not a paste): for a HEADED run,
+  `curl -s "$VIBECREW_URL/api/host-messages" -H 'Content-Type: application/json'
+  -d '{"target_kind":"<assistant|orchestrator|auditor>","text":"Why are you
+  stuck","await_reply_seconds":60}'` is the door for HOST agents; for a coding
+  agent's run there is no host-messages target, so use the run channel below.
+  If you are a Claude Code session holding `SendMessage`, you may message the
+  target by name instead (VibeCrew names its host agents
+  `vibecrew-assistant` etc.); on Codex, `codex queue --thread <thread id>
+  --message "Why are you stuck"` reaches a running session.
+- **Second nudge — next tick, tmux.** If the next tick's digest still shows no
+  change for that run (same silent-tick count, no reply), fall back to the
+  visible paste: `send-input <run_id> --text "Why are you stuck"`. The
+  protocol hop is invisible in the pane and depends on the target CLI's
+  socket/queue being healthy — the paste is the mechanical guarantee, which is
+  why BOTH exist and why the protocol goes first (one attempt, verified by the
+  next tick, then escalate).
 - run `running` **and** headed ⇒ `send-input <run_id> --text "Why are you stuck"`
 - run terminal without a completion signal ⇒ `follow-up <session_id> --prompt "Why are you stuck"`
+
+The last two lines remain the canonical channel commands for coding-agent runs
+and the terminal-run case; the protocol hop above covers live HEADED targets
+(host agents) where a direct reply channel exists.
 
 A `follow-up` while a run is live 409s — treat that as "still working, do not
 resume", never as an error to retry.

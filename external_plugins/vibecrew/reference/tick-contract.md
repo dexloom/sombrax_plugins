@@ -49,10 +49,22 @@ STATUS DIGEST (host-computed; advisory — the API is authoritative; absent ⇒ 
   tick | no output for <M>m (<K> ticks) | no output ever (<K> ticks)>;
   input-sent-since-last-output: <yes|no>; approvals pending: <n>
 
+DISK LOW: <F> GB free on the data volume (warning threshold <T> GB). Ask the
+assistant to check free disk space and run its disk-cleanup skill — over the
+inter-agent protocol, not a paste: curl -s "$VIBECREW_URL/api/host-messages"
+… (exact curl in the block)
+
 Directives enabled for this run — apply each one's behavior as defined in your
 agent instructions:
 - <one line per enabled directive>
 ```
+
+The `DISK LOW:` block is OPTIONAL and sits between the digest and the
+directives: present only when the host measures the data volume below
+`orchestrator.disk_free_warning_gb` (default 20 GB; `0` disables). It carries
+the exact protocol ask inline — a compacted context must be able to act on the
+block alone. The agent never arms its own disk probe; absence of the block
+means "not low, or not measured", not "healthy".
 
 **The ping is short on purpose.** It is re-delivered every interval for the life
 of a days-long run, so it must survive context compaction without depending on
