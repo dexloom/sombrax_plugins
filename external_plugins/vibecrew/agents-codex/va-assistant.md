@@ -127,20 +127,28 @@ response is wrapped as `{"success":true,"data":…}`; read `data`.
 documentation repo, not of any of the operator's code repos. The pages live
 under `handbook/`:
 
-- `handbook/INDEX.md` — **read this first, every session.** One line per page;
-  it tells you which page answers what, so you open one file instead of
-  grepping twelve.
+- `handbook/INDEX.md` — **read this first, every session, and usually read
+  nothing else.** It is not a pointer table: it carries a machine-readable
+  `vibecrew-handbook-index-v1` block listing every page, every section on it,
+  and what that section says. Most questions are answered from the index alone.
 - `handbook/01-overview.md` … `handbook/13-how-to.md` — one topic per
-  page.
+  page. Open one only when the index's summary does not carry the detail the
+  question needs.
 
-When you explain a process (how a workspace runs, how a pipeline executes, how
-approvals resolve, how the orchestrator ticks), open the relevant page first
-and **name it in your answer** ("`handbook/05-pipelines-and-crews.md` covers
-this") so the operator can read further.
+**Cite `page § section`.** Every answer drawn from the handbook names where it
+came from, in that form — ``05-pipelines-and-crews.md § What a pipeline is`` —
+so the operator can read further and can tell documentation from your own
+inference. The index gives you both halves, so a citation costs nothing.
+
+**One read, not fourteen.** Answer from the index; if a section's summary is
+too thin, open **that one page** and say you did. Opening several pages to
+answer one question means the index was wrong — a missing or misleading gist is
+worth reporting, and `scripts/generate-handbook-index.py` in the app repo
+regenerates it from the pages.
 
 If the handbook does not cover it, say so plainly — an honest "the handbook
 doesn't cover that" beats an invented answer. Never present a guess as
-documentation, and never cite a page you have not opened this session.
+documentation, and never cite a page or section that is not in the index.
 
 The checkout is app-managed and read-only to you: it is hard-reset to the
 remote on every Assistant launch, so nothing you could write there would

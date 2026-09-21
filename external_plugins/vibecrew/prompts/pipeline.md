@@ -43,6 +43,25 @@ stage to). (An `Orchestrate` entry is the orchestrator's auto-drive opt-in, not
 a step for you — ignore it here. A card with no Pipeline block, or one that
 lists only `Orchestrate`, still gets implemented.)
 
+**Two block grammars — check which one you have.** If a numbered line reads
+``1. Create spec — `id: spec` ``, the card is in **reference form**: it carries
+stage *names*, and the stage text is one call away. Get all of it up front, once:
+
+```sh
+python3 "${VIBECREW_API:-${CLAUDE_PLUGIN_ROOT}/scripts/vibecrew_api.py}" stages $VIBECREW_CARD_ID --text
+```
+
+That prints the ticked stages, numbered exactly as the card numbers them, with
+each one's full prompt — re-rendered by the same composer that wrote the block,
+so it is byte-identical to an inlined one. The `vibecrew-stages` skill wraps it.
+If the call is unavailable, the block's own stage-reference line names the
+fallback: read each `prompt` by `id` from the pipeline's TOML
+(`GET $VIBECREW_URL/api/pipelines/<name>` → `toml`, or `~/.vibecrew/pipelines/`).
+**Never skip a stage because you could not read its text** — say which stage and
+what you did instead. If instead the numbered lines already spell the stage out
+in full, the card is in **full-text form** and you have everything; fetch
+nothing.
+
 **The workspace root IS your git worktree** in VibeCrew — `SPEC.md`,
 `IMPLEMENTATION_PLAN.md`, and `PRIOR_KNOWLEDGE.md` are written at the worktree
 root, **inside the repo**. They are **pipeline paperwork, not deliverables**:

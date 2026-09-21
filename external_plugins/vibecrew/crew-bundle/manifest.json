@@ -126,6 +126,19 @@
       ]
     },
     {
+      "id": "vibecrew-stages",
+      "name": "VibeCrew Stage Reference",
+      "kind": "skill",
+      "version": "1.0.0",
+      "description": "Resolves a card's `## Pipeline` block when it is written in reference form — stage names plus an `id:` instead of the prompts inlined. Prints each ticked stage's full text, in the card's own order, re-rendered through the server's own composer, so a slimmed card is never an unrunnable one. Installs a SKILL.md every executor can read.",
+      "targets": [
+        "claude",
+        "opencode",
+        "codex",
+        "pi"
+      ]
+    },
+    {
       "id": "product-manager",
       "name": "Product Manager",
       "kind": "skill",

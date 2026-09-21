@@ -28,6 +28,7 @@ Argparse usage/argument errors keep argparse's own exit 2.
 import argparse
 import json
 import os
+import re
 import sys
 import urllib.error
 import urllib.parse
@@ -323,6 +324,175 @@ def parse_stage_pairs(pairs, flag):
     return out
 
 
+PIPELINE_START = "<!-- vk:pipeline:start -->"
+PIPELINE_END = "<!-- vk:pipeline:end -->"
+# ``N. Create spec — `id: spec` `` — the reference form's stage line. Mirrors
+# `CardPipeline.numberedListItemPattern` + `stageIdSuffixPattern` on the Swift
+# side; keep the two in step.
+STAGE_LINE_RE = re.compile(r"^\s*\d+\.\s+.*\s+—\s+`id:\s*([A-Za-z0-9._-]+)`\s*$")
+
+
+def block_stage_ids(description):
+    """The ticked stage ids, in the order the card's `## Pipeline` block lists them.
+
+    Empty for a full-text block (no `id:` suffixes) or no block at all.
+
+    Anchored the way every other reader anchors: the LAST standalone start
+    marker, the first standalone end marker after it. A marker quoted inside a
+    prose line is not a delimiter.
+    """
+    lines = (description or "").split("\n")
+    starts = [i for i, l in enumerate(lines) if l.strip() == PIPELINE_START]
+    if not starts:
+        return []
+    begin = starts[-1]
+    ends = [i for i in range(begin + 1, len(lines)) if lines[i].strip() == PIPELINE_END]
+    stop = ends[0] if ends else len(lines)
+
+    ids, started = [], False
+    for line in lines[begin + 1:stop]:
+        match = STAGE_LINE_RE.match(line)
+        if match:
+            ids.append(match.group(1))
+            started = True
+            continue
+        # Only the CONTIGUOUS numbered run is the stage list — same rule as
+        # `parseStages`, so numbered custom text below it is not counted.
+        if started:
+            break
+    return ids
+
+
+def card_stages(base, card_id, stage_id=None, as_text=False):
+    """A4 — re-render the card's pipeline stages and print their full prompts.
+
+    A card composed in REFERENCE form carries only stage names plus an `id:`;
+    the prompts were left out precisely so they would stop riding into every
+    stage, hand-off and resume. This is how an agent gets them back.
+
+    The rendering is not re-implemented here. We read the card's own
+    `extension_metadata.pipeline` — the pipeline name, the ticked ids, the
+    executor/model pins and the per-stage bindings the card was FILED with —
+    and hand them straight back to `POST /api/pipelines/:name/compose`, which
+    runs `PipelineComposer` on the Swift side. So what prints is byte-identical
+    to what a full-text block would have inlined, and it cannot drift: there is
+    one renderer, and this is a client of it.
+
+    A card with no pipeline metadata (hand-written block, pre-composer card)
+    exits non-zero and says so, rather than printing an empty roster that would
+    read as "this card has no stages".
+    """
+    probe_health(base)
+    status, raw = request(base, "GET", build_path("api", "cards", card_id))
+    try:
+        card = json.loads(raw.decode("utf-8")).get("data") or {}
+    except (ValueError, UnicodeDecodeError, AttributeError):
+        sys.stderr.write(raw.decode("utf-8", errors="replace") + "\n")
+        sys.exit(1)
+    if not card:
+        print(f"no card {card_id}", file=sys.stderr)
+        sys.exit(1)
+
+    # `extension_metadata` is a STRING column on the wire — parse, don't assume.
+    meta = card.get("extension_metadata")
+    if isinstance(meta, str):
+        try:
+            meta = json.loads(meta)
+        except ValueError:
+            meta = None
+    pipeline = (meta or {}).get("pipeline") if isinstance(meta, dict) else None
+    if not isinstance(pipeline, dict) or not pipeline.get("name"):
+        print(
+            "this card carries no pipeline metadata, so its stages cannot be "
+            "re-rendered. Read the `## Pipeline` block in the card description "
+            "directly — a card filed before the composer, or hand-edited, keeps "
+            "its stage text inline.",
+            file=sys.stderr)
+        sys.exit(1)
+
+    # THE BLOCK IS THE CONTRACT. The metadata says what the card was FILED with;
+    # the `## Pipeline` block is what the agent was told to execute and what its
+    # `VK-PIPELINE-STAGE: N` numbers refer to. They normally agree — the composer
+    # writes both — but a hand-edited block, or metadata that predates an edit,
+    # makes them disagree, and resolving from the metadata would then silently
+    # drop or renumber a stage the card says must not be skipped.
+    meta_ids = pipeline.get("enabledIds") or []
+    listed = block_stage_ids(card.get("description"))
+    enabled = listed or meta_ids
+    if listed and meta_ids and listed != meta_ids:
+        print(
+            "warning: the card's `## Pipeline` block and its stored pipeline metadata "
+            f"disagree.\n  block lists:    {', '.join(listed)}\n"
+            f"  metadata lists: {', '.join(meta_ids)}\n"
+            "  Following the BLOCK — it is what the agent executes and what the "
+            "stage numbers mean.",
+            file=sys.stderr)
+    if not enabled:
+        print("this card ticks no pipeline stages", file=sys.stderr)
+        sys.exit(1)
+
+    body = {"enabled_ids": enabled}
+    for key, field in (("executor", "executor"), ("model", "model"),
+                       ("custom_text", "customText")):
+        value = pipeline.get(field)
+        if value is not None:
+            body[key] = value
+    # Only the stages that actually differ are recorded, which is exactly what
+    # compose wants back; absent means "inherit", the same as at filing time.
+    if pipeline.get("stageAgents"):
+        body["stage_agents"] = pipeline["stageAgents"]
+    if pipeline.get("stageModels"):
+        body["stage_models"] = pipeline["stageModels"]
+
+    name = pipeline["name"]
+    status, raw = request(
+        base, "POST", build_path("api", "pipelines", name, "compose"), body=body)
+    try:
+        envelope = json.loads(raw.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError):
+        sys.stderr.write(raw.decode("utf-8", errors="replace") + "\n")
+        sys.exit(1)
+    if envelope.get("success") is not True:
+        print(envelope.get("message") or f"could not compose \"{name}\"", file=sys.stderr)
+        sys.exit(1)
+
+    steps = (envelope.get("data") or {}).get("steps") or []
+    # compose returns the WHOLE roster, ticked or not. The block numbers only
+    # the ticked ones — mirror that exactly, or stage 2 here would not be the
+    # stage the card calls 2 and `VK-PIPELINE-STAGE: 2` would point at the wrong
+    # prompt. Order by `enabled`, which is the block's own sequence when we could
+    # read one (normally identical to catalog order, but a hand-edited block is
+    # still the thing being executed).
+    by_id = {s.get("id"): s for s in steps}
+    steps = [by_id[i] for i in enabled if i in by_id]
+    missing = [i for i in enabled if i not in by_id]
+    if missing:
+        print(f"warning: the block lists stage(s) the pipeline has no prompt for: "
+              f"{', '.join(missing)}", file=sys.stderr)
+    if stage_id:
+        steps = [s for s in steps if s.get("id") == stage_id]
+        if not steps:
+            print(f"stage \"{stage_id}\" is not ticked on this card", file=sys.stderr)
+            sys.exit(1)
+
+    if not as_text:
+        print(json.dumps(steps, indent=2))
+        sys.exit(0)
+
+    for index, step in enumerate(steps, start=1):
+        header = f"{index}. {step.get('label') or step.get('id')}  [id: {step.get('id')}]"
+        binding = " · ".join(
+            filter(None, [
+                f"agent: {step['agent']}" if step.get("agent") else None,
+                f"model: {step['model']}" if step.get("model") else None,
+            ]))
+        print(header + (f"  ({binding})" if binding else ""))
+        print("-" * len(header))
+        print(step.get("prompt", ""))
+        print()
+    sys.exit(0)
+
+
 def read_extension_metadata(args):
     """Resolve --extension-metadata / --extension-metadata-file into a
     pre-serialized JSON string, or None.
@@ -456,6 +626,19 @@ def build_parser():
 
     p = sub.add_parser("card", help="GET /api/cards/:id")
     p.add_argument("card_id")
+
+    p = sub.add_parser(
+        "stages",
+        help="A4 — the full text of this card's pipeline stages, in order. A "
+        "reference-form `## Pipeline` block carries stage NAMES; this "
+        "re-renders the prompts through the server's own composer, so they are "
+        "byte-identical to an inlined block. Default output is JSON; --text "
+        "prints them for reading.",
+    )
+    p.add_argument("card_id")
+    p.add_argument("--stage", help="only this stage id (e.g. `merge`)")
+    p.add_argument("--text", action="store_true",
+                   help="human-readable, one stage per section")
 
     p = sub.add_parser("card-create", help="POST /api/cards")
     p.add_argument("--project-id", required=True)
@@ -970,6 +1153,10 @@ def main(argv=None):
 
     if cmd == "card":
         call(base, "GET", build_path("api", "cards", args.card_id))
+        return
+
+    if cmd == "stages":
+        card_stages(base, args.card_id, stage_id=args.stage, as_text=args.text)
         return
 
     if cmd == "card-create":

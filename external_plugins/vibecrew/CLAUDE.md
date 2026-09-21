@@ -24,9 +24,34 @@ the same inputs. The plugin's deployed overrides in `~/.vibecrew/pipelines/`
 `pipelines/` dir) are therefore authoritative for both paths.
 
 **Block shape** (`CardPipeline.composeBlock`): a `## Pipeline` heading, a blank
-line, the **order-instruction line**, a blank line, then the pin bullets (if
-any: executor pin first, then model pin), a blank line, then one **numbered**
-item `N. <stage prompt>` per ticked stage **in the pipeline's stage order**.
+line, the **order-instruction line**, a blank line, the **stage-reference line**
+(reference form only), a blank line, then the pin bullets (if any: executor pin
+first, then model pin), a blank line, then one **numbered** item per ticked
+stage **in the pipeline's stage order**.
+
+**Two grammars, both current** (`PipelineComposer.BlockForm`, A4). What follows
+the `N. ` differs:
+
+- **reference** (the default since A4) — the stage's rendered **label** plus its
+  lookup id: ``1. Create spec — `id: spec` ``. The stage's full text is not on
+  the card. An agent fetches it with `vibecrew_api.py stages $VIBECREW_CARD_ID`
+  (the `vibecrew-stages` skill wraps it), which re-renders through this same
+  composer, so what it gets is byte-identical to an inlined block. The block's
+  stage-reference line names that command and the TOML fallback, so the skill is
+  a convenience, not an install dependency.
+- **full text** (every card filed before A4, and any hand-written block) — the
+  whole stage prompt inlined: `1. Write a technical spec for this card and …`.
+
+Measured: a `Basic` spec+plan+merge card went 2,290 → 1,073 bytes, `Async`
+8,590 → 1,234. That block is re-read on every stage, hand-off and resume, so the
+saving is per-read, not per-card.
+
+**Readers must accept both, and there is no flag day.** `parseStages` counts the
+contiguous `N. ` run either way; in reference form it also splits the ``` — `id:
+x` ``` suffix off the display label and returns it as `stageId`, which is `nil`
+for a full-text line. `CardPipeline.blockForm` reports which grammar a block is
+in, and calls a half-converted block full text — the safe answer, since the
+prose is inline either way.
 The pin bullets are deliberately NOT numbered — stage numbering feeds the
 `VK-PIPELINE-STAGE: N` progress markers, and `parseStages` counts only the
 contiguous `N. ` run, so a bullet can never shift a stage number. Free custom
@@ -79,12 +104,35 @@ TOML):
 > Have the orchestrator agent pick this card up and drive it to done autonomously, running the card's pipeline stages in order — regardless of which board column the card is in (it may be started even from Todo).
 
 **Stage prompts live in the pipeline TOMLs**, not here: each `[[stage]]`'s
-`prompt` string is the text composed into the numbered block item, with
-`{{DELEGATE}}` / `{{model_name}}` rendered at composition from the pipeline's
-`[models]` / `subagent` bindings. Read the deployed files in
-`~/.vibecrew/pipelines/` (or the plugin's `pipelines/` sources) for the exact
-text — never retype fragments from memory; a paraphrase silently breaks the
-shared parser and the stage-number tracking.
+`prompt` string is the stage's text, with `{{DELEGATE}}` / `{{model_name}}`
+rendered at composition from the pipeline's `[models]` / `subagent` bindings. In
+full-text form it is composed straight into the numbered block item; in
+reference form it stays in the TOML and the card carries the stage's `label` and
+`id` instead. Read the deployed files in `~/.vibecrew/pipelines/` (or the
+plugin's `pipelines/` sources) for the exact text — never retype fragments from
+memory; a paraphrase silently breaks the shared parser and the stage-number
+tracking.
+
+**The stage-reference line** (`PipelineComposer.referenceInstruction`), emitted
+once above the numbered stages in reference form, with the pipeline's name
+substituted. It names three doors, narrowest first — the `stages` call, the
+pipeline TOML per `id`, and (implicitly) the stage's own name — so a slimmed
+card is never an unrunnable one:
+
+```
+Stage names only. Read each stage's full instructions with `python3 "${VIBECREW_API:-${CLAUDE_PLUGIN_ROOT}/scripts/vibecrew_api.py}" stages $VIBECREW_CARD_ID --text` (the `vibecrew-stages` skill wraps it) and follow the `prompt` whose `id` matches the stage you are starting. If that call is unavailable, read the same `prompt` per `id` from the `<name>` pipeline TOML (`GET $VIBECREW_URL/api/pipelines/<name>` → `toml`, or `~/.vibecrew/pipelines/`).
+```
+
+**The stage-reference item** (`PipelineComposer.idSuffix`), one per ticked stage:
+
+```
+N. <rendered stage label> — `id: <stage-id>`
+```
+
+The per-stage binding rides in the **label**, which is already rendered
+(`Plan review via Codex · GPT-5.6`) — deliberately not a second bullet, because
+`parseStages` counts only the contiguous `N. ` run and a bullet there could
+shift a stage number that `VK-PIPELINE-STAGE: N` refers to.
 
 ## Pipeline types and per-step bindings
 

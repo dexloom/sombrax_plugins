@@ -97,10 +97,19 @@ seconds, and **exits 0 even when rows are red** — branch on `state` /
 python3 ${CLAUDE_PLUGIN_ROOT}/scripts/vibecrew_api.py cards --project-id <id>
 python3 ${CLAUDE_PLUGIN_ROOT}/scripts/vibecrew_api.py cards --project-id <id> --status inprogress
 python3 ${CLAUDE_PLUGIN_ROOT}/scripts/vibecrew_api.py card <card_id>
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/vibecrew_api.py stages <card_id> --text
 ```
 `cards` returns **every** card for the project **with `description` included**
 — that's what lets you classify readiness (the `## Pipeline` Orchestrate
 opt-in) from one call. `--status` is applied client-side over that list.
+
+`stages` is for a card whose block is in **reference form** — numbered stage
+*names* plus an ``` `id:` ``` each, rather than the prompts inlined. It
+re-renders the ticked stages through the server's own composer and prints them
+in the card's order, so the text matches an inlined block byte for byte. Use it
+whenever you need to know what a stage actually instructs; `--stage <id>` for
+one, no `--text` for JSON. (The `vibecrew-stages` skill is the same thing with
+the fallbacks written out.)
 
 ### Create / groom a card
 ```
