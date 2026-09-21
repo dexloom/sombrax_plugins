@@ -182,6 +182,90 @@ def call(base, method, path, body=None, query=None):
     unwrap(raw)
 
 
+DOCTOR_MARKERS = {
+    "ok": "ok",
+    "warn": "warn",
+    "fail": "FAIL",
+    "timed_out": "timeout",
+    "skipped": "skip",
+}
+DOCTOR_ATTENTION_STATES = ("fail", "warn", "timed_out")
+
+
+def render_doctor_rows(rows):
+    """The server's own transcript format, re-rendered for a filtered row set.
+
+    Kept byte-compatible with `DoctorReport.render` on the Swift side so a
+    `--failing` excerpt and the full `transcript` field read identically.
+    """
+    lines = []
+    for row in rows:
+        marker = DOCTOR_MARKERS.get(row.get("state", ""), row.get("state", "?"))
+        line = "[%s] %s \u2014 %s" % (marker, row.get("title", ""), row.get("detail", ""))
+        value = row.get("value")
+        if value:
+            line += " (%s)" % value
+        hint = row.get("hint")
+        if hint:
+            line += "\n      fix: %s" % hint
+        lines.append(line)
+    return "\n".join(lines)
+
+
+def doctor(base, as_text=False, failing_only=False):
+    """GET /api/doctor, with the two shapes an operator or agent wants.
+
+    Exit code stays 0 for a reachable backend even when rows are red: the
+    doctor DIAGNOSES, and a red row is a successful diagnosis, not a failed
+    request. Use the `state` field (or `summary.healthy`) to branch.
+    """
+    probe_health(base)
+    status, raw = request(base, "GET", "/api/doctor")
+
+    def fail(detail):
+        # `/health` answered but `/api/doctor` did not, so the likeliest
+        # cause by far is a VibeCrew older than the route. Say so — an
+        # unexplained bare exit 1 sends the operator hunting the wrong thing.
+        note = " — is VibeCrew up to date?" if status == 404 else ""
+        print(f"/api/doctor returned HTTP {status}: {detail}{note}", file=sys.stderr)
+        sys.exit(1)
+
+    try:
+        envelope = json.loads(raw.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError):
+        fail(raw.decode("utf-8", errors="replace").strip() or "(no body)")
+        return
+    if not isinstance(envelope, dict) or envelope.get("success") is not True:
+        message = envelope.get("message") if isinstance(envelope, dict) else None
+        fail(message or json.dumps(envelope))
+        return
+
+    data = envelope.get("data") or {}
+    rows = data.get("rows") or []
+    if failing_only:
+        rows = [r for r in rows if r.get("state") in DOCTOR_ATTENTION_STATES]
+
+    if as_text:
+        summary = data.get("summary") or {}
+        print(
+            "VibeCrew doctor \u2014 %s ok, %s to look at, %s blocking, %s timed out"
+            % (
+                summary.get("ok", 0), summary.get("warn", 0),
+                summary.get("fail", 0), summary.get("timed_out", 0),
+            )
+        )
+        rendered = render_doctor_rows(rows)
+        if rendered:
+            print(rendered)
+        elif failing_only:
+            print("[ok] Everything checks out.")
+    else:
+        out = dict(data)
+        out["rows"] = rows
+        print(json.dumps(out, indent=2))
+    sys.exit(0)
+
+
 # --------------------------------------------------------------------------
 # argparse plumbing
 # --------------------------------------------------------------------------
@@ -285,6 +369,24 @@ def build_parser():
     # -- health / config / pipelines / projects / repos (slice 1) ----------
     sub.add_parser("health", help="GET /health — the connectivity probe itself.")
     sub.add_parser("config", help="GET /api/config — the config.*-prefixed KV rows.")
+    p = sub.add_parser(
+        "doctor",
+        help="GET /api/doctor — the environment self-diagnosis: one row per "
+        "check (agent CLIs on the RESOLVED launch PATH, tmux, gh auth, plugin "
+        "catalog, handbook, pipelines, notifications, database and worktrees "
+        "size) with a state and a one-line fix hint. Read-only; never spawns "
+        "an agent. Exits 0 even when rows are red — branch on `state` or "
+        "`summary.healthy`.",
+    )
+    p.add_argument(
+        "--text", action="store_true",
+        help="Print the plain-text transcript instead of JSON — one quotable "
+        "line per row, with its fix underneath.",
+    )
+    p.add_argument(
+        "--failing", action="store_true",
+        help="Only rows that need attention (fail / warn / timed_out).",
+    )
     sub.add_parser(
         "pipelines",
         help="GET /api/pipelines — every pipeline (bundled defaults + user "
@@ -752,6 +854,9 @@ def main(argv=None):
 
     if cmd == "config":
         call(base, "GET", "/api/config")
+        return
+    if cmd == "doctor":
+        doctor(base, as_text=args.text, failing_only=args.failing)
         return
     if cmd == "pipelines":
         call(base, "GET", "/api/pipelines")

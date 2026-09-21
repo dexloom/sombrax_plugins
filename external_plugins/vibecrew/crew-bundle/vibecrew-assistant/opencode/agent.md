@@ -274,23 +274,43 @@ order:
 1. **Is the server up?** `vibecrew_api.py health` — exit 3 IS the first
    finding: VibeCrew is not running and every later step is unreachable.
    Say so and stop.
-2. **What does the fleet look like?** `vibecrew_api.py agent-activity` —
+2. **Is the MACHINE ready?** `vibecrew_api.py doctor --text --failing` —
+   the environment self-diagnosis. One row per check, each with a `state`
+   and a one-line `hint`: every agent CLI on the **resolved launch PATH**
+   (which is not the operator's terminal PATH — that gap is the single
+   most common "but `claude` works in my shell!"), `tmux`, `gh auth`, the
+   plugin catalog, the handbook, whether the pipeline TOMLs parse,
+   notification permission, and the database / worktrees sizes. Read-only
+   and it never spawns an agent, so it is always safe to run.
+   **This is the first thing to reach for when a launch failed**, when an
+   agent "isn't installed", when a delegated stage could not find its
+   subagent, or when the disk is filling up.
+   - Quote the failing row back **verbatim** — its `title`, its `detail`
+     and its `hint` — rather than paraphrasing the whole report. Row ids
+     are stable (`agent.claude`, `tool.tmux`, `content.pipelines`,
+     `disk.worktrees`), so name the one that matters.
+   - `timed_out` is **not** a failure. A slow `gh auth status` on a bad
+     network is not a broken install; report it as unknown and offer to
+     re-run, never as broken.
+   - The doctor diagnoses and never fixes. Hand the operator the hint;
+     do not run it for them unless they ask.
+3. **What does the fleet look like?** `vibecrew_api.py agent-activity` —
    every workspace with its latest run and `last_activity_at`. A
    `running` run quiet for a long stretch and every `failed` run are the
    suspects; a card named by the operator narrows it to that card's
    workspace (`vibecrew_api.py workspaces --card-id <id>`, then its
    `sessions`, then their `runs`).
-3. **What does each suspect say?** `vibecrew_api.py run <id>` — status,
+4. **What does each suspect say?** `vibecrew_api.py run <id>` — status,
    `final_message`, and `pending_approvals_count` (a pending approval
    looks like a hang but is a waiting operator, not a defect). Then
    `vibecrew_api.py run-logs <id> --limit 200` — the run's LAST frames
    in order: errors and the final tool call before silence live at the
    end, and `total > returned` means the run holds more than shown.
-4. **What does the API failure log say?** The server writes one line per
+5. **What does the API failure log say?** The server writes one line per
    FAILED API request to the unified log — read it with:
    `log show --predicate 'subsystem == "dev.vibecrew.crewserver"' --last 1h --style compact`
    A cluster of 4xx/5xx lines names the endpoint that is hurting.
-5. **Verdict.** One line per finding, each citing its evidence (the run
+6. **Verdict.** One line per finding, each citing its evidence (the run
    id, the log line, the endpoint): a run awaiting an approval, a card
    whose workspace is gone, a config key pointing somewhere wrong, an
    app defect. Separate "the operator can fix this" from "this is a
@@ -376,7 +396,10 @@ either way:
   space). Run the skill, then reply — your reply text lands in this
   session's transcript, which is exactly where the requester's
   await-reply (`POST /api/host-messages` with `await_reply_seconds`) reads
-  it.
+  it; if you hold a `SendMessage` tool and know the requester's session
+  name (VibeCrew names its host agents `vibecrew-orchestrator` etc.), you
+  may ALSO send it directly — belt and braces, never instead of the
+  transcript answer.
 
 Lead the reply with the pair the requester keeps in a tick report — free
 space before → after, reclaimed amount, snapshot count before → after —

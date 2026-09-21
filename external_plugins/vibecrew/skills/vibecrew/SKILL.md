@@ -65,6 +65,33 @@ over re-resolving ids you were already handed.
 
 ## 2. Core workflows
 
+### Diagnose the machine ("why can't I launch?")
+```
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/vibecrew_api.py doctor --text --failing
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/vibecrew_api.py doctor            # full JSON
+```
+`GET /api/doctor` is the environment self-diagnosis: one row per check —
+each agent CLI on the **resolved launch PATH** (not your terminal's PATH),
+`tmux`, `gh auth`, the plugin catalog, the handbook, whether the pipeline
+TOMLs parse, notification permission, and the database / worktrees sizes —
+with a `state` and a one-line `hint`.
+
+Reach for it FIRST whenever the operator reports that a launch failed, an
+agent "isn't installed", a delegated stage didn't find its subagent, or the
+disk is filling up. Read-only, never spawns an agent, answers in a few
+seconds, and **exits 0 even when rows are red** — branch on `state` /
+`summary.healthy`, not on the exit code.
+
+- `state` is one of `ok` · `warn` · `fail` · `timed_out` · `skipped`.
+  **`timed_out` is not a failure** — a slow `gh auth status` on a bad network
+  is not a broken install; say so rather than reporting it as broken.
+- `id` is stable (`agent.claude`, `tool.tmux`, `content.pipelines`,
+  `disk.worktrees`), so **quote the specific row** back to the operator
+  rather than paraphrasing the whole report, and give them its `hint`
+  verbatim — it is written to be actionable without leaving the screen.
+- The doctor **never fixes anything**. Do not run its hints for the operator
+  unless they ask.
+
 ### Look at the board
 ```
 python3 ${CLAUDE_PLUGIN_ROOT}/scripts/vibecrew_api.py cards --project-id <id>
