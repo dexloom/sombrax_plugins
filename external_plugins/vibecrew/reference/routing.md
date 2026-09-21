@@ -124,6 +124,71 @@ Claude-era, n=65 done); raw JSONs alongside. Collector:
   reports converge on this; it is why spec/plan stay on strong models and the
   coder is the axis that flexes.
 
+### Per-tier measured spend (pass 3 — measured 2026-09-22, VibeCrew board, `CREW-SEP-*`)
+
+**Provenance:** 25 Done cards carrying a `**Routing:**` line, September 2026. Fresh =
+`input + cache-creation`, cache-read excluded. LOC = commit-grep on `main`, pipeline
+paperwork excluded, matched on card id **and** letter code (25/25 resolved). Collector:
+`skills/vibecrew-telemetry` (`vc_stats.py`) + the per-tier join. Full write-up:
+`Pipeline Telemetry — VibeCrew Board 2026-09 (pass 3)`.
+
+| Tier | n | Median fresh | Median output | Median LOC | LOC per 1M fresh |
+|---|---|---|---|---|---|
+| trivial | **0** | — | — | — | — |
+| light | 8 | 738,220 | 274,850 | 2,279 | 3,087 |
+| medium | 12 | 777,087 | 290,152 | 2,923 | **3,761** |
+| heavy | 5 | 1,293,368 | 328,573 | 3,778 | 2,921 |
+
+**What this means for routing — the loop, closed:**
+
+- **The light/medium boundary does not separate spend.** 738K vs 777K fresh is a **5 %**
+  gap, well inside either bucket's spread, while medium ships **28 % more LOC** for it.
+  Medium is the better value per token. So: *do not demote a borderline card from medium
+  to light to save money — the saving does not exist.* If the boundary is to be moved, it
+  should be moved for scope-control reasons, not cost ones.
+- **heavy is the tier to watch, not medium.** +75 % fresh over light and the **worst**
+  LOC-per-token of the three. A heavy score driven by breadth (N) rather than risk (R) is
+  the one worth re-examining before dispatch.
+- **`trivial` is still n=0** — report it as uncalibrated, exactly like Pi and Codex, rather
+  than as confirmed.
+- These are **medians over single-digit n** per tier. They are strong enough to say the
+  light/medium split is not paying for itself, and too thin to set a threshold on.
+
+### Reviewer bake-off (pass 3 — measured 2026-09-22)
+
+**Provenance:** five fixed post-coder diffs (`CREW-SEP-28`, `-21`, `-18`, `-12`, `-27`), named
+before the first run and spread across five subsystems, each reviewed cold by three reviewers
+bound to the §1 defaults above — Codex `gpt-5.6-terra` (xhigh), Claude `opus`, and
+`zai-coding-plan/glm-5.2`. Read-only; every cell's tree verified byte-identical afterwards.
+A *defect* = a specific, in-diff, consequential finding confirmed against the post-change
+source; anything else is a false positive. Full method, defect bar and raw outputs:
+`Pipeline Telemetry — VibeCrew Board 2026-09 (pass 3)`.
+
+| Arm | Fresh (5 diffs) | Confirmed | False pos. | **Defects per 1M fresh** | Precision |
+|---|---:|---:|---:|---:|---:|
+| **Codex** `gpt-5.6-terra` | 751,574 | 19 | 4 | **25.3** | 83 % |
+| GLM-5.2 (`plan`) | 698,213 | 10 | 1 | 14.3 | 91 % |
+| Claude `opus` | 1,687,120 | 16 | 0 | 9.5 | **100 %** |
+| GLM-5.2 (`build`) | 788,226 | 6 | 0 | 7.6 | 100 % |
+
+- **Codex stays the default reviewer on cost:** 2.7× Claude's defects-per-fresh-token. But it
+  is not triage-free — 4 of its 23 findings were false, and on one diff (B4) it spent 200 K
+  fresh and 489 s to produce a single finding the reviewed file's own comment refutes.
+- **Claude is the precision arm:** 16 findings, 16 confirmed, nothing to triage — at 2.2× the
+  fresh-token cost and ~4× the cache-read volume.
+- **One reviewer is not enough, whichever one.** Counting each underlying defect once, the five
+  diffs hold **33 distinct confirmed defects**, and the best single arm found **58 %**
+  (Codex 19, Claude 16, GLM 10). Codex + Claude together reach 82 %; **six defects were found
+  only by a GLM arm**, including a server-process crash reachable from an unvalidated HTTP
+  request body. For a card where a miss is expensive (R ≥ 2, or a destructive code path), a
+  second reviewer on a *different* family buys more than a second pass on the same one.
+- **n = 5, single pass.** This measures first-pass review only; it says nothing about the
+  two-pass loop that pass 2 identified as the real review bill. Three of ten GLM cells ended
+  early on an opencode path-handling bug, so the GLM rows understate that arm.
+
+**This card deliberately does NOT change the default reviewer binding or any `classify-task`
+rubric threshold** — it produces the evidence; acting on it is a separate card.
+
 ## 3. The model
 
 ```
@@ -254,10 +319,12 @@ vibe-kanban-indie's layout and was false here; it is corrected everywhere.
    calibration rules in pass-2 §7; recalibrate the 40 KB gate and the tier
    thresholds with numbers, and record rubric edits in `classify-task` with a
    dated one-liner.
-5. **Reviewer bake-off** — codex is the only reviewer ever measured; the
-   review budget is the largest cost center, so alternatives (or a cheaper
-   codex profile) are the highest-leverage unexplored saving. Now cheap to try:
-   a reviewer is a per-step agent binding, not a pipeline variant.
+5. ~~**Reviewer bake-off**~~ — **done 2026-09-22** (CREW-SEP-6 / A5). Five
+   fixed post-coder diffs × three reviewers, measured in §2.2 above and written
+   up in `Pipeline Telemetry — VibeCrew Board 2026-09 (pass 3)`. The default
+   reviewer binding is deliberately **unchanged** by that card — it produced the
+   evidence; acting on it is a separate card, so that the decision is taken
+   against a stated ranking rather than inside the experiment that produced it.
 6. **Recalibrate the `light → Planned` re-route.** Light cards used to run a
    full fan-out on a cheaper coder and now run delegated planning with main-loop
    coding (§1). It is the only routing-outcome change of the 2026-09-07 work and
