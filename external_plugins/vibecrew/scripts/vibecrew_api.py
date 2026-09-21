@@ -824,6 +824,52 @@ def build_parser():
     p.add_argument("--title")
 
     p = sub.add_parser(
+        "pr-merge",
+        help="POST /api/workspaces/:id/pr-merge — merge the workspace's pull "
+        "request THROUGH GitHub (`gh pr merge` / the REST merge), the "
+        "selectable alternative to the local squash `merge` above. Records "
+        "the resulting sha in `merges` exactly as merge-record does, so the "
+        "shipping report is identical in shape, and flips the PR row to "
+        "merged so the board and GitHub cannot disagree. Requires `gh auth` "
+        "(or a GH_TOKEN) — see `doctor`, row tool.gh.",
+    )
+    p.add_argument("workspace_id")
+    p.add_argument("--repo-id", help="required on a multi-repo workspace")
+    p.add_argument("--number", type=int,
+                   help="PR number (default: the workspace's newest open PR)")
+    p.add_argument("--method", choices=["squash", "merge", "rebase"], default=None,
+                   help="GitHub merge strategy (default: squash)")
+    p.add_argument("--delete-branch", action="store_true",
+                   help="delete the head branch after a successful merge")
+
+    p = sub.add_parser(
+        "review-ingest",
+        help="POST /api/workspaces/:id/review-ingest — pull this workspace's "
+        "PR review comments onto its card NOW instead of waiting out the "
+        "background poll. Idempotent: `ingested` counts only comments the "
+        "card did not already carry, so a second call returns 0. Ingested "
+        "comments are attributed to their GitHub author "
+        "(author_kind: github, author_label: the login).",
+    )
+    p.add_argument("workspace_id")
+
+    p = sub.add_parser(
+        "github-import",
+        help="POST /api/projects/:id/github-import — one-shot GitHub Issues "
+        "-> cards import. One card per issue; every label becomes a tag "
+        "VERBATIM (matched case-insensitively against the board's existing "
+        "tags, nothing dropped). Re-runnable: issues already imported come "
+        "back in `skipped`, never as a second card.",
+    )
+    p.add_argument("project_id")
+    p.add_argument("--repo", help="owner/name or a github.com remote URL "
+                   "(default: derived from the board's repos' origin remotes)")
+    p.add_argument("--state", choices=["open", "closed", "all"], default=None,
+                   help="which issues to import (default: open)")
+    p.add_argument("--limit", type=int, help="how many issues to ask for (default: 50)")
+    p.add_argument("--status", help="board column the new cards land in (default: todo)")
+
+    p = sub.add_parser(
         "issue-create",
         help="POST /api/issues — file an issue on VibeCrew's public tracker "
         "(dexloom/vibecrew_sh; the repo is pinned server-side, never chosen "
@@ -1238,6 +1284,39 @@ def main(argv=None):
         if args.title is not None:
             body["title"] = args.title
         call(base, "POST", build_path("api", "workspaces", args.workspace_id, "pr-record"),
+             body=body)
+        return
+
+    if cmd == "pr-merge":
+        body = {}
+        if args.repo_id is not None:
+            body["repo_id"] = args.repo_id
+        if args.number is not None:
+            body["number"] = args.number
+        if args.method is not None:
+            body["method"] = args.method
+        if args.delete_branch:
+            body["delete_branch"] = True
+        call(base, "POST", build_path("api", "workspaces", args.workspace_id, "pr-merge"),
+             body=body)
+        return
+
+    if cmd == "review-ingest":
+        call(base, "POST",
+             build_path("api", "workspaces", args.workspace_id, "review-ingest"), body={})
+        return
+
+    if cmd == "github-import":
+        body = {}
+        if args.repo is not None:
+            body["repo"] = args.repo
+        if args.state is not None:
+            body["state"] = args.state
+        if args.limit is not None:
+            body["limit"] = args.limit
+        if args.status is not None:
+            body["status"] = args.status
+        call(base, "POST", build_path("api", "projects", args.project_id, "github-import"),
              body=body)
         return
 
