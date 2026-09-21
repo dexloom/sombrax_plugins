@@ -39,10 +39,12 @@ Three blocks, in this order, separated by blank lines. The directives block is
 
 ```
 ORCHESTRATOR TICK (#N, interval 5m). Check the cards, close workspaces that are
-done (squashed and merged), choose the next card for execution if there's a free
-lane. Ping non-active agents. Resolve anything pending a human action per your
-directives. Your full method is your agent definition — this ping never overrides
-it. End your report with the CADENCE line as its last non-empty line.
+done (squashed and merged), and dispatch from the DISPATCHABLE NOW block below —
+that list is the host's, it is already WIP-capped and priority-ordered, and a
+start outside it is refused. Ping non-active agents. Resolve anything pending a
+human action per your directives. Your full method is your agent definition —
+this ping never overrides it. End your report with the CADENCE line as its last
+non-empty line.
 
 STATUS DIGEST (host-computed; advisory — the API is authoritative; absent ⇒ probe yourself):
 - <CARD> [ws <id>, session <id>, run <id>, <executor>]: <status>; <output since last
@@ -53,6 +55,10 @@ DISK LOW: <F> GB free on the data volume (warning threshold <T> GB). Ask the
 assistant to check free disk space and run its disk-cleanup skill — over the
 inter-agent protocol, not a paste: curl -s "$VIBECREW_URL/api/host-messages"
 … (exact curl in the block)
+
+DISPATCHABLE NOW (host-computed and ENFORCED — a start outside this list is refused 409; 2 of 3 lanes free):
+- <CARD> [lane <L>, <priority|no priority>, <tier|unrouted>, <column>, opt-in: <yes|no>]: <title>
+- +<N> more held by the WIP cap (not shown)
 
 Directives enabled for this run — apply each one's behavior as defined in your
 agent instructions:
@@ -65,6 +71,60 @@ directives: present only when the host measures the data volume below
 the exact protocol ask inline — a compacted context must be able to act on the
 block alone. The agent never arms its own disk probe; absence of the block
 means "not low, or not measured", not "healthy".
+
+### The `DISPATCHABLE NOW` block (D1) — the one block that is not advisory
+
+Everything else the host sends is a fact to act on. This block is a
+**permission set**, and it is enforced: `POST /api/workspaces/start` on a card
+outside it returns **409** with
+
+```
+dispatch refused: <CARD> is not dispatchable now — <reason>
+```
+
+`<reason>` is one of `at the WIP cap (<n>/<cap> running)`,
+`blocked by <SIMPLE-ID>[, …]`,
+`a workspace already exists for this card (<workspace-id>)`, or
+`not a wave-0 candidate — …`. There is no `force` field on that body and no
+way to ask for one: a cap the agent can talk itself past is not a cap. An
+operator who needs to start something at the cap uses the app's own Start
+button or raises `orchestrator.max_concurrent`.
+
+It is **always present**, in one of three shapes — the absence of a block
+means the host could not compute one (a failed read), exactly as with the
+digest, and you should probe the API:
+
+```
+DISPATCHABLE NOW (host-computed and ENFORCED — …; 2 of 3 lanes free):
+DISPATCHABLE NOW: none — at the WIP cap (3/3 running). Do not start anything; close or finish a card first.
+DISPATCHABLE NOW: none — no unblocked wave-0 candidates (3 of 3 lanes free).
+```
+
+"Nothing to do" and "no room" are opposite facts; they never render alike.
+
+What the host filters, and what it does not:
+
+| Rule | Owner |
+|---|---|
+| Unsatisfied `blocking` edge ⇒ never listed | **host** (`ShipPlanner` waves) |
+| A card with a non-archived workspace ⇒ never listed | **host** (covers running, parked, and the host agents' own home cards) |
+| `orchestrator.max_concurrent` (default 3) ⇒ the list is capped to free lanes | **host** |
+| Ordering: card `priority` → routing tier → `simple_id` → title | **host**, deterministic and stable |
+| The `Orchestrate` opt-in | **you** — the host only annotates `opt-in: yes\|no` |
+| Adopt-before-dispatch, executor resolution, prompt composition | **you** |
+
+Your rules can only ever **narrow** this list, never widen it.
+
+The unit of concurrency is a **workspace**, not a run: one worktree, one
+agent. The four pinned host-agent homes (orchestrator, product, assistant,
+auditor) do not count — the cap governs card work, not every process on the
+machine. The count is taken after the tick's reconcile pass, so it is correct
+across an app restart rather than counting ghosts.
+
+Ordering is **advice**; membership and the cap are **enforced**. Starting the
+second card on the list while the first waits is legal — the host will not
+arbitrate a tie it computed a tick earlier. Starting a card that is not on the
+list is not.
 
 **The ping is short on purpose.** It is re-delivered every interval for the life
 of a days-long run, so it must survive context compaction without depending on
@@ -164,6 +224,12 @@ A follow-up while a run is live returns **409** from
 `createFollowUpRun` — "still working, do not resume", never an error to retry
 blindly.
 
+`POST /api/workspaces/start` has one more code worth branching on:
+
+| Code | Meaning | What to do |
+|---|---|---|
+| `409 dispatch refused: …` | the card is not in the `DISPATCHABLE NOW` set | **do not retry this tick** — read the reason, report it, move on. A lane frees, a blocker merges, or the operator raises the cap. |
+
 ## 5. The nudge
 
 Payload, exactly — no punctuation, no variation:
@@ -213,8 +279,18 @@ Ids are byte-identical to vibe-kanban-indie's, and are also the persistence keys
 | `CADENCE:` grammar | `CrewOrchestrator/CadenceDirective.swift` | this file, the agent definitions, `scripts/orchestrator.sh` |
 | `Why are you stuck` | `CrewOrchestrator/OrchestratorDirectives.swift` (`OrchestratorNudge.payload`) | the agent definitions, `vibecrew_api.py` docs |
 | Directive ids + copy | `CrewOrchestrator/OrchestratorDirectives.swift` | the launch sheet, the agent definitions |
+| `DISPATCHABLE NOW` block | `CrewOrchestrator/FleetDigest.swift` (`dispatchBlock`) | this file, the agent definitions |
+| `orchestrator.max_concurrent` + the refusal reasons | `CrewPipeline/DispatchPolicy.swift` | this file, the agent definitions |
+| `dispatch refused: …` message | `CrewLaunch/AgentLaunchService.swift` (`AgentLaunchError.dispatchRefused`) | this file, the agent definitions |
 | Agent method | `agents/orchestrator.md` (this repo) | vendored into the app's payload catalog |
 
 The agent definitions in this repo are the **source of truth** for the method.
-The app vendors a copy into `CrewPlugins/Resources/Plugins/payloads/` and pins
-its SHA-256, so drift is a test failure rather than a surprise at runtime.
+The app reads them from its **git checkout of this repo** at
+`~/.vibecrew/plugins` — there is no vendored second copy and no SHA-256 pin
+any more (an earlier revision of this file said there was; there isn't). What
+enforces the contract instead is `CrewPluginsTests/CatalogPayloadContractTests`,
+which asserts against the live checkout: every orchestrator payload carries a
+`<!-- VC-ORCH-CONTRACT vN -->` marker at or above the floor the app is written
+for, and the claude/opencode/codex bodies from that marker on are
+byte-identical. A checkout older than the floor **skips** rather than fails —
+that state is "run Sync Catalog", not a contract violation.

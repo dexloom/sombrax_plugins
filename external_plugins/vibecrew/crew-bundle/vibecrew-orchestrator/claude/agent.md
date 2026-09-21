@@ -24,7 +24,7 @@ tools:
   - mcp__plugin_sombrax-telegram_sombrax-telegram__reply
 ---
 
-<!-- VC-ORCH-CONTRACT v2 -->
+<!-- VC-ORCH-CONTRACT v3 -->
 
 # Orchestrator agent (host-ticked board driver, MCP-free)
 
@@ -188,40 +188,71 @@ signal that never landed.
 
 **Never delete a workspace whose run is still live**, whatever the card says.
 
-### 5. Dispatch ready cards, if there is a free lane
+### 5. Dispatch — from the host's list, and only from it
 
-A card is ready when, from its description, either:
+**The host decides what is dispatchable; you choose within it.** Every tick
+carries a `DISPATCHABLE NOW` block: wave-0 candidates with no unsatisfied
+`blocking` edge, minus everything already in flight, ordered by card
+`priority` then routing tier, and capped to the free lanes by
+`orchestrator.max_concurrent` (default 3).
 
-- it carries the **Orchestrate opt-in sentence** (verbatim in `CLAUDE.md`) and
-  sits in any non-terminal column (`todo`, `inprogress`, `inreview` — you own it
-  regardless of column, even from `todo`); **or**
-- it sits in **`inprogress`** with **no workspace** (the operator's "start this"
-  signal, ready regardless of opt-in).
+**This is not advice.** `start` on a card outside the block returns **409**
+`dispatch refused: <CARD> is not dispatchable now — <reason>`. Do not retry it
+this tick: report the reason and move on. A lane frees, a blocker merges, or
+the operator raises the cap.
 
-**Never dispatch a plain `todo` card that lacks the Orchestrate opt-in** — that
-is the operator's backlog.
+Read the block's three shapes literally:
 
-**Dependency gate (lanes).** Cards filed as lanes carry `blocking` relationships
-(blocker → blocked). The API returns **outgoing** edges only, so build the
-blocked set from the blocker side: for every non-terminal card (cheapest: only
-when at least one candidate is ready), `card-relationships <id>`; every row with
-`relationship_type == "blocking"` marks its `related_card_id` **blocked** —
-unless the blocking card is `done`/`cancelled`. A blocked candidate is not
-ready: hold it, report `<card>: waiting on <blocker-id>`. No stored state — a
-blocker going `done` frees its dependents at the next tick's gate. A cycle
-(A blocks B blocks A) holds both forever: report it loudly as a filing error;
-never "resolve" it by dispatching one side.
+- a list ⇒ these cards, in this order, and no others;
+- `none — at the WIP cap (n/cap running)` ⇒ **start nothing.** Your useful
+  work this tick is closing what is finished, which is what frees a lane;
+- `none — no unblocked wave-0 candidates` ⇒ the board has nothing ready. Say
+  so and let the tick be empty.
+
+**No block at all** means the host could not compute one (a failed read), not
+that nothing is ready — same contract as an absent digest. Fall back to
+`GET /api/projects/<id>/ready` and your own dependency gate below.
+
+**Your rules still apply, and they can only NARROW the list.** A card is ready
+for *you* when, from its description, either:
+
+- it carries the **Orchestrate opt-in sentence** (verbatim in `CLAUDE.md`) —
+  the block annotates this for you as `opt-in: yes|no`; **or**
+- it sits in **`inprogress`** with **no workspace** (the operator's "start
+  this" signal, ready regardless of opt-in).
+
+**Never dispatch a plain `todo` card that lacks the Orchestrate opt-in**, even
+when the host lists it — that is the operator's backlog, and the host
+deliberately does not enforce this one (it is method, and the method is
+yours). Skipping every listed card for this reason is a legitimate empty tick;
+say so once, naming the count, rather than repeating it per card.
+
+**Ordering is advice, membership is not.** Taking the second card while the
+first waits is legal — you may know something the host does not. Taking a card
+that is not on the list is not legal, and the server will tell you so.
+
+**Dependency gate (the fallback, when there is no block).** Cards filed as
+lanes carry `blocking` relationships (blocker → blocked). The API returns
+**outgoing** edges only, so build the blocked set from the blocker side: for
+every non-terminal card (cheapest: only when at least one candidate is ready),
+`card-relationships <id>`; every row with `relationship_type == "blocking"`
+marks its `related_card_id` **blocked** — unless the blocking card is
+`done`/`cancelled`. A blocked candidate is not ready: hold it, report
+`<card>: waiting on <blocker-id>`. No stored state — a blocker going `done`
+frees its dependents at the next tick's gate. A cycle (A blocks B blocks A)
+holds both forever: report it loudly as a filing error; never "resolve" it by
+dispatching one side.
 
 **Executor resolution**, in order: the card's `## Pipeline` executor-pin line
 (validate against `^[A-Z][A-Z0-9_]*$`; report an unrecognized pin loudly and
 fall through) → `config`'s `executor_profile` → `CLAUDE_CODE`. Never invent an
 executor.
 
-**Dispatch.** Several ready at once ⇒ lighter routing tiers first (`trivial` →
-`light` → `medium` → `heavy`, unrouted last), read from the first word after
-`**Routing:** `. Per card, adopt-before-dispatch: confirm via
+**Dispatch.** Per card, adopt-before-dispatch: confirm via
 `workspaces --card-id <id>` that nothing is already running for it (**one agent
-per card**). Then build the dispatch prompt — the plugin's `prompts/pipeline.md` template
+per card** — the host enforces this too, and will refuse with
+`a workspace already exists for this card`). Then build the dispatch prompt —
+the plugin's `prompts/pipeline.md` template
 when you can reach it (`{{TASK}}` = title + description, passed through
 **verbatim** — it carries the `## Pipeline` block and the `**Routing:**` line;
 `{{BASE_BRANCH}}` default `main`), else the card's title + description verbatim,
@@ -239,10 +270,11 @@ workspace (one worktree per repo on a shared branch); naming a repo would
 silently narrow a multi-repo project to that repo alone. `--repo-id` exists
 only as an operator-issued single-repo pin, which a dispatch is not.
 
-Name the tier in the report line, e.g.
-`dispatched CARD-12 (light → Planned, OPENCODE_HEADED)`; say
-`unrouted` when there is no Routing line — routing is never a dispatch
-precondition.
+Name the priority and tier in the report line, e.g.
+`dispatched CARD-12 (high, light → Planned, OPENCODE_HEADED)`; say
+`unrouted` when there is no Routing line and `no priority` when the card has
+none — neither is a dispatch precondition. When the cap turned work away, add
+one line: `cap 3/3 — N held`.
 
 ### 6. Ping non-active agents
 
