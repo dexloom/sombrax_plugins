@@ -608,6 +608,25 @@ def build_parser():
                    help="bind one delegable stage's model, e.g. "
                    "plan=gpt-5.6-sol. Repeatable. `STAGE=` clears the file's entry.")
     p.add_argument("--custom-text", help="custom instructions appended to the block")
+    p = sub.add_parser(
+        "knowledge-ask",
+        help="GET /api/knowledge/ask — F5. Ask the two libraries: the operator "
+        "handbook (cited `page \u00a7 section`, read through A4's INDEX.md) and "
+        "this board's own memory (B4's index plus the vault's notes, cited as "
+        "dossiers, reports, cards and notes). Every citation has been checked "
+        "against its source before it is returned. No source found => `found: "
+        "false` and the pinned nothing-found line; there is no path here that "
+        "answers from a model's memory.",
+    )
+    p.add_argument("question", help="the operator's question, or a bare topic")
+    p.add_argument("--library", choices=["both", "handbook", "project"],
+                   help="narrow to one library (default: both)")
+    p.add_argument("--limit", type=int, help="citations per source (default 6)")
+    p.add_argument("--project", help="which project's vault folder to scan; "
+                   "irrelevant when knowledge.vault_path is configured")
+    p.add_argument("--text", action="store_true",
+                   help="print the rendered answer instead of the JSON envelope")
+
     sub.add_parser("projects", help="GET /api/projects")
     sub.add_parser(
         "repos",
@@ -1128,6 +1147,40 @@ def main(argv=None):
         call(base, "POST", build_path("api", "pipelines", args.name, "compose"),
              body=body)
         return
+    if cmd == "knowledge-ask":
+        probe_health(base)
+        query = {"q": args.question}
+        if args.library:
+            query["library"] = args.library
+        if args.limit:
+            query["limit"] = str(args.limit)
+        if args.project:
+            query["project"] = args.project
+        status, raw = request(base, "GET", "/api/knowledge/ask", query=query)
+        if not args.text:
+            unwrap(raw)
+            return
+        # `--text` prints what the deterministic answer already is: the
+        # citations, rendered. It never composes prose of its own — the whole
+        # point of the endpoint is that nothing between the sources and the
+        # reader is free to invent.
+        try:
+            envelope = json.loads(raw.decode("utf-8"))
+        except (ValueError, UnicodeDecodeError):
+            unwrap(raw)
+            return
+        data = envelope.get("data") if envelope.get("success") is True else None
+        if not isinstance(data, dict):
+            unwrap(raw)
+            return
+        print(data.get("answer", ""))
+        if data.get("handbook_index_stale"):
+            print(
+                "\n[handbook INDEX.md carries no vibecrew-handbook-index-v1 block "
+                "— regenerate with scripts/generate-handbook-index.py and deploy it]"
+            )
+        return
+
     if cmd == "projects":
         call(base, "GET", "/api/projects")
         return
