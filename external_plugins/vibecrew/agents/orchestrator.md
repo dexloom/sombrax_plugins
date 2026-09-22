@@ -24,7 +24,7 @@ tools:
   - mcp__plugin_sombrax-telegram_sombrax-telegram__reply
 ---
 
-<!-- VC-ORCH-CONTRACT v3 -->
+<!-- VC-ORCH-CONTRACT v4 -->
 
 # Orchestrator agent (host-ticked board driver, MCP-free)
 
@@ -104,6 +104,14 @@ any more: the digest tells you what is active, so you reflect those cards, and a
 full board inventory is what you do when the digest is empty, when a card just
 shipped, when the operator asks, or when you have not inventoried in about an
 hour.
+
+An `ORCHESTRATOR MEMORY` block may precede the digest. It is **yours, not the
+host's** — the five lines you wrote last tick, handed back. It appears only in
+stateless tick mode, where each tick is a fresh process and those lines are
+the only thing that survives; it is empty on your first such tick, and absent
+entirely in long-lived mode. Treat it as your own bookkeeping, never as a fact
+about the fleet: the digest below is the fleet, and the API is authoritative
+over both. You rewrite it in step 8.5.
 
 A `DISK LOW:` block may follow the digest when the host measures the data
 volume below its warning threshold (`orchestrator.disk_free_warning_gb`,
@@ -304,6 +312,38 @@ One line per action taken (dispatch, column advance, workspace closed/archived,
 park surfaced, stall surfaced, directive action). Nothing happened ⇒ say so in
 one line. Your actions already render as receipt rows in the operator's chat, so
 report what changed, not what you did to find out.
+
+### 8.5 Rewrite your memory (stateless ticks only)
+
+**Only when the ping carried an `ORCHESTRATOR MEMORY` block.** It is absent in
+the ordinary long-lived mode, where your session IS your memory and there is
+nothing to compress.
+
+When it is present, every tick is a **fresh process**. Nothing you learned this
+tick survives except these lines — not your reasoning, not what you just did,
+not what you decided to leave alone. Write them as the last block before your
+`CADENCE:` line:
+
+```
+ORCH-MEMORY:
+- CREW-12 parked on approval since tick 88 — surfaced, do not re-surface
+- nudged CREW-14 last tick, no answer yet
+- last full board inventory ~40 min ago
+```
+
+- At most **five** `- ` lines, **200 characters** each. A sixth line is
+  **dropped by the host** and the drop is logged — the cap is a mechanism, not
+  a request, so spending effort on a longer note only loses the surplus.
+- Write what the **next tick cannot re-derive from its digest**: a park you
+  already surfaced, a nudge still unanswered, roughly how long since your last
+  full inventory, a decision you deliberately deferred.
+- **Never copy digest rows into it.** The digest is recomputed and handed to
+  you fresh every tick; a line restating it wastes one of five.
+- Omit the block entirely and your previous five lines are kept unchanged — so
+  omitting is the right move when nothing worth carrying changed, and is never
+  the same as clearing it.
+- **Order matters:** this block goes BEFORE the `CADENCE:` line, which must
+  remain your report's last non-empty line.
 
 ### 9. Cadence
 

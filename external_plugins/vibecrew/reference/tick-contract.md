@@ -27,6 +27,11 @@ Consequences for the agent:
 
 - **You never arm a timer.** No `/loop`, no `CronCreate`, no `ScheduleWakeup`.
   Ticks arrive as prompts.
+- **In stateless tick mode (F1), each tick is a fresh process** and NOTHING
+  survives between ticks except the `ORCH-MEMORY:` block (§3.5) — which is the
+  whole hypothesis that mode exists to test. The mode is off by default and the
+  long-lived session is the incumbent; when it is off, everything in this
+  contract reads exactly as it did before F1.
 - **You do influence the cadence** — through the `CADENCE:` line (§3), which the
   host obeys.
 - If you were launched before this change and still hold a `/loop` cron,
@@ -46,6 +51,10 @@ human action per your directives. Your full method is your agent definition —
 this ping never overrides it. End your report with the CADENCE line as its last
 non-empty line.
 
+ORCHESTRATOR MEMORY (yours, not the host's — these 5 lines are ALL that survives from your last tick; every other fact below is recomputed fresh):
+  - <your line 1>
+  … (the ask, the grammar and the cap, restated inline)
+
 STATUS DIGEST (host-computed; advisory — the API is authoritative; absent ⇒ probe yourself):
 - <CARD> [ws <id>, session <id>, run <id>, <executor>]: <status>; <output since last
   tick | no output for <M>m (<K> ticks) | no output ever (<K> ticks)>;
@@ -64,6 +73,15 @@ Directives enabled for this run — apply each one's behavior as defined in your
 agent instructions:
 - <one line per enabled directive>
 ```
+
+The `ORCHESTRATOR MEMORY` block is OPTIONAL and sits between the instruction
+and the digest: present ONLY in stateless tick mode
+(`orchestrator.stateless_ticks = "1"`), absent in the long-lived default. It is
+"what you knew last tick" and the digest is "what is true now" — the order a
+fresh process needs to orient in. It is self-contained (grammar and cap
+restated inline) because a fresh process has only this ping and its system
+prompt. The two blocks that are ACTED on — `DISPATCHABLE NOW` and the
+directives — keep the last slots regardless.
 
 The `DISK LOW:` block is OPTIONAL and sits between the digest and the
 directives: present only when the host measures the data volume below
@@ -202,6 +220,35 @@ This grammar is byte-compatible with vibe-kanban-indie's `vk-sweeper.md`, so an
 operator who has read one has read both. That product is **out of scope** here
 (different backend); the shared grammar is documentation, not a dependency.
 
+## 3.5 The `ORCH-MEMORY:` block (agent → host)
+
+Present only in stateless tick mode, and only in a report answering a ping that
+carried an `ORCHESTRATOR MEMORY` block.
+
+```
+ORCH-MEMORY:
+- <line 1>
+- <line 2>
+```
+
+- **At most 5 lines, 200 characters each.** Both caps are enforced by the
+  HOST, not requested of the agent: a sixth line is dropped and the drop is
+  logged (`orchestrator.memory_truncated`, never deduped). The cap IS the
+  hypothesis — an uncapped note is the long-lived session with extra steps, so
+  an experiment that let it grow would reproduce the thing it was measuring
+  against.
+- Read from the **LAST** `ORCH-MEMORY:` marker in the report, so quoting the
+  grammar mid-report cannot rewrite the memory — the same protection §3's
+  last-non-empty-line rule gives `CADENCE:`.
+- The block ends at the first line that is not a `- ` bullet; blank lines
+  inside it are skipped, not terminal.
+- **Malformed, truncated or absent ⇒ the host keeps the PREVIOUS note
+  unchanged.** Never destructive: a compacted report must not be able to erase
+  the agent's memory.
+- **Ordering:** the block goes BEFORE the `CADENCE:` line. `CADENCE:` is read
+  as the report's last non-empty line, so a memory block placed after it would
+  silently disable every cadence change.
+
 ## 4. Reaching an agent
 
 | Situation | Call |
@@ -282,6 +329,9 @@ Ids are byte-identical to vibe-kanban-indie's, and are also the persistence keys
 | `DISPATCHABLE NOW` block | `CrewOrchestrator/FleetDigest.swift` (`dispatchBlock`) | this file, the agent definitions |
 | `orchestrator.max_concurrent` + the refusal reasons | `CrewPipeline/DispatchPolicy.swift` | this file, the agent definitions |
 | `dispatch refused: …` message | `CrewLaunch/AgentLaunchService.swift` (`AgentLaunchError.dispatchRefused`) | this file, the agent definitions |
+| `ORCH-MEMORY:` grammar + both caps | `CrewOrchestrator/OrchestratorMemoryNote.swift` | this file, the agent definitions |
+| `ORCHESTRATOR MEMORY` block | `CrewOrchestrator/OrchestratorTickPing.swift` (`memoryBlock`) | this file, the agent definitions |
+| `orchestrator.stateless_ticks` + the caps | `CrewOrchestrator/StatelessTickConfig.swift` | this file, `docs/configuration.md` |
 | Agent method | `agents/orchestrator.md` (this repo) | vendored into the app's payload catalog |
 
 The agent definitions in this repo are the **source of truth** for the method.
