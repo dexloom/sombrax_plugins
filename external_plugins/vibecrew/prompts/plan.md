@@ -1,29 +1,29 @@
 <!--
-plan.md — the canonical planning method. Planning is owned by the dedicated
-`planner` agent (it writes `IMPLEMENTATION_PLAN.md` at the workspace root); this
-prompt is that agent's shape/method. It is also kept self-contained so a
-self-driving coding agent can be handed the same prompt directly when no separate
-planner step is run. Fill {{TASK}} with the card's title + spec before sending.
+plan.md — the canonical planning method. The `planner` agent owns planning and
+uses this as its shape; it is self-contained so a self-driving coding agent can
+be handed it directly when no separate planner runs. Fill {{TASK}} with the
+card's title + spec before sending.
 -->
-You are planning the task below for this repository. **Before any code is
-written**, produce an implementation plan and save it as `IMPLEMENTATION_PLAN.md`
-at the **workspace root**. In VibeCrew the workspace root IS the git worktree,
-so the plan lands inside the repo: it is pipeline paperwork, not a deliverable —
-right after writing it, append `IMPLEMENTATION_PLAN.md` (and `SPEC.md`) to the
-repo's exclude file (the path printed by `git rev-parse --git-path info/exclude`)
-so it can never be committed. It guides this job and is discarded when the
-branch merges.
+Plan the task below for this repository and save the plan as
+`IMPLEMENTATION_PLAN.md` at the workspace root, before any code is written.
 
-If `SPEC.md` exists at the workspace root, it is the authoritative spec for this
-task — read it first and ground the plan in it.
+In VibeCrew the workspace root is the git worktree, so the plan lands inside the
+repo. It is pipeline paperwork, not a deliverable: right after writing it,
+append `IMPLEMENTATION_PLAN.md` and `SPEC.md` to the repo's exclude file (the
+path printed by `git rev-parse --git-path info/exclude`) so neither can be
+committed.
+
+If `SPEC.md` exists at the workspace root, it is the authoritative spec: read
+it first and ground the plan in it, so that each acceptance criterion in it is
+covered by a step or by the Verification section.
 
 ## Task
 {{TASK}}
 
 ## How to plan
-Read the relevant code first and ground every step in real files — a plan that
-names the wrong function or assumes a structure that isn't there is worse than no
-plan. Then write `IMPLEMENTATION_PLAN.md` in this shape:
+Read the relevant code first and ground every step in real files; a plan that
+names the wrong function or assumes a structure that isn't there is worse than
+no plan. Then write `IMPLEMENTATION_PLAN.md` in this shape:
 
 ```
 ## Implementation plan: <title>
@@ -44,10 +44,11 @@ concrete commands where you know them>
 decision before/while building>
 ```
 
-Keep steps small enough that each is one focused turn, and ordered so a later step
-only depends on earlier ones.
+Keep each step small enough for one focused turn, and order the steps so each
+depends only on earlier ones. Name every file a step touches, including every
+call site of a signature you change.
 
 ## Then stop
-Save the file at the workspace root, confirm in one line that it's written, and **stop
-— do not start implementing**. The next instruction will be a codex review of the
+Save the file at the workspace root, confirm in one line that it is written,
+and stop without implementing. The next instructions are a codex review of the
 plan, then step-by-step development.

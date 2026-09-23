@@ -25,15 +25,14 @@ window.
 
 Consequences for the agent:
 
-- **You never arm a timer.** No `/loop`, no `CronCreate`, no `ScheduleWakeup`.
+- You never arm a timer: no `/loop`, no `CronCreate`, no `ScheduleWakeup`.
   Ticks arrive as prompts.
-- **In stateless tick mode (F1), each tick is a fresh process** and NOTHING
-  survives between ticks except the `ORCH-MEMORY:` block (§3.5) — which is the
-  whole hypothesis that mode exists to test. The mode is off by default and the
+- In stateless tick mode (F1), each tick is a fresh process, and nothing
+  survives between ticks except the `ORCH-MEMORY:` block (§3.5). That is the
+  hypothesis the mode exists to test. The mode is off by default and the
   long-lived session is the incumbent; when it is off, everything in this
   contract reads exactly as it did before F1.
-- **You do influence the cadence** — through the `CADENCE:` line (§3), which the
-  host obeys.
+- You set the cadence through the `CADENCE:` line (§3), which the host obeys.
 - If you were launched before this change and still hold a `/loop` cron,
   `CronDelete` it: otherwise you tick twice per interval.
 
@@ -74,16 +73,16 @@ agent instructions:
 - <one line per enabled directive>
 ```
 
-The `ORCHESTRATOR MEMORY` block is OPTIONAL and sits between the instruction
-and the digest: present ONLY in stateless tick mode
+The `ORCHESTRATOR MEMORY` block is optional and sits between the instruction
+and the digest: present only in stateless tick mode
 (`orchestrator.stateless_ticks = "1"`), absent in the long-lived default. It is
 "what you knew last tick" and the digest is "what is true now" — the order a
 fresh process needs to orient in. It is self-contained (grammar and cap
 restated inline) because a fresh process has only this ping and its system
-prompt. The two blocks that are ACTED on — `DISPATCHABLE NOW` and the
-directives — keep the last slots regardless.
+prompt. The two blocks that are acted on, `DISPATCHABLE NOW` and the
+directives, keep the last slots regardless.
 
-The `DISK LOW:` block is OPTIONAL and sits between the digest and the
+The `DISK LOW:` block is optional and sits between the digest and the
 directives: present only when the host measures the data volume below
 `orchestrator.disk_free_warning_gb` (default 20 GB; `0` disables). It carries
 the exact protocol ask inline — a compacted context must be able to act on the
@@ -131,7 +130,7 @@ What the host filters, and what it does not:
 | The `Orchestrate` opt-in | **you** — the host only annotates `opt-in: yes\|no` |
 | Adopt-before-dispatch, executor resolution, prompt composition | **you** |
 
-Your rules can only ever **narrow** this list, never widen it.
+Your rules can only narrow this list, never widen it.
 
 The unit of concurrency is a **workspace**, not a run: one worktree, one
 agent. The four pinned host-agent homes (orchestrator, product, assistant,
@@ -139,7 +138,7 @@ auditor) do not count — the cap governs card work, not every process on the
 machine. The count is taken after the tick's reconcile pass, so it is correct
 across an app restart rather than counting ghosts.
 
-Ordering is **advice**; membership and the cap are **enforced**. Starting the
+Ordering is advice; membership and the cap are enforced. Starting the
 second card on the list while the first waits is legal — the host will not
 arbitrate a tie it computed a tick earlier. Starting a card that is not on the
 list is not.
@@ -165,18 +164,18 @@ never judges whether a run is stalled, only reports how long it has been quiet.
 
 Notes that matter:
 
-- **Advisory, never authoritative.** It is a snapshot taken while composing the
+- Advisory, never authoritative: it is a snapshot taken while composing the
   ping. Act on the API.
-- **Absent digest ⇒ the host could not look**, which is *not* "nothing is
-  running". Probe yourself.
+- An absent digest means the host could not look, not that nothing is
+  running. Probe yourself.
 - `- (no non-terminal runs)` **is** a digest: it means nothing is running.
 - The orchestrator's own session is excluded — it is not a card being driven.
 - Silent-tick counts increment only on **delivered** ticks. A tick the host
   skipped (agent mid-turn) is not the agent's silence.
-- **`not observed by this app session (log tail lost on restart)`** is NOT
+- `not observed by this app session (log tail lost on restart)` is not
   silence. A headed agent survives an app restart; its log drain does not, so
   its output stops reaching `run_logs` while it works normally. Such a row never
-  accrues silent ticks and is **never nudge-eligible** — check its pane
+  accrues silent ticks and is never nudge-eligible; check its pane
   (`GET /api/runs/<run>/pane`) instead, which reads the screen directly.
 - Capped at 30 rows, **stalest first**, with a `+N more` line. The rows that get
   cut are the ones producing output — the ones you least need told about.
@@ -199,7 +198,7 @@ CADENCE: re-arm <interval>
 
 - `<interval>`: `1m`–`59m` or `1h`–`23h`. Nothing else parses.
 - The host clamps to `[1m, 1h]`, so a legal `re-arm 4h` becomes 1h.
-- **Missing or malformed ⇒ `unchanged`**, and the host's own activity oracle
+- Missing or malformed ⇒ `unchanged`, and the host's own activity oracle
   decides instead. A truncated or compacted report can never stall or thrash the
   loop.
 - Only the last non-empty line is read, so quoting the grammar mid-report is
@@ -237,15 +236,15 @@ ORCH-MEMORY:
   hypothesis — an uncapped note is the long-lived session with extra steps, so
   an experiment that let it grow would reproduce the thing it was measuring
   against.
-- Read from the **LAST** `ORCH-MEMORY:` marker in the report, so quoting the
+- Read from the last `ORCH-MEMORY:` marker in the report, so quoting the
   grammar mid-report cannot rewrite the memory — the same protection §3's
   last-non-empty-line rule gives `CADENCE:`.
 - The block ends at the first line that is not a `- ` bullet; blank lines
   inside it are skipped, not terminal.
-- **Malformed, truncated or absent ⇒ the host keeps the PREVIOUS note
-  unchanged.** Never destructive: a compacted report must not be able to erase
+- Malformed, truncated or absent ⇒ the host keeps the previous note
+  unchanged. Never destructive: a compacted report must not be able to erase
   the agent's memory.
-- **Ordering:** the block goes BEFORE the `CADENCE:` line. `CADENCE:` is read
+- Ordering: the block goes before the `CADENCE:` line. `CADENCE:` is read
   as the report's last non-empty line, so a memory block placed after it would
   silently disable every cadence change.
 
@@ -265,7 +264,7 @@ ORCH-MEMORY:
 | `404` | no such run | stop |
 | `422 not_interactive` | real run, but headless | use `follow-up` |
 | `410 session_gone` | was headed, tmux is gone | stop; the row is stale |
-| `409 not_ready_for_input` | mid-turn or on a modal | **retry later** |
+| `409 not_ready_for_input` | mid-turn or on a modal | retry later |
 
 A follow-up while a run is live returns **409** from
 `createFollowUpRun` — "still working, do not resume", never an error to retry
@@ -275,7 +274,7 @@ blindly.
 
 | Code | Meaning | What to do |
 |---|---|---|
-| `409 dispatch refused: …` | the card is not in the `DISPATCHABLE NOW` set | **do not retry this tick** — read the reason, report it, move on. A lane frees, a blocker merges, or the operator raises the cap. |
+| `409 dispatch refused: …` | the card is not in the `DISPATCHABLE NOW` set | don't retry this tick: read the reason, report it, and move on. A lane frees, a blocker merges, or the operator raises the cap. |
 
 ## 5. The nudge
 
@@ -288,8 +287,8 @@ Why are you stuck
 One literal so an operator grepping a transcript finds every nudge with one
 search. (It previously existed in three spellings, one of which carried a `?`.)
 
-**Eligible** = the digest shows no output for **≥2 delivered ticks**.
-**Excluded** — never nudge one of these:
+Eligible: the digest shows no output for ≥2 delivered ticks.
+Excluded (never nudge these):
 
 - pending approvals > 0 (it is blocked on a human, not stuck),
 - parked on `AWAITING OPERATOR APPROVAL` or `VK-ESCALATE:`,
@@ -303,12 +302,12 @@ That last field is the idempotence mechanism, and it is host-computed on
 purpose: it removes any need to remember what you sent last tick, which a
 compacted context cannot do reliably.
 
-Gated on the `nudge-stuck` directive. Stall **reporting** is core; stall
-**nudging** is opt-in.
+Gated on the `nudge-stuck` directive. Stall reporting is core; stall nudging
+is opt-in.
 
 ## 6. Directives
 
-All four are **opt-in**, default off, and named in the ping's last block when
+All four are opt-in, default off, and named in the ping's last block when
 enabled. Their behavior is defined in the agent definition, not in the ping —
 the ping only says which are on.
 

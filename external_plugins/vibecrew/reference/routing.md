@@ -50,7 +50,10 @@ OpenCode and Pi ids must be provider-qualified — the bundled pipelines carry n
 `kimi-coding/k3` and `minimax/MiniMax-M3` arms and Claude Code's `fable` are
 explicit-ask only (uncalibrated, or measured-weak in MiniMax's case). Effort is
 TOML-only: no dialog and no compose-endpoint field carries it, so `effort: high`
-is a report note, not a binding.
+is a report note, not a binding. The same goes for a Sonnet 5 coder: leave it at
+its default `high` rather than pinning `low`/`medium` for the code stage, because
+Sonnet 5 follows effort strictly and under-thinks at low effort (Anthropic's
+Sonnet 5 prompting guide; no board telemetry yet).
 
 **The tier → type map (§3, §4) is `trivial → Basic`, `light → Planned`,
 `medium → Async`, `heavy → Async` + code-review + `pr`.** The `light → Planned`
@@ -62,7 +65,7 @@ recalibration** (§7.6).
 **Pi is the explicit-ask-only arm.** It runs the same models OpenCode uses via
 the `pi` CLI but has **n=0 telemetry** on both boards, so it is deliberately
 absent from the auto-routing (executor ladder + tier map) — `classify-task`
-never routes to Pi as a main loop or as a step. An operator selects Pi ONLY by
+never routes to Pi as a main loop or as a step. An operator selects Pi only by
 naming `PI`/`PI_HEADED` or asking for a step "on pi"; that explicit ask
 overrides the ladder exactly like any operator-named agent. Pi runs a single
 conversation with no subagents, so a Pi main loop does its delegable stages

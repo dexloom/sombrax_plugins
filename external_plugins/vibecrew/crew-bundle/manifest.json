@@ -5,7 +5,7 @@
       "id": "code-review-checklist",
       "name": "Code Review Checklist",
       "kind": "skill",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "description": "A reusable self-review checklist skill: run a focused pass over a diff for common defects (error handling, edge cases, naming, tests) before opening a PR. Installs a SKILL.md the agent can invoke.",
       "targets": [
         "claude",
@@ -17,7 +17,7 @@
       "id": "commit-helper",
       "name": "Commit Helper",
       "kind": "agent",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "description": "A subagent that drafts a conventional-commit message from a staged diff, respecting the repo's existing commit style. Installs an agent definition the CLI can delegate to.",
       "targets": [
         "claude"
@@ -27,7 +27,7 @@
       "id": "vibecrew-product",
       "name": "VibeCrew Spec Writer",
       "kind": "agent",
-      "version": "1.1.1",
+      "version": "1.2.0",
       "description": "Product-manager subagent that writes a card's technical spec to SPEC.md. Delegated to by a pipeline's spec stage. Installs an agent definition both CLIs can delegate to; the model is chosen per call by the launching pipeline.",
       "targets": [
         "claude",
@@ -38,7 +38,7 @@
       "id": "vibecrew-planner",
       "name": "VibeCrew Planner",
       "kind": "agent",
-      "version": "1.1.1",
+      "version": "1.2.0",
       "description": "Planning subagent that turns a card's SPEC.md into a step-by-step IMPLEMENTATION_PLAN.md. Delegated to by a pipeline's plan stage. Installs an agent definition both CLIs can delegate to; the model is chosen per call by the launching pipeline.",
       "targets": [
         "claude",
@@ -49,7 +49,7 @@
       "id": "vibecrew-coder",
       "name": "VibeCrew Coder",
       "kind": "agent",
-      "version": "1.1.1",
+      "version": "1.2.0",
       "description": "Coding subagent that implements a card from its spec and plan, executing IMPLEMENTATION_PLAN.md step by step. Delegated to by a pipeline's code stage. Installs an agent definition both CLIs can delegate to; the model is chosen per call by the launching pipeline.",
       "targets": [
         "claude",
@@ -60,7 +60,7 @@
       "id": "vibecrew-reviewer",
       "name": "VibeCrew Reviewer",
       "kind": "agent",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "description": "Read-only review subagent that walks a card's diff for common defects and reports findings grouped by severity. Delegated to by a pipeline's review stage. Installs an agent definition both CLIs can delegate to; the model is chosen per call by the launching pipeline.",
       "targets": [
         "claude",
@@ -71,7 +71,7 @@
       "id": "vibecrew-orchestrator",
       "name": "VibeCrew Orchestrator",
       "kind": "agent",
-      "version": "2.7.0",
+      "version": "2.8.0",
       "description": "The board-driving orchestrator agent. Host-ticked: VibeCrew's runtime owns the timer and delivers each tick with a status digest; the agent reflects card status, closes finished workspaces, dispatches from the host's WIP-capped, priority-ordered DISPATCHABLE NOW set (a start outside it is refused), nudges stalled ones, and replies with a CADENCE line. Installs an agent definition both CLIs can launch; arms no cron of its own. Carries NO model pin — the launcher's per-agent model pick (or the CLI default) governs.",
       "targets": [
         "claude",
@@ -83,7 +83,7 @@
       "id": "vibecrew-assistant",
       "name": "VibeCrew Assistant",
       "kind": "agent",
-      "version": "1.9.0",
+      "version": "1.10.0",
       "description": "The operator's guide agent: answers from two libraries with citations \u2014 the operator handbook, cited `page \u00a7 section` and read through its generated `INDEX.md`, and this board's own memory (cards, shipping reports, dossiers and vault notes); an ungrounded question gets \"nothing found\", never an improvised answer. It explains VibeCrew's processes, performs configuration and pipeline setup over the REST API, tidies the board on request — moves cards between columns, sweeps stuck cards to the column the evidence supports (Done or In Review), and cleans up unused workspaces (deletable-only, reversibly archiving when evidence is incomplete) — maintains a workspace's repository on request (reads its state, commits its changes, pushes its branch, cleans its working tree — server-performed, liveness-gated, never forced) — and runs diagnostics (fleet snapshot, run logs, the API failure log), filing what it found as an issue on VibeCrew's public tracker (dexloom/vibecrew_sh) on an explicit request. Outside configuration, the pipeline catalog, those on-request actions, and issue creation, every other endpoint is read-only to it, and it ships no file-write tools. Not host-ticked: a conversation the operator drives. Carries NO model pin — the launcher's per-agent model pick (or the CLI default) governs.",
       "targets": [
         "claude",
@@ -95,7 +95,7 @@
       "id": "vibecrew-auditor",
       "name": "VibeCrew Auditor",
       "kind": "agent",
-      "version": "1.1.0",
+      "version": "1.2.0",
       "description": "The compliance reviewer: on-demand commit-to-card audits over the REST API — pulls the card's audit bundle (spec, plan, finalization record, per-commit changed files and diffs), judges whether the merged content matches what the card asked for, and writes its findings as a card comment. Can list and delete unused workspaces and move cards; holds no subagent and no file-write tools, and never launches anything. Not host-ticked: every turn is a question (the operator's or the ask endpoint's). Carries NO model pin — the launcher's per-agent model pick (or the CLI default) governs.",
       "targets": [
         "claude",
@@ -107,7 +107,7 @@
       "id": "vibecrew-decider",
       "name": "VibeCrew Decider",
       "kind": "agent",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "description": "Answers a coding agent's pending question prompt on the operator's behalf, grounded in the card/spec/plan. The orchestrator delegates to this on an explicit 'answer that questionnaire' request, so it ships alongside it — an orchestrator that can name a delegate it cannot reach is worse than one that never offers.",
       "targets": [
         "claude"
@@ -117,7 +117,7 @@
       "id": "vibecrew-pm",
       "name": "VibeCrew Product",
       "kind": "agent",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "description": "The intake PM: turns tasks, GitHub links, and plan links into routed, chained cards over the REST API. Runs the Product Skills (product-manager, classify-task) as its method — spec inline, classify, pipeline composed by the server, card filed — and arranges multi-deliverable work as lanes (parent epic + sub-cards + blocking edges). Writes cards and pipeline blocks, never code; never launches anything. Not host-ticked: every turn is the operator's. Carries NO model pin — the launcher's per-agent model pick (or the CLI default) governs.",
       "targets": [
         "claude",
@@ -129,7 +129,7 @@
       "id": "vibecrew-stages",
       "name": "VibeCrew Stage Reference",
       "kind": "skill",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "description": "Resolves a card's `## Pipeline` block when it is written in reference form — stage names plus an `id:` instead of the prompts inlined. Prints each ticked stage's full text, in the card's own order, re-rendered through the server's own composer, so a slimmed card is never an unrunnable one. Installs a SKILL.md every executor can read.",
       "targets": [
         "claude",
@@ -142,7 +142,7 @@
       "id": "product-manager",
       "name": "Product Manager",
       "kind": "skill",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "description": "The Product agent's intake method as a standalone skill: turn a rough brief into a technical task spec rendered inline, then file it as a VibeCrew card — classified via classify-task, carrying a server-composed pipeline block, decomposed into lanes (epic + sub-cards + blocking edges) when the work warrants it. The standalone copy resolves the bundled API client from the app's catalog checkout.",
       "targets": [
         "claude",
@@ -153,7 +153,7 @@
       "id": "classify-task",
       "name": "Classify Task",
       "kind": "skill",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "description": "The Product agent's routing method as a standalone skill: resolve the main agent, score the five-axis complexity tier, map it to a pipeline type (Basic / Planned / Async) with per-step agent and model bindings and stage toggles, and emit the one-line Routing record. The standalone copy resolves the bundled API client from the app's catalog checkout.",
       "targets": [
         "claude",

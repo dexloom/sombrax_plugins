@@ -1,6 +1,6 @@
 ---
 name: commit-helper
-description: Drafts a conventional-commit message from a staged diff, matching the repo's existing commit style. Invoke via the agent/subagent delegation surface when the user says "draft a commit message" or "what should I commit as".
+description: Drafts a conventional-commit message for the staged diff in the repo's own commit style. Use when the user says "draft a commit message" or "what should I commit as". Not for staging, committing, or reviewing the change.
 tools: Read, Bash
 ---
 
