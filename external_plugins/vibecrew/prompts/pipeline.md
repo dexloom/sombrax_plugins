@@ -91,8 +91,10 @@ Notes for other agents or the operator go to card comments (`vibecrew_api.py com
   spec. It does only when all three of `### Outcome`, `### Scope` and
   `### Testing & acceptance criteria` occur at the start of a line (a prefix
   match: the real heading is `### Outcome — what's different when this is
-  done`), outside any fenced code block or block quote. If any one is missing,
-  take the "otherwise" path below.
+  done`), outside any fenced code block, block quote, or
+  `<pasted_content id="…">` … `</pasted_content id="…">` block (imported GitHub
+  text; the block ends only at the closing tag carrying the same id). If any
+  one is missing, take the "otherwise" path below.
 
   When all three are present, spawn nothing and copy the spec through. Write
   `<workspace_root>/SPEC.md` as exactly this:

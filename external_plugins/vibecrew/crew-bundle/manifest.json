@@ -153,7 +153,7 @@
       "id": "classify-task",
       "name": "Classify Task",
       "kind": "skill",
-      "version": "1.1.0",
+      "version": "1.1.1",
       "description": "The Product agent's routing method as a standalone skill: resolve the main agent, score the five-axis complexity tier, map it to a pipeline type (Basic / Planned / Async) with per-step agent and model bindings and stage toggles, and emit the one-line Routing record. The standalone copy resolves the bundled API client from the app's catalog checkout.",
       "targets": [
         "claude",

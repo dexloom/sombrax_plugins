@@ -193,7 +193,9 @@ Report every toggle; the caller applies them against the pipeline's
 
 - **spec:** `adopt` when the card description already passes the full-spec
   test (`### Outcome`, `### Scope` and `### Testing & acceptance criteria` each
-  at the start of a line, the same test the spec stage applies). The spec stage
+  at the start of a line, outside any fenced code block, block quote, or
+  `<pasted_content id="…">` … `</pasted_content id="…">` block of imported
+  GitHub text — the same test the spec stage applies). The spec stage
   detects this itself and copies the description to `SPEC.md` instead of
   spawning a subagent, so nothing is added or dropped; the toggle records the
   expectation so a mis-detect is visible. `write` when the description is not a
