@@ -57,7 +57,8 @@ ORCHESTRATOR MEMORY (yours, not the host's — these 5 lines are ALL that surviv
 STATUS DIGEST (host-computed; advisory — the API is authoritative; absent ⇒ probe yourself):
 - <CARD> [ws <id>, session <id>, run <id>, <executor>]: <status>; <output since last
   tick | no output for <M>m (<K> ticks) | no output ever (<K> ticks)>;
-  input-sent-since-last-output: <yes|no>; approvals pending: <n>
+  input-sent-since-last-output: <yes|no>; approvals pending: <n>[; nudges: <n>/3[ — cap
+  reached; do NOT nudge (the host reported it for operator review)]]
 
 DISK LOW: <F> GB free on the data volume (warning threshold <T> GB). Ask the
 assistant to check free disk space and run its disk-cleanup skill — over the
@@ -161,6 +162,7 @@ never judges whether a run is stalled, only reports how long it has been quiet.
 | activity | output since last tick, how long it has been silent (and for how many **delivered** ticks), or `not observed by this app session` |
 | `input-sent-since-last-output` | the host already delivered input to this run since its last output |
 | `approvals pending` | count of unresolved approvals on that run |
+| `nudges: <n>/3` | optional, appended last: stall nudges the host has counted for this run since its last progress. Omitted at 0, so every other row is unchanged. At `3/3` it adds `— cap reached; do NOT nudge …`: the host has stopped nudging and reported the run (§5) |
 
 Notes that matter:
 
@@ -255,6 +257,7 @@ ORCH-MEMORY:
 | Run is `running` **and** headed (has a tmux session) | `POST /api/runs/<run>/send-input` `{"text":"…"}` |
 | Run is terminal, no completion signal | `POST /api/sessions/<session>/follow-up` `{"prompt":"…"}` |
 | See what a headed agent is looking at | `GET /api/runs/<run>/pane?lines=40` |
+| Get the host-composed stall nudge (§5) | `GET /api/runs/<run>/nudge` → `{text, nudges_sent, cap, cap_reached, open_items}` |
 
 `send-input`'s status codes are the contract — branch on the code, not the prose:
 
@@ -265,6 +268,7 @@ ORCH-MEMORY:
 | `422 not_interactive` | real run, but headless | use `follow-up` |
 | `410 session_gone` | was headed, tmux is gone | stop; the row is stale |
 | `409 not_ready_for_input` | mid-turn or on a modal | retry later |
+| `409 nudge_cap_reached` | a `VC-NUDGE:` text for a run already nudged 3 times without progress | stop; the host has reported it for operator review |
 
 A follow-up while a run is live returns **409** from
 `createFollowUpRun` — "still working, do not resume", never an error to retry
@@ -278,14 +282,36 @@ blindly.
 
 ## 5. The nudge
 
-Payload, exactly — no punctuation, no variation:
+Every nudge starts with one fixed prefix at byte 0:
 
 ```
-Why are you stuck
+VC-NUDGE:
 ```
 
-One literal so an operator grepping a transcript finds every nudge with one
-search. (It previously existed in three spellings, one of which carried a `?`.)
+The prefix is the only contract literal: an operator grepping a transcript
+finds every nudge with one search, and the host's delivery chokepoints
+recognise a nudge by it. The rest of the text is host-composed, not a literal.
+Fetch it from `GET /api/runs/<run>/nudge` and send its `text` verbatim over the
+channel you already use (`send-input`, or `host-messages` for a host agent).
+Never compose your own.
+
+The host composes one of two shapes from the workspace's task list (the
+agent's TodoWrite checklist; Codex and Pi keep none, so they always get the
+second):
+
+```
+VC-NUDGE: (nudge <n> of 3) No new output from you for a while. Your task list still has <m> open item(s):
+- [in_progress] <content>
+- [pending] <content>
+Continue with the next open item now. If something blocks you, say exactly what it is and what you need. A reply that only reports status is read as a report, not as the task being done: after 3 nudges with no progress the host stops nudging and reports this run to the operator as stuck.
+```
+
+```
+VC-NUDGE: (nudge <n> of 3) No new output from you for a while, and no open task-list items are on record for this run. State briefly what remains to be done, then continue with it. If something blocks you, say exactly what it is and what you need. A reply that only reports status is read as a report, not as the task being done: after 3 nudges with no progress the host stops nudging and reports this run to the operator as stuck.
+```
+
+Items are one line each, cut at 160 characters, at most 10 shown, then
+`- +<k> more open items`.
 
 Eligible: the digest shows no output for ≥2 delivered ticks.
 Excluded (never nudge these):
@@ -301,6 +327,23 @@ Excluded (never nudge these):
 That last field is the idempotence mechanism, and it is host-computed on
 purpose: it removes any need to remember what you sent last tick, which a
 compacted context cannot do reliably.
+
+The cap, host-counted per run:
+
+- Every `VC-NUDGE:` delivery through a host channel is counted. After 3 with no
+  progress, the host refuses a fourth (`409 nudge_cap_reached`) and the digest
+  row shows `nudges: 3/3 — cap reached`. Don't nudge that row.
+- On the next eligible tick at the cap the host sends nothing and writes one
+  stuck report for the operator (a Radar ▸ Failures row, "Agent stuck — nudges
+  exhausted", and an `orchestrator.run_stuck` Logbook pulse). One report per
+  stall.
+- Progress resets the count. The first new output after a nudge is the agent's
+  reply to it and does not reset; output after that does.
+- A text-only reply to a nudge is a report of where the agent stands, not proof
+  the task is done. The Done gate is unchanged.
+- Known limits: the count lives in host memory, so an app restart grants up to
+  3 more nudges; a terminal run's `follow-up` nudge is not counted.
+- An older app without `/nudge` answers 404: report the stall and don't nudge.
 
 Gated on the `nudge-stuck` directive. Stall reporting is core; stall nudging
 is opt-in.
@@ -323,7 +366,7 @@ Ids are byte-identical to vibe-kanban-indie's, and are also the persistence keys
 | Ping text | `CrewOrchestrator/OrchestratorTickPing.swift` | this file, the agent definitions |
 | Digest row format | `CrewOrchestrator/FleetDigest.swift` | this file, the agent definitions |
 | `CADENCE:` grammar | `CrewOrchestrator/CadenceDirective.swift` | this file, the agent definitions, `scripts/orchestrator.sh` |
-| `Why are you stuck` | `CrewOrchestrator/OrchestratorDirectives.swift` (`OrchestratorNudge.payload`) | the agent definitions, `vibecrew_api.py` docs |
+| `VC-NUDGE:` prefix, the payload shapes, the 3-nudge cap | `CrewLaunch/StallNudge.swift` (`StallNudge.prefix`, `compose`, `cap`; re-exported as `OrchestratorNudge`) | this file, the agent definitions, `vibecrew_api.py` (`send-input --nudge`) |
 | Directive ids + copy | `CrewOrchestrator/OrchestratorDirectives.swift` | the launch sheet, the agent definitions |
 | `DISPATCHABLE NOW` block | `CrewOrchestrator/FleetDigest.swift` (`dispatchBlock`) | this file, the agent definitions |
 | `orchestrator.max_concurrent` + the refusal reasons | `CrewPipeline/DispatchPolicy.swift` | this file, the agent definitions |

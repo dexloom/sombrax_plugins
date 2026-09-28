@@ -81,9 +81,12 @@ lives in `agents/orchestrator.md`; this script only names which flags are on.
   the operator Telegram topic. Requires the sombrax-telegram channel +
   listener to be loaded/running.
 - **`nudge-stuck`** — `ORCH_NUDGE_STUCK=1` (truthy: `1`/`true`/`yes`/`on`).
-  Sends the literal payload `Why are you stuck` (no punctuation) to a
+  Sends the host-composed `VC-NUDGE:` payload (fetched from
+  `GET /api/runs/<run>/nudge`; it names the run's open task-list items) to a
   **managed** card that the status digest shows silent for **≥2 delivered
-  ticks**. Channel by run state: a `running` headed run takes `send-input` (a
+  ticks**, at most 3 times per stall: after that the host refuses a further
+  nudge (`409 nudge_cap_reached`), the digest shows `nudges: 3/3`, and the
+  host reports the run as stuck for operator review. Channel by run state: a `running` headed run takes `send-input` (a
   `follow-up` would 409 for its whole tmux life); a terminal run without a
   completion or park signal takes `follow-up`. Excluded: pending approvals,
   parked, finished, or `input-sent-since-last-output: yes` — the host-computed

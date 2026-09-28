@@ -141,9 +141,11 @@ env toggles — see [`scripts/README.md`](scripts/README.md):
 - **`telegram-fanout`** — `ORCH_TELEGRAM_FANOUT=1` — mirrors
   dispatch/directive/awaiting-approval lines to the operator's Telegram
   topic. Requires the sombrax-telegram channel + listener.
-- **`nudge-stuck`** — `ORCH_NUDGE_STUCK=1` — sends a follow-up prompt to a
+- **`nudge-stuck`** — `ORCH_NUDGE_STUCK=1` — sends the host-composed
+  `VC-NUDGE:` prompt (`vibecrew_api.py nudge-text`) as a follow-up to a
   **managed** card whose latest run is terminal **without** a completion or
-  park signal. Excludes a `running` run (which would 409 anyway) and a
+  park signal. In the host-ticked app the host counts nudges per run and stops
+  at 3 (`409 nudge_cap_reached`, digest `nudges: 3/3`). Excludes a `running` run (which would 409 anyway) and a
   parked card (waiting on the operator, not stuck).
 
 There is **no context-compaction directive** here — headless per-run

@@ -233,7 +233,9 @@ Which runs raise approvals:
 ## Reach a headed agent
 
 ```
-python3 ${CLAUDE_PLUGIN_ROOT}/scripts/vibecrew_api.py send-input <run_id> --text "Why are you stuck"
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/vibecrew_api.py send-input <run_id> --text "…"
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/vibecrew_api.py send-input <run_id> --nudge
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/vibecrew_api.py nudge-text <run_id>
 python3 ${CLAUDE_PLUGIN_ROOT}/scripts/vibecrew_api.py pane <run_id> --lines 40
 ```
 
@@ -246,6 +248,7 @@ status code, not the prose:
 | `409 not_ready_for_input` | mid-turn | retry later |
 | `422 not_interactive` | headless run | use `follow-up` |
 | `410 session_gone` | the tmux session is gone | stop |
+| `409 nudge_cap_reached` | a `VC-NUDGE:` text for a run already nudged 3 times without progress | stop; the host reported it for operator review |
 | `404` | no such run | stop |
 
 `pane` shows what the agent's screen shows right now. It is the only way to see
@@ -253,8 +256,13 @@ a modal the board's API cannot represent (a trust dialog, or a permission
 prompt in a TUI that raises no approval row). A dead session answers `200` with
 `alive: false`; that is the answer, not an error.
 
-The canonical nudge payload is exactly `Why are you stuck`: no punctuation, one
-literal everywhere, so a transcript grep finds every nudge.
+Every stall nudge starts with the prefix `VC-NUDGE:`, so a transcript grep
+finds every nudge. The rest is host-composed: it names the run's open task-list
+items (or asks the agent to state what remains). `nudge-text` shows it
+(`GET /api/runs/<run>/nudge`, read-only); `send-input --nudge` fetches and
+sends it verbatim, and exits non-zero with `nudge_cap_reached` once the host's
+3-nudge cap holds. Don't write your own nudge text: the host counts only
+`VC-NUDGE:` deliveries.
 
 ## See who has gone quiet
 

@@ -18,7 +18,7 @@ tools:
   - mcp__plugin_sombrax-telegram_sombrax-telegram__reply
 ---
 
-<!-- VC-ORCH-CONTRACT v5 -->
+<!-- VC-ORCH-CONTRACT v6 -->
 
 # Orchestrator (host-ticked board driver)
 
@@ -246,7 +246,8 @@ dispatch). When the cap turned work away, add `cap 3/3 — N held`.
 
 Always report an agent the digest shows as quiet, e.g.
 `<card>: no output for 12m (2 ticks)`. Nudging it requires the `nudge-stuck`
-directive.
+directive. Report a row showing `nudges: 3/3` once, as
+`<card>: stuck after 3 nudges — needs operator review`.
 
 ### 7. Resolve what is pending a human
 
@@ -310,11 +311,13 @@ Emit the *Output contract*.
 
 ## Nudging a stuck agent (`nudge-stuck`)
 
-The payload, exactly, with no punctuation:
-
-```
-Why are you stuck
-```
+The host composes the nudge; you only send it. Every nudge starts with
+`VC-NUDGE:` and names the run's open task-list items (or, when none are on
+record, asks the agent to state what remains). Fetch it with
+`nudge-text <run_id>` (`GET /api/runs/<run>/nudge`) and send its `text`
+verbatim, or let `send-input <run_id> --nudge` fetch and send in one step.
+Never write your own nudge text: the host counts only `VC-NUDGE:` deliveries,
+and its cap is what surfaces a genuinely stuck run.
 
 Eligible: the digest shows no output for 2 or more delivered ticks. Not
 eligible when approvals pending > 0, parked on `AWAITING OPERATOR APPROVAL` or
@@ -322,21 +325,25 @@ eligible when approvals pending > 0, parked on `AWAITING OPERATOR APPROVAL` or
 or `input-sent-since-last-output: yes` (you already nudged; the host tracks
 this, so you need no memory of it).
 
+Never nudge a row showing `nudges: 3/3`; the host has stopped and reported it.
+A `409 nudge_cap_reached` (or `--nudge` exiting with `nudge_cap_reached`) means
+the same. If `/nudge` answers 404, the app predates it: report the stall and
+don't nudge.
+
 Channel:
 
-- **Headed host agent, first nudge:** the inter-agent protocol,
-  `curl -s "$VIBECREW_URL/api/host-messages" -H 'Content-Type: application/json' -d '{"target_kind":"<assistant|orchestrator|auditor>","text":"Why are you stuck","await_reply_seconds":60}'`.
-  A Claude Code session holding `SendMessage` may message the target by name
-  (`vibecrew-assistant` etc.); on Codex,
-  `codex queue --thread <thread id> --message "Why are you stuck"` reaches a
-  running session.
+- **Headed host agent, first nudge:** the inter-agent protocol, with the
+  fetched text:
+  `curl -s "$VIBECREW_URL/api/host-messages" -H 'Content-Type: application/json' -d "$(nudge-text <run_id> | jq '{target_kind:"<assistant|orchestrator|auditor>", text:.text, await_reply_seconds:60}')"`.
 - **Headed host agent, second nudge:** if the next tick's digest shows no
-  change for that run, paste it: `send-input <run_id> --text "Why are you stuck"`
-  (the protocol hop can fail silently; the paste is the mechanical fallback).
-- **Coding agent's run, `running` and headed:**
-  `send-input <run_id> --text "Why are you stuck"`.
+  change for that run, paste it: `send-input <run_id> --nudge` (the protocol
+  hop can fail silently; the paste is the mechanical fallback).
+- **Coding agent's run, `running` and headed:** `send-input <run_id> --nudge`.
 - **Run terminal without a completion signal:**
-  `follow-up <session_id> --prompt "Why are you stuck"`.
+  `follow-up <session_id> --prompt "<the fetched text>"`.
+
+Treat a nudged agent's text-only reply as a report of where it stands, never as
+completion; the Done gate is unchanged.
 
 ## Operator instructions
 

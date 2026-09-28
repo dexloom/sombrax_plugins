@@ -183,6 +183,38 @@ def call(base, method, path, body=None, query=None):
     unwrap(raw)
 
 
+def fetch_nudge_text(base, run_id):
+    """The host-composed `VC-NUDGE:` text for `run_id`, or exit non-zero.
+
+    Exits 1 with `nudge_cap_reached` when the host's cap holds (it has already
+    reported the run; sending would 409 anyway), and with a version hint on a
+    404 from an app older than the route — report the stall instead of nudging.
+    """
+    probe_health(base)
+    status, raw = request(base, "GET", build_path("api", "runs", run_id, "nudge"))
+    try:
+        envelope = json.loads(raw.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError):
+        envelope = None
+    if status != 200 or not isinstance(envelope, dict) or envelope.get("success") is not True:
+        message = envelope.get("message") if isinstance(envelope, dict) else None
+        note = (" — no such run, or a VibeCrew older than /nudge: report the stall, "
+                "don't nudge") if status == 404 else ""
+        print(f"GET /nudge returned HTTP {status}: {message or 'request failed'}{note}",
+              file=sys.stderr)
+        sys.exit(1)
+    data = envelope.get("data") or {}
+    if data.get("cap_reached"):
+        print("nudge_cap_reached — the host has stopped nudging this run and "
+              "reported it for operator review", file=sys.stderr)
+        sys.exit(1)
+    text = data.get("text")
+    if not text:
+        print("GET /nudge returned no text", file=sys.stderr)
+        sys.exit(1)
+    return text
+
+
 DOCTOR_MARKERS = {
     "ok": "ok",
     "warn": "warn",
@@ -870,13 +902,30 @@ def build_parser():
         "whole tmux life, so a follow-up would 409 forever. Exit codes carry "
         "the meaning: 409 not_ready_for_input = mid-turn, retry later; 422 "
         "not_interactive = headless, use follow-up; 410 session_gone = the "
-        "tmux session is gone, stop. The canonical nudge payload is exactly "
-        "`Why are you stuck` — no punctuation.",
+        "tmux session is gone, stop; 409 nudge_cap_reached = the host already "
+        "nudged this run 3 times without progress and reported it, stop. Every "
+        "stall nudge starts with `VC-NUDGE:`; use --nudge to send the "
+        "host-composed one rather than writing your own.",
     )
     p.add_argument("run_id")
     g = p.add_mutually_exclusive_group(required=True)
     g.add_argument("--text")
     g.add_argument("--text-file")
+    g.add_argument(
+        "--nudge", action="store_true",
+        help="fetch the host-composed stall nudge (GET /api/runs/:id/nudge, "
+        "starts with `VC-NUDGE:` and names the run's open items) and send it "
+        "verbatim. Exits non-zero with nudge_cap_reached, sending nothing, "
+        "once the host's 3-nudge cap holds.")
+
+    p = sub.add_parser(
+        "nudge-text",
+        help="GET /api/runs/:id/nudge — the host-composed stall nudge for a "
+        "run, as JSON {text, nudges_sent, cap, cap_reached, open_items}. "
+        "Read-only: fetching never counts as a nudge. Send `text` verbatim "
+        "(e.g. over host-messages); never compose your own.",
+    )
+    p.add_argument("run_id")
 
     p = sub.add_parser(
         "pane",
@@ -1265,12 +1314,19 @@ def main(argv=None):
         return
 
     if cmd == "send-input":
-        text = args.text
-        if text is None:
+        if args.nudge:
+            text = fetch_nudge_text(base, args.run_id)
+        elif args.text is not None:
+            text = args.text
+        else:
             with open(args.text_file, "r", encoding="utf-8") as handle:
                 text = handle.read()
         call(base, "POST", build_path("api", "runs", args.run_id, "send-input"),
              body={"text": text})
+        return
+
+    if cmd == "nudge-text":
+        call(base, "GET", build_path("api", "runs", args.run_id, "nudge"))
         return
 
     if cmd == "pane":
