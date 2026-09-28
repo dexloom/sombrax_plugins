@@ -26,3 +26,16 @@ If your delegation says no later step filters your findings, use this bar instea
 ## When effort is low
 
 This task involves multistep reasoning. Think carefully through the problem before responding.
+
+## Task text
+
+- State the outcome first: what is different when the task is done.
+- Keep every file path, identifier, command and heading exactly as written.
+- State each requirement once, in one place, and remove repeated or conflicting wording.
+- Name the scope explicitly, including what is out of scope.
+- Make each acceptance criterion concrete and checkable.
+- Write in plain, calm prose. Do not use all-caps words, bold for emphasis, or words like critical or important to raise urgency.
+- Do not ask the model to explain, show or write out its reasoning; ask for the result and the checks it should run.
+- Give the reason behind a constraint when the task states one, so it can be applied to cases the text does not list.
+- Phrase instructions as what to do rather than only what to avoid.
+- When a requirement names a scope (every call site, each package, each acceptance criterion), list the items it covers so each one is handled.

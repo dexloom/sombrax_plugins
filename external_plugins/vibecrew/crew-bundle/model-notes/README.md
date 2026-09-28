@@ -28,15 +28,23 @@ Any other model gets the base prompt and no overlay.
 
 - Frontmatter: `family`, `tuned-for` (the exact latest model id), `reviewed`
   (a date), and `sources` (the official guide URLs, one per `  - ` line).
-- The body is split on these four `## ` headings and no others:
+- The body is split on these five `## ` headings and no others:
   - `## All roles`: every run on the family.
   - `## Unattended roles`: added for the orchestrator and the pipeline
     product / planner / coder / reviewer stages. Autonomy openers and
     early-stop lines go here, never in `## All roles`.
   - `## Reviewer role`: added for review stages.
   - `## When effort is low`: added when the run's effort is `low`.
+  - `## Task text`: the rules for writing a task *for* this family, drawn
+    from its official guide. Never delivered to a running agent: only the
+    app's Adjust feature reads it, when the operator picks this family as the
+    target for a card's text or a Voice Task draft. `- ` bullet lines only.
+    The first five bullets are shared word for word by every family; "All
+    models" sends exactly the bullets every file has in common, so keep the
+    shared ones identical when you retune a file. An older catalog without
+    the section simply offers no rules for that family.
 - A family may omit any section. `### ` headings inside a section are fine.
-- Keep the body to 20–40 lines of plain second-person instructions. No bold for
+- Keep the body (outside `## Task text`) to 20–40 lines of plain second-person instructions. No bold for
   emphasis, no all-caps words, and no instruction to reveal, explain or show
   reasoning (Claude models decline those with the `reasoning_extraction`
   refusal).

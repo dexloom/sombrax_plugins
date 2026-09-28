@@ -25,3 +25,15 @@ After making changes, run the most relevant validation available:
 - a minimal smoke test when full validation is too expensive
 
 If validation cannot be run, explain why and describe the next best check.
+
+## Task text
+
+- State the outcome first: what is different when the task is done.
+- Keep every file path, identifier, command and heading exactly as written.
+- State each requirement once, in one place, and remove repeated or conflicting wording.
+- Name the scope explicitly, including what is out of scope.
+- Make each acceptance criterion concrete and checkable.
+- Describe the destination rather than every step: goal, success criteria, constraints, expected output and when to stop.
+- Reserve absolute words (always, never, must) for true invariants such as safety rules and required fields; phrase judgment calls as decision rules.
+- Name the validation to run when the change is done: targeted tests, type or build checks, or a smoke test.
+- Trim examples that do not change behavior.

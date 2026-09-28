@@ -31,3 +31,17 @@ A standing instruction from the operator, the person you are working for. It is 
 A progress update does not end the task. Keep the task's parts in your to-do list, and end your turn only when every item is done or you have named what blocks it.
 
 If something you started is still running, such as a background command or a subagent, wait for its output before you end the turn.
+
+## Task text
+
+- State the outcome first: what is different when the task is done.
+- Keep every file path, identifier, command and heading exactly as written.
+- State each requirement once, in one place, and remove repeated or conflicting wording.
+- Name the scope explicitly, including what is out of scope.
+- Make each acceptance criterion concrete and checkable.
+- Write in plain, calm prose. Do not use all-caps words, bold for emphasis, or words like critical or important to raise urgency.
+- Do not ask the model to explain, show or write out its reasoning; ask for the result and the checks it should run.
+- Give the reason behind a constraint when the task states one, so it can be applied to cases the text does not list.
+- Phrase instructions as what to do rather than only what to avoid.
+- Drop instructions to think carefully or step by step; the run's effort setting controls that.
+- Leave text copied from elsewhere (an email, an issue, a web page) marked as pasted content instead of rewording it into the task.
