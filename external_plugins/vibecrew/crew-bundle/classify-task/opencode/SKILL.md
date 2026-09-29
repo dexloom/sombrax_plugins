@@ -167,7 +167,7 @@ says about a step wins.
 | **Pi** *(explicit ask only)* | `zai-coding-plan/glm-5.2`, effort `high` | `zai-coding-plan/glm-5.2` | `CODEX` |
 | **Codex** *(uncalibrated)* | `gpt-5.6-terra` (light) · `gpt-5.6-sol` (medium, heavy) | `gpt-5.6-terra` (light, medium) · `gpt-5.6-sol` (heavy) | `CODEX` (same agent) |
 
-Sonnet 5 as coder: leave effort at its default `high`; do not pin `low` or `medium` for the code stage — Sonnet 5 follows effort strictly and under-thinks at low effort.
+Sonnet 5.5 as coder: leave effort at its default `high`, the vendor's level for longer agentic coding. Do not pin `low` or `medium` for the code stage: at those levels Sonnet 5.5 is more likely to stop and check in before the work is done, and at `low` it can skip verifying a change.
 
 - OpenCode and Pi model ids are provider-qualified. The bundled pipelines carry
   no `[models] provider`, so a bare `glm-5.2` would pass through unresolved;
@@ -182,7 +182,7 @@ Sonnet 5 as coder: leave effort at its default `high`; do not pin `low` or `medi
   shipped `[agents]` default of `Planned` and `Async`, so it needs no
   `--stage-agent` flag.
 - Effort is TOML-only: no dialog and no compose-endpoint field carries it. Both
-  the `high` effort for an OpenCode/Pi spec or plan and the Sonnet 5 coder's
+  the `high` effort for an OpenCode/Pi spec or plan and the Sonnet 5.5 coder's
   default `high` are recorded in the report (an operator can pin effort in a
   user pipeline's `[effort]` table); neither is passed as a binding.
 
@@ -298,7 +298,7 @@ first route plus that tripwire beats an expensive route taken just in case.
 - The routed pipeline type and every stage toggle.
 - The per-step bindings: agent and model for each delegable stage id, marked
   `default` (Step 3 table), `operator` (an explicit ask) or `inherit`, plus
-  every effort note (OpenCode/Pi spec and plan at `high`; a Sonnet 5 coder left
+  every effort note (OpenCode/Pi spec and plan at `high`; a Sonnet 5.5 coder left
   at its default `high`), since effort is TOML-only and can't be passed as a
   binding.
 - The Routing line, verbatim.

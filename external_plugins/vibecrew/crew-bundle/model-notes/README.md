@@ -18,7 +18,7 @@ case-insensitively. `ModelFamily` in CrewLaunch owns the table.
 |---|---|---|
 | `claude-opus.md` | `opus` | `claude-opus-5-5` |
 | `claude-fable.md` | `fable` | `claude-fable-5-1` |
-| `claude-sonnet.md` | `sonnet` | `claude-sonnet-5` |
+| `claude-sonnet.md` | `sonnet` | `claude-sonnet-5-5` |
 | `gpt-sol.md` | `sol` | `gpt-6-sol` |
 | `gpt-terra.md` | `terra` | `gpt-5.6-terra` |
 
