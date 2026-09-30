@@ -258,6 +258,7 @@ ORCH-MEMORY:
 | Run is terminal, no completion signal | `POST /api/sessions/<session>/follow-up` `{"prompt":"…"}` |
 | See what a headed agent is looking at | `GET /api/runs/<run>/pane?lines=40` |
 | Get the host-composed stall nudge (§5) | `GET /api/runs/<run>/nudge` → `{text, nudges_sent, cap, cap_reached, open_items}` |
+| Message a host agent (assistant, auditor, orchestrator, product) over its own protocol | `POST /api/host-messages` `{"target_kind":"…","text":"…","await_reply_seconds":0}` — 404 not launched / home gone / no session, 409 `not_ready_for_input` |
 
 `send-input`'s status codes are the contract — branch on the code, not the prose:
 
@@ -279,6 +280,33 @@ blindly.
 | Code | Meaning | What to do |
 |---|---|---|
 | `409 dispatch refused: …` | the card is not in the `DISPATCHABLE NOW` set | don't retry this tick: read the reason, report it, and move on. A lane frees, a blocker merges, or the operator raises the cap. |
+
+### Asking the Auditor about an open PR (v7)
+
+The Auditor owns pull requests: it reviews an open PR against its card and
+merges it (`pr-merge`) or declines it (`gh pr close`). The orchestrator never
+does either. It asks, in its tick step 4:
+
+- **Candidates:** a `card-prs` row with `status == "open"` on an `inreview`
+  card whose latest run is terminal and not parked or escalated. Managed cards
+  are checked every tick, and every `inreview` card on a full inventory.
+- **Already asked:** an `auditor` comment on the card whose first line starts
+  `PR-REVIEW ` and names `#<number>`. That comment is the dedupe record in
+  every tick mode. A `hold` verdict is surfaced once and never re-asked.
+- **The request**, sent verbatim over `POST /api/host-messages` with
+  `target_kind: "auditor"`:
+
+  ```
+  VC-PR-REVIEW: <CARD-N> card=<card_id> workspace=<workspace_id> pr=#<number> <url> — review this PR against its card, then merge it or decline it.
+  ```
+
+- **The Auditor's record**, a card comment with `--kind auditor` posted
+  before it acts: `PR-REVIEW <merge|decline|hold> #<number> — <one line>`.
+- **The result** comes back through the ordinary reflect step. `merged` moves
+  the card to `done`, and `closed` holds it at `inreview` and is surfaced once
+  as a decline.
+- **404:** report `no auditor running` once, and never launch one. **409:**
+  ask next tick.
 
 ## 5. The nudge
 
@@ -374,6 +402,7 @@ Ids are byte-identical to vibe-kanban-indie's, and are also the persistence keys
 | `ORCH-MEMORY:` grammar + both caps | `CrewOrchestrator/OrchestratorMemoryNote.swift` | this file, the agent definitions |
 | `ORCHESTRATOR MEMORY` block | `CrewOrchestrator/OrchestratorTickPing.swift` (`memoryBlock`) | this file, the agent definitions |
 | `orchestrator.stateless_ticks` + the caps | `CrewOrchestrator/StatelessTickConfig.swift` | this file, `docs/configuration.md` |
+| `VC-PR-REVIEW:` request + `PR-REVIEW` verdict line | `agents/orchestrator.md` / `agents/auditor.md` (this repo) | this file, both agents' twins |
 | Agent method | `agents/orchestrator.md` (this repo) | vendored into the app's payload catalog |
 
 The agent definitions in this repo are the **source of truth** for the method.
