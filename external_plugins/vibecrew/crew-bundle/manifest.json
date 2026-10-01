@@ -71,7 +71,7 @@
       "id": "vibecrew-orchestrator",
       "name": "VibeCrew Orchestrator",
       "kind": "agent",
-      "version": "2.10.0",
+      "version": "2.11.0",
       "description": "The board-driving orchestrator agent. Host-ticked: VibeCrew's runtime owns the timer and delivers each tick with a status digest; the agent reflects card status, closes finished workspaces, asks the Auditor to review open PRs, dispatches from the host's WIP-capped, priority-ordered DISPATCHABLE NOW set (a start outside it is refused), nudges stalled ones, and replies with a CADENCE line. Installs an agent definition both CLIs can launch; arms no cron of its own. Carries NO model pin — the launcher's per-agent model pick (or the CLI default) governs.",
       "targets": [
         "claude",
@@ -95,7 +95,7 @@
       "id": "vibecrew-auditor",
       "name": "VibeCrew Auditor",
       "kind": "agent",
-      "version": "1.3.0",
+      "version": "2.0.0",
       "description": "The compliance reviewer: on-demand commit-to-card audits over the REST API — pulls the card's audit bundle (spec, plan, finalization record, per-commit changed files and diffs), judges whether the merged content matches what the card asked for, and writes its findings as a card comment. Reviews an open PR against its card and merges it (pr-merge) or declines it (gh pr close), asked by the orchestrator or the operator. Can list and delete unused workspaces and move cards; holds no subagent and no file-write tools, and never launches anything. Not host-ticked: every turn is a question (the operator's or the ask endpoint's). Carries NO model pin — the launcher's per-agent model pick (or the CLI default) governs.",
       "targets": [
         "claude",

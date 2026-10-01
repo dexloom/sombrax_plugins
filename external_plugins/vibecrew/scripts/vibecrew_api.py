@@ -831,6 +831,19 @@ def build_parser():
     g.add_argument("--text")
     g.add_argument("--text-file")
 
+    p = sub.add_parser(
+        "card-message",
+        help="POST /api/host-messages target_kind=card — deliver a short notice "
+        "to the development agent working <card_id> (the Auditor's VC-PR-FIX / "
+        "VC-PR-APPROVED door). Live headed session: pasted; finished session: "
+        "resumed with a follow-up. 404 = nobody seated on the card; "
+        "409 not_ready_for_input = mid-turn, retry later; 410 = its terminal is gone.",
+    )
+    p.add_argument("card_id")
+    g = p.add_mutually_exclusive_group(required=True)
+    g.add_argument("--text")
+    g.add_argument("--text-file")
+
     # -- workspaces / launch / runs (slice 3) --------------------------------
     p = sub.add_parser("workspaces", help="GET /api/workspaces[?card_id=<id>]")
     p.add_argument("--card-id")
@@ -1395,6 +1408,19 @@ def main(argv=None):
             with open(args.text_file, "r", encoding="utf-8") as handle:
                 text = handle.read()
         call(base, "POST", "/api/auditor/ask", body={"question": text})
+        return
+
+    if cmd == "card-message":
+        text = args.text
+        if text is None:
+            with open(args.text_file, "r", encoding="utf-8") as handle:
+                text = handle.read()
+        call(
+            base,
+            "POST",
+            "/api/host-messages",
+            body={"target_kind": "card", "card_id": args.card_id, "text": text},
+        )
         return
 
     if cmd == "workspaces":

@@ -257,6 +257,18 @@ Notes for other agents or the operator go to card comments (`vibecrew_api.py com
   delivery needs no `merge_commit` line; the orchestrator reads the PR's
   `status == "merged"` via `card-prs`.
 
+  Then announce it for review — `vibecrew_api.py comment $VIBECREW_CARD_ID
+  --body "VC-PR-READY #<n> head=<sha7> reviewed=<yes|no>"` (`reviewed=yes`
+  only if your `code-review` stage ran) — and **stay in this session**. Never
+  merge the PR and never exit: the Auditor reviews and merges it, and the
+  orchestrator closes your session after the merge. The Auditor reaches you
+  with one line:
+  - `VC-PR-FIX #<n> round=<k> — … <comment url>`: read that PR comment
+    (`gh pr view <n> --comments`), fix its **Blocking** items only
+    (**Non-blocking** ones are optional), commit, push, then post
+    `VC-PR-UPDATED #<n> round=<k> head=<sha7>` the same way and wait again;
+  - `VC-PR-APPROVED #<n>`: it is merging; there is nothing to do.
+
   **The merge protocol** (when you merge with `git` yourself rather than the
   API call). Other cards merge into the same base branch at the same time, and
   no human is watching. Do all seven steps, in order:

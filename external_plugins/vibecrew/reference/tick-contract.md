@@ -101,20 +101,27 @@ dispatch refused: <CARD> is not dispatchable now — <reason>
 ```
 
 `<reason>` is one of `at the WIP cap (<n>/<cap> running)`,
-`blocked by <SIMPLE-ID>[, …]`,
+`at the review cap (<n>/<cap> PRs awaiting review)`, `blocked by <SIMPLE-ID>[, …]`,
 `a workspace already exists for this card (<workspace-id>)`, or
 `not a wave-0 candidate — …`. There is no `force` field on that body and no
 way to ask for one: a cap the agent can talk itself past is not a cap. An
 operator who needs to start something at the cap uses the app's own Start
 button or raises `orchestrator.max_concurrent`.
 
-It is **always present**, in one of three shapes — the absence of a block
+Lanes count non-archived workspaces with a live run, minus host agents,
+minus cards that are `done`/`cancelled`, minus `inreview` cards with an open
+PR. Those last are the **review backlog**: their agents idle beside the PR
+waiting for the Auditor, and they count against `orchestrator.max_in_review`
+(default 5) instead. At that cap nothing new starts.
+
+It is **always present**, in one of four shapes — the absence of a block
 means the host could not compute one (a failed read), exactly as with the
 digest, and you should probe the API:
 
 ```
 DISPATCHABLE NOW (host-computed and ENFORCED — …; 2 of 3 lanes free):
 DISPATCHABLE NOW: none — at the WIP cap (3/3 running). Do not start anything; close or finish a card first.
+DISPATCHABLE NOW: none — at the review cap (5/5 PRs awaiting review). Do not start anything; get open PRs reviewed and merged first.
 DISPATCHABLE NOW: none — no unblocked wave-0 candidates (3 of 3 lanes free).
 ```
 
