@@ -252,22 +252,32 @@ Notes for other agents or the operator go to card comments (`vibecrew_api.py com
   For pr: commit everything outstanding, push your branch and open a pull
   request (`gh pr create`, or `vibecrew_api.py pr $VIBECREW_WORKSPACE_ID`).
   After it opens, record it with `vibecrew_api.py pr-record
-  $VIBECREW_WORKSPACE_ID --number <n> --url <u>`, and end your final message
-  with a `SHIPPING-REPORT:` block carrying `delivered: pr` and `pr: <url>`. PR
-  delivery needs no `merge_commit` line; the orchestrator reads the PR's
-  `status == "merged"` via `card-prs`.
+  $VIBECREW_WORKSPACE_ID --number <n> --url <u>` — on its own, never piped, and
+  check that it succeeded (the host infers the repo from the PR URL; on a
+  multi-repo error add `--repo-id` from `workspace-repos`). End your final
+  message with a `SHIPPING-REPORT:` block carrying `delivered: pr` and
+  `pr: <url>`. PR delivery needs no `merge_commit` line; the orchestrator
+  reads the PR's `status == "merged"` via `card-prs`.
 
-  Then announce it for review — `vibecrew_api.py comment $VIBECREW_CARD_ID
-  --body "VC-PR-READY #<n> head=<sha7> reviewed=<yes|no>"` (`reviewed=yes`
-  only if your `code-review` stage ran) — and **stay in this session**. Never
-  merge the PR and never exit: the Auditor reviews and merges it, and the
-  orchestrator closes your session after the merge. The Auditor reaches you
-  with one line:
+  Only after the record succeeds, announce it for review —
+  `vibecrew_api.py comment $VIBECREW_CARD_ID --body "VC-PR-READY #<n> head=<sha7> reviewed=<yes|no>"`
+  (`reviewed=yes` only if your `code-review` stage ran). If VibeCrew is
+  unreachable, retry both calls every minute for up to 30 minutes instead of
+  skipping them (the host also discovers an unrecorded PR on its own). Then
+  **stay in this session**. Never merge the PR and never exit: the Auditor
+  reviews and merges it, and the orchestrator closes your session after the
+  merge. Messages reach you prefixed `[from auditor]` or `[from orchestrator]`,
+  as one line:
   - `VC-PR-FIX #<n> round=<k> — … <comment url>`: read that PR comment
     (`gh pr view <n> --comments`), fix its **Blocking** items only
-    (**Non-blocking** ones are optional), commit, push, then post
+    (**Non-blocking** ones are optional; a merge conflict means rebase on the
+    base branch and resolve it), commit, push, then post
     `VC-PR-UPDATED #<n> round=<k> head=<sha7>` the same way and wait again;
-  - `VC-PR-APPROVED #<n>`: it is merging; there is nothing to do.
+  - `VC-PR-READY missing`: post your `VC-PR-READY` line now;
+  - `VC-PR-APPROVED #<n>`: it is merging; there is nothing to do;
+  - `VC-PR-HOLD #<n>`: wait, doing nothing, until told otherwise;
+  - `VC-PR-DECLINED #<n>`: stop work on this PR and end with a one-line
+    final message.
 
   **The merge protocol** (when you merge with `git` yourself rather than the
   API call). Other cards merge into the same base branch at the same time, and

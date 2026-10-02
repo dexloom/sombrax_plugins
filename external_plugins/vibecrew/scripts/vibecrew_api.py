@@ -737,6 +737,16 @@ def build_parser():
     p.add_argument("card_id")
 
     p = sub.add_parser(
+        "pr-loop",
+        help="GET /api/cards/:id/pr-loop — the host's reading of each of the "
+        "card's PRs in the review loop: state (awaiting-ready, awaiting-review, "
+        "review-asked, changes-requested, approved-unmerged, merge-failed, held, "
+        "declined, merged-unreflected, closed), owner of the next move, round "
+        "k/limit, head, since, asks, hold_reason, open_request, notify_failed.",
+    )
+    p.add_argument("card_id")
+
+    p = sub.add_parser(
         "card-shipping-report",
         help="GET /api/cards/:id/shipping-report — the card's parsed "
         "SHIPPING-REPORT completion report (delivered, merge_commit, pr_url, "
@@ -843,6 +853,30 @@ def build_parser():
     g = p.add_mutually_exclusive_group(required=True)
     g.add_argument("--text")
     g.add_argument("--text-file")
+    p.add_argument("--from", dest="from_kind", metavar="KIND",
+                   help="attribute the notice (auditor, orchestrator, dev:<CARD>); "
+                   "delivered as a [from KIND] prefix")
+    p.add_argument("--queue-if-busy", action="store_true",
+                   help="a mid-turn agent answers 202 queued instead of 409; "
+                   "the host retries every minute until it lands")
+
+    p = sub.add_parser(
+        "host-message",
+        help="POST /api/host-messages to a HOST agent (orchestrator, auditor, "
+        "assistant, product) over its own inter-agent protocol. The Auditor's "
+        "AUDIT-REQUEST door to the Orchestrator. 404 = that agent is not running; "
+        "409 = mid-turn (or 202 queued with --queue-if-busy).",
+    )
+    p.add_argument("target_kind", choices=["orchestrator", "auditor", "assistant", "product"])
+    g = p.add_mutually_exclusive_group(required=True)
+    g.add_argument("--text")
+    g.add_argument("--text-file")
+    p.add_argument("--from", dest="from_kind", metavar="KIND",
+                   help="attribute the message (auditor, orchestrator, dev:<CARD>)")
+    p.add_argument("--queue-if-busy", action="store_true",
+                   help="queue instead of 409 when the target is mid-turn")
+    p.add_argument("--await-reply-seconds", type=int, default=0,
+                   help="hold the call open for the target's reply (0-300)")
 
     # -- workspaces / launch / runs (slice 3) --------------------------------
     p = sub.add_parser("workspaces", help="GET /api/workspaces[?card_id=<id>]")
@@ -1371,6 +1405,10 @@ def main(argv=None):
         call(base, "GET", build_path("api", "cards", args.card_id, "pull-requests"))
         return
 
+    if cmd == "pr-loop":
+        call(base, "GET", build_path("api", "cards", args.card_id, "pr-loop"))
+        return
+
     if cmd == "card-shipping-report":
         call(base, "GET", build_path("api", "cards", args.card_id, "shipping-report"))
         return
@@ -1431,12 +1469,26 @@ def main(argv=None):
         if text is None:
             with open(args.text_file, "r", encoding="utf-8") as handle:
                 text = handle.read()
-        call(
-            base,
-            "POST",
-            "/api/host-messages",
-            body={"target_kind": "card", "card_id": args.card_id, "text": text},
-        )
+        body = {"target_kind": "card", "card_id": args.card_id, "text": text}
+        if args.from_kind:
+            body["from"] = args.from_kind
+        if args.queue_if_busy:
+            body["queue_if_busy"] = True
+        call(base, "POST", "/api/host-messages", body=body)
+        return
+
+    if cmd == "host-message":
+        text = args.text
+        if text is None:
+            with open(args.text_file, "r", encoding="utf-8") as handle:
+                text = handle.read()
+        body = {"target_kind": args.target_kind, "text": text,
+                "await_reply_seconds": args.await_reply_seconds}
+        if args.from_kind:
+            body["from"] = args.from_kind
+        if args.queue_if_busy:
+            body["queue_if_busy"] = True
+        call(base, "POST", "/api/host-messages", body=body)
         return
 
     if cmd == "workspaces":

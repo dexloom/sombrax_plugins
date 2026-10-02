@@ -101,7 +101,7 @@ dispatch refused: <CARD> is not dispatchable now — <reason>
 ```
 
 `<reason>` is one of `at the WIP cap (<n>/<cap> running)`,
-`at the review cap (<n>/<cap> PRs awaiting review)`, `blocked by <SIMPLE-ID>[, …]`,
+`at the waiting cap (<n>/<cap> cards awaiting review, merge or the operator) — stop for the operator`, `blocked by <SIMPLE-ID>[, …]`,
 `a workspace already exists for this card (<workspace-id>)`, or
 `not a wave-0 candidate — …`. There is no `force` field on that body and no
 way to ask for one: a cap the agent can talk itself past is not a cap. An
@@ -109,10 +109,16 @@ operator who needs to start something at the cap uses the app's own Start
 button or raises `orchestrator.max_concurrent`.
 
 Lanes count non-archived workspaces with a live run, minus host agents,
-minus cards that are `done`/`cancelled`, minus `inreview` cards with an open
-PR. Those last are the **review backlog**: their agents idle beside the PR
-waiting for the Auditor, and they count against `orchestrator.max_in_review`
-(default 5) instead. At that cap nothing new starts.
+minus cards that are `done`/`cancelled`, minus **waiting** cards: an
+`inreview` card with any PR (open, or closed by a decline) and a card whose PR
+merged but which is not `done` yet. Waiting agents are not developing — they
+idle beside a PR for the Auditor, a merge, or the operator — so they hold no
+lane. They count against the **waiting cap** instead,
+`orchestrator.max_in_review`, which defaults to **twice**
+`orchestrator.max_concurrent` (6 at the default 3); an explicit value wins.
+That cap is the one point at which development stops for a human decision:
+the block says STOP, and the host mirrors a 30-minute-deduped
+`orchestrator.waiting_cap` line to Telegram.
 
 It is **always present**, in one of four shapes — the absence of a block
 means the host could not compute one (a failed read), exactly as with the
@@ -121,7 +127,7 @@ digest, and you should probe the API:
 ```
 DISPATCHABLE NOW (host-computed and ENFORCED — …; 2 of 3 lanes free):
 DISPATCHABLE NOW: none — at the WIP cap (3/3 running). Do not start anything; close or finish a card first.
-DISPATCHABLE NOW: none — at the review cap (5/5 PRs awaiting review). Do not start anything; get open PRs reviewed and merged first.
+DISPATCHABLE NOW: none — STOP, awaiting the operator: at the waiting cap (6/6 cards awaiting review, merge or the operator). Do not start anything; drive the PR LOOP and tell the operator the board is stopped.
 DISPATCHABLE NOW: none — no unblocked wave-0 candidates (3 of 3 lanes free).
 ```
 
@@ -156,6 +162,43 @@ of a days-long run, so it must survive context compaction without depending on
 anything earlier in the transcript — and it must not compete with the agent
 definition it was launched under. The *method* lives in the agent file; the ping
 only says "tick now, here are the facts I have, here are the flags that are on".
+
+### The `PR LOOP` block — every PR in the review loop, with whose move it is
+
+Rendered just before `DISPATCHABLE NOW`. The host folds each card's
+first-line markers (`VC-PR-READY`, `VC-PR-UPDATED`, `PR-REVIEW-ASKED`,
+`PR-REVIEW <verdict> [reason=]`, `PR-REVIEW merge-failed`, `PR-NOTIFY failed`,
+`AUDIT-REQUEST`, `ORCH-ACK`) and the PR row into one row per PR on an
+`inprogress`/`inreview` card (`PRLoop` in CrewKit; the same fold serves
+`GET /api/cards/:id/pr-loop`):
+
+```
+PR LOOP (host-computed from the cards' marker comments; owner = whose move it is; OVERDUE = waited over 20m — nudge the owner):
+  - LPRO-8 #5 state=review-asked owner=auditor round=1/3 head=93f2389 for=34m asks=1 OVERDUE
+  - LPRO-9 #6 state=held owner=orchestrator round=1/3 head=abc1234 for=3m reason=checks-pending
+  - LPRO-10 #7 state=held owner=orchestrator round=1/3 head=def5678 for=1m request=register-pr
+```
+
+| state | owner | meaning |
+|---|---|---|
+| `awaiting-ready` | dev | PR open, no `VC-PR-READY` yet |
+| `awaiting-review` | orchestrator | READY/UPDATED posted, nobody asked the Auditor |
+| `review-asked` | auditor | `PR-REVIEW-ASKED` posted, no verdict yet |
+| `changes-requested` | dev | fixes owed, then `VC-PR-UPDATED` |
+| `approved-unmerged` | auditor | `merge` verdict, PR still open |
+| `merge-failed` | orchestrator | the merge did not land |
+| `held` | orchestrator, or operator for `rounds-exhausted` / `operator` / an untyped hold | typed hold |
+| `declined` / `closed` | operator | the Auditor declined, or the PR closed unmerged |
+| `merged-unreflected` | orchestrator | merged on GitHub; the card is not `done` yet |
+
+`round=k/limit` — `limit` is `orchestrator.pr_fix_rounds` (default 3).
+`OVERDUE` marks a non-operator wait older than
+`orchestrator.pr_loop_overdue_minutes` (default 20): the orchestrator's cue to
+nudge that row's owner. Absent block ⇒ the host could not look; `none — …` ⇒
+nothing is in the loop. The marker comments that hand the orchestrator its
+move (READY, UPDATED, a verdict, `PR-NOTIFY failed`, `AUDIT-REQUEST`), a PR
+status flip, a discovered PR and a merge all **wake** a parked loop, so a
+round no longer waits out the idle cadence.
 
 ### The digest
 
@@ -288,32 +331,38 @@ blindly.
 |---|---|---|
 | `409 dispatch refused: …` | the card is not in the `DISPATCHABLE NOW` set | don't retry this tick: read the reason, report it, and move on. A lane frees, a blocker merges, or the operator raises the cap. |
 
-### Asking the Auditor about an open PR (v7)
+### The PR review loop (VC-ORCH-CONTRACT v9 / VC-AUDIT-CONTRACT v4)
 
-The Auditor owns pull requests: it reviews an open PR against its card and
-merges it (`pr-merge`) or declines it (`gh pr close`). The orchestrator never
-does either. It asks, in its tick step 4:
+The Auditor owns pull requests; the orchestrator owns every wait. The full
+method is in the two agent definitions; the wire is:
 
-- **Candidates:** a `card-prs` row with `status == "open"` on an `inreview`
-  card whose latest run is terminal and not parked or escalated. Managed cards
-  are checked every tick, and every `inreview` card on a full inventory.
-- **Already asked:** an `auditor` comment on the card whose first line starts
-  `PR-REVIEW ` and names `#<number>`. That comment is the dedupe record in
-  every tick mode. A `hold` verdict is surfaced once and never re-asked.
-- **The request**, sent verbatim over `POST /api/host-messages` with
-  `target_kind: "auditor"`:
+- **Asking the Auditor:** the orchestrator posts `PR-REVIEW-ASKED #<n> @<sha7> round=<k>[ nudge=<m>]`
+  on the card, then sends, with `"from":"orchestrator","queue_if_busy":true`:
 
   ```
-  VC-PR-REVIEW: <CARD-N> card=<card_id> workspace=<workspace_id> pr=#<number> <url> — review this PR against its card, then merge it or decline it.
+  VC-PR-REVIEW: <CARD-N> card=<card_id> workspace=<workspace_id> pr=#<number> <url> head=<sha7> round=<k> internal_review=<yes|no> — review this PR against its card, then request changes, merge it, or decline it.
   ```
 
-- **The Auditor's record**, a card comment with `--kind auditor` posted
-  before it acts: `PR-REVIEW <merge|decline|hold> #<number> — <one line>`.
-- **The result** comes back through the ordinary reflect step. `merged` moves
-  the card to `done`, and `closed` holds it at `inreview` and is surfaced once
-  as a decline.
-- **404:** report `no auditor running` once, and never launch one. **409:**
-  ask next tick.
+- **The verdict:** the Auditor posts `PR-REVIEW <merge|changes|decline|hold> #<n> @<sha7> round=<k>[ reason=<code>] — … — <PR comment url>`,
+  notifies the dev agent (`VC-PR-FIX`, `VC-PR-APPROVED`, `VC-PR-HOLD`,
+  `VC-PR-DECLINED`) through `card-message --from auditor --queue-if-busy`,
+  and acts. A failed merge adds `PR-REVIEW merge-failed … reason=<code>`.
+- **Auditor → orchestrator:** `AUDIT-REQUEST <CARD> #<n> need=<register-pr|ready-notice|nudge-dev|relaunch-dev|rebase|rerun-checks|operator> — …`,
+  posted on the card and sent with `target_kind: "orchestrator"`,
+  `"from":"auditor"`. The orchestrator acts and answers `ORCH-ACK <CARD> #<n> need=<need> — done|failed: …`
+  on the card and to the Auditor. The operator never relays between them.
+- **Holds are typed:** `checks-pending` is re-asked by the orchestrator;
+  `rounds-exhausted` and `operator` are the only human stops.
+- **Timeouts:** every wait has an owner and the `PR LOOP` block's `OVERDUE`
+  flag; the orchestrator nudges the owner (re-ask the Auditor, re-send the fix,
+  nudge or resume the dev agent), and surfaces to the operator after three.
+- **No Auditor running (404):** nothing automatic. The PR waits for a human
+  merge; the card holds no dev lane meanwhile.
+- **`queue_if_busy`:** a mid-turn target answers `202 queued` and the host
+  retries every minute until it lands (`host_message_outbox`, 6 h TTL). A
+  dropped notice logs `host_message.dropped`.
+- **Session close:** only after the merge, when the orchestrator deletes the
+  workspace — never on PR open.
 
 ## 5. The nudge
 

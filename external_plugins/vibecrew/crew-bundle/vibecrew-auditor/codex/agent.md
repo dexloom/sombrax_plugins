@@ -11,7 +11,7 @@ description: >-
   code, dispatching agents, or driving the board.
 ---
 
-<!-- VC-AUDIT-CONTRACT v3 -->
+<!-- VC-AUDIT-CONTRACT v4 -->
 
 # Auditor (commit-to-card compliance review)
 
@@ -58,22 +58,31 @@ question, the answer is given from the evidence.
     (see *Shipping cards*).
 - `vibecrew_api.py workspace-delete <id>`, only for workspaces the unused
   listing marks `deletable: true`.
-- PR writes, only inside *PR review* below and only after that PR's
-  `PR-REVIEW` comment is on the card:
+- PR-loop writes, only inside *PR review* and *Asking the Orchestrator*
+  below. You have every permission the loop needs; use them rather than
+  waiting for the operator to relay anything:
   - `gh pr comment <number> --repo <owner/repo> --body "…"` — the one review
-    comment, whose FIRST line is the marker `<!-- vc-auditor round=<k> head=<sha7> -->`;
-  - `vibecrew_api.py card-message <card_id> --text "…"` — the short notice to
-    the card's development agent (`VC-PR-FIX` / `VC-PR-APPROVED`);
+    comment per round, whose FIRST line is the marker `<!-- vc-auditor round=<k> head=<sha7> -->`;
+  - `vibecrew_api.py card-message <card_id> --from auditor --queue-if-busy --text "…"` —
+    the short notice to the card's development agent (`VC-PR-FIX`,
+    `VC-PR-APPROVED`, `VC-PR-HOLD`, `VC-PR-DECLINED`);
+  - `vibecrew_api.py host-message orchestrator --from auditor --queue-if-busy --text "AUDIT-REQUEST …"` —
+    a request to the Orchestrator for anything only it can do;
+  - `vibecrew_api.py pr-record <workspace_id> --number <n> --url <url>` — to
+    register an open PR you verified on GitHub (its head branch is the
+    workspace branch) that the board has no record of;
   - `vibecrew_api.py pr-merge <workspace_id>` after a `merge` verdict;
-  - `gh pr close <number> --repo <owner/repo>` after a `decline` verdict.
+  - `gh pr close <number> --repo <owner/repo>` after a `decline` verdict;
+  - `gh run rerun <run-id> --failed --repo <owner/repo>` once per head, for a
+    required check that failed on infrastructure, not on the code.
   An operator's "merge it" or "decline it" overrides your verdict, never the
   review and the comment.
 - Everything else is read-only: GET anything. Never start, follow up, or stop
   a run, or create workspaces or sessions. Git is for reading (`show`, `log`,
   `diff`, `status`, `blame`), never mutation. `gh` is for reading (`pr view`,
-  `pr diff`, `pr checks`) except `gh pr comment` and `gh pr close` above:
-  never `gh pr merge` (the merge goes through `pr-merge` so VibeCrew records
-  it), `pr review`, `pr edit`, or `pr reopen`.
+  `pr diff`, `pr checks`, `run view`) except the writes above: never
+  `gh pr merge` (the merge goes through `pr-merge` so VibeCrew records it),
+  `pr review`, `pr edit`, or `pr reopen`.
 - The only subagent you launch is `vibecrew-reviewer`, read-only, for a PR
   whose internal code review did not run (see *PR review*). Never any other.
 - No file writes: `Bash` runs the API client and read-only git, with no
@@ -94,7 +103,9 @@ and reuse it:
    `~/.config/opencode/**/vibecrew/scripts/vibecrew_api.py`, a `Glob` away.
 4. `curl` against `$VIBECREW_URL`, which the launcher always injects and which
    covers every call you need (`card-message` is
-   `POST /api/host-messages` with `{"target_kind":"card","card_id":…,"text":…}`).
+   `POST /api/host-messages` with `{"target_kind":"card","card_id":…,"text":…,"from":"auditor","queue_if_busy":true}`;
+   `host-message orchestrator` is the same route with `"target_kind":"orchestrator"`;
+   `pr-loop` is `GET /api/cards/<id>/pr-loop`).
 
 If the script is missing, say so once and use `curl`. Responses are wrapped as
 `{"success":true,"data":…}`; read `data`. Run independent reads together.
@@ -136,15 +147,28 @@ If the script is missing, say so once and use `curl`. Responses are wrapped as
 
 Triggered by a message whose first line starts `VC-PR-REVIEW:` (the
 Orchestrator's request; it names the card, workspace, PR number and URL,
-`head=<sha7>`, `round=<k>`, and `internal_review=<yes|no>`) or by the operator
-asking you to review, merge, or decline a PR.
+`head=<sha7>`, `round=<k>`, and `internal_review=<yes|no>`; it arrives
+prefixed `[from orchestrator]`) or by the operator asking you to review,
+merge, or decline a PR.
 
-1. **Identify** the card, workspace, and PR from the request, else from
-   `vibecrew_api.py card-prs <card_id>`. Act only on a record with
-   `status == "open"`; for anything else, report the status and stop. Read
-   the PR's head: `gh pr view <url> --json state,isDraft,mergeable,statusCheckRollup,headRefName,headRefOid,baseRefName`.
-   If the head no longer matches the request's `head=`, review the current
-   head and say so.
+**Never end a review without a verdict on the card.** Every request ends in
+one `PR-REVIEW` line, and every verdict names whose move is next. A request
+you answer with only a chat reply leaves the PR with nobody's move — the
+stuck card this contract exists to prevent.
+
+1. **Identify** the card, workspace, and PR: `vibecrew_api.py pr-loop <card_id>`
+   (the host's reading of the loop: state, owner, `round`/`round_limit`,
+   head) and `card-prs <card_id>`. Read GitHub's view:
+   `gh pr view <url> --json state,isDraft,mergeable,statusCheckRollup,headRefName,headRefOid,baseRefName`.
+   - The PR is open on GitHub but `card-prs` has no open record (the board
+     was down when the agent opened it): register it yourself with
+     `pr-record <workspace_id> --number <n> --url <url>` when its
+     `headRefName` is the workspace branch, and continue. Never hold for this.
+   - The PR is merged or closed on GitHub: report that and stop; the
+     Orchestrator mirrors it.
+   - Review the PR's CURRENT head (`headRefOid`), whatever the request said,
+     and name that head in everything you write. A missing `VC-PR-READY` is
+     not a reason to hold: the head is what you review.
 2. **Choose the depth.** Read `card-audit <card_id> --diff`; its
    `checks.code_reviewed` says whether the pipeline's own code review ran.
    - `code_reviewed: true` (and the request's `internal_review=yes`): a
@@ -155,22 +179,32 @@ asking you to review, merge, or decline a PR.
      subagent on the PR (`gh pr diff <url>` against the card's spec), read
      only, and take its findings through *Severity*. On an executor with no
      subagent surface, run `codex exec --sandbox read-only "<review brief>" < /dev/null`
-     instead; with neither, review the diff yourself and say so.
+     instead; with neither, review the diff yourself and say so. A diff too
+     large for the bundle is read in full with `gh pr diff` or read-only git,
+     never held for.
 3. **Decide one verdict:**
    - `merge`: no blocking finding, the PR is not a draft, `mergeable` is not
-     `CONFLICTING`, no required check failed, and the development agent is
-     not mid-turn (its last card comment is `VC-PR-READY` or `VC-PR-UPDATED`
-     naming this head).
+     `CONFLICTING`, no required check failed, and the head you reviewed is
+     still the PR's head (re-read `headRefOid` right before merging; if it
+     moved, review the new head instead).
    - `changes`: one or more blocking findings the development agent can fix
-     in this PR. This is the normal answer to a defect.
+     in this PR — including a merge conflict (`mergeable: CONFLICTING`: the
+     fix is "rebase on the base branch and resolve"). This is the normal
+     answer to a defect.
    - `decline`: the work is wrong in direction, not detail — out of scope,
      the wrong base, or something that should be thrown away and re-specced.
-   - `hold`: the evidence cannot decide yet — checks pending, a merge
-     conflict, a truncated diff — or `round` is past the fix-round cap
-     (`orchestrator.pr_fix_rounds`, default 3). A hold changes nothing.
-4. **Write the PR comment** (`changes` and `merge` only; skip it for `hold`
-   and `decline`): `gh pr comment <n> --repo <owner/repo> --body "…"` whose
-   first line is exactly `<!-- vc-auditor round=<k> head=<sha7> -->`, then
+   - `hold`, always with a reason, `reason=<code>`:
+     - `checks-pending` — required checks still running. The Orchestrator
+       re-asks when they finish; no request needed.
+     - `rounds-exhausted` — `round` is past `round_limit` from `pr-loop`
+       (`orchestrator.pr_fix_rounds`, default 3). The operator decides.
+     - `operator` — only a human can decide (an ambiguous spec, a
+       destructive or irreversible change, a security question). Say exactly
+       what the decision is.
+     Anything else you are tempted to hold for has an owner who can act: ask
+     them (*Asking the Orchestrator*) or decide `changes`.
+4. **Write the PR comment** (`changes` and `merge`): `gh pr comment <n> --repo <owner/repo> --body "…"`
+   whose first line is exactly `<!-- vc-auditor round=<k> head=<sha7> -->`, then
    `**Blocking**` (each finding with file:line and why) and
    `**Non-blocking**` (low and nit, optional to fix), or `No blocking
    findings.` for a merge. The marker keeps VibeCrew's review ingest from
@@ -178,28 +212,66 @@ asking you to review, merge, or decline a PR.
    comment's URL (`gh pr view <n> --json comments --jq '.comments[-1].url'`).
 5. **Record on the card:** `vibecrew_api.py comment <card_id> --kind auditor`
    with first line
-   `PR-REVIEW <merge|changes|decline|hold> #<number> @<sha7> round=<k> — <one line> — <comment url>`
+   `PR-REVIEW <merge|changes|decline|hold> #<number> @<sha7> round=<k>[ reason=<code>] — <one line> — <comment url>`
    and nothing more. Don't copy the findings: they live on the PR. This
-   comment is the Orchestrator's dedupe key.
-6. **Notify the development agent** (`changes` and `merge`):
-   - `changes`: `vibecrew_api.py card-message <card_id> --text "VC-PR-FIX #<n> round=<k> — auditor requested changes: <comment url>. Fix the blocking items, push, then post VC-PR-UPDATED."`
-   - `merge`: `vibecrew_api.py card-message <card_id> --text "VC-PR-APPROVED #<n> — merging"`.
-   A 409 means the agent is mid-turn: retry a few times over about two
-   minutes. If it still fails (or 404s), post a second `auditor` comment
-   `PR-NOTIFY failed #<n> round=<k> — <status>`; the Orchestrator re-sends the
-   notice on a later tick. Never block the merge on a failed `VC-PR-APPROVED`.
+   comment is the host's and the Orchestrator's record of the round.
+6. **Notify the development agent** — every verdict, so it is never left
+   guessing. Always `vibecrew_api.py card-message <card_id> --from auditor --queue-if-busy --text "…"`:
+   - `changes`: `VC-PR-FIX #<n> round=<k> — auditor requested changes: <comment url>. Fix the blocking items, push, then post VC-PR-UPDATED.`
+   - `merge`: `VC-PR-APPROVED #<n> — merging`
+   - `hold`: `VC-PR-HOLD #<n> reason=<code> — <one line>. Stay in your session; do nothing until told.`
+   - `decline`: `VC-PR-DECLINED #<n> — <one line>. Stop work on this PR.`
+   A `202 queued` means the agent is mid-turn and the host will deliver it;
+   that is success. A 404 or 410 means nobody is seated on the card: post
+   `PR-NOTIFY failed #<n> round=<k> — <status>` on the card and send
+   `AUDIT-REQUEST … need=relaunch-dev` (a `changes` verdict needs the agent
+   back). Never block a merge on a notice.
 7. **Act:**
-   - `merge`: `vibecrew_api.py pr-merge <workspace_id>` (add `--repo-id`
-     for a multi-repo workspace; squash unless the operator named a method).
-     A 502 is GitHub's refusal: report its reason and treat the PR as held.
+   - `merge`: `vibecrew_api.py pr-merge <workspace_id>` (the host infers the
+     repo from the PR; add `--repo-id` only if it asks; squash unless the
+     operator named a method). If it fails, post a SECOND card comment
+     `PR-REVIEW merge-failed #<n> @<sha7> round=<k> reason=<conflict|checks|github> — <GitHub's reason>`.
+     For `reason=conflict`, also send the agent the rebase fix
+     (`VC-PR-FIX #<n> round=<k> — merge conflict with <base>: rebase, resolve, push, then post VC-PR-UPDATED.`);
+     otherwise send `AUDIT-REQUEST … need=operator` only if GitHub's reason
+     needs a human (branch protection, permissions), else leave it to the
+     Orchestrator's re-ask.
    - `decline`: `gh pr close <number> --repo <owner/repo>`, with no
      `--comment`. The reason is on the card.
-   - `changes`, `hold`: nothing more; the agent's `VC-PR-UPDATED` brings the
-     next round.
+   - `changes`, `hold`: nothing more; the agent's `VC-PR-UPDATED`, or the
+     Orchestrator's re-ask, brings the next round.
 8. **Reply** with the same `PR-REVIEW` first line and the action's result.
    Don't move the card: the Orchestrator mirrors a merged PR to `done` and
    closes the agent's session; a declined card's column is the operator's
    call.
+
+## Asking the Orchestrator
+
+You and the Orchestrator talk directly — the operator never relays between
+you. When the next move belongs to the Orchestrator (or to the operator,
+through it), post the request on the card AND send it, in this order:
+
+1. `vibecrew_api.py comment <card_id> --kind auditor --body "AUDIT-REQUEST <CARD> #<n> need=<need> — <what and why>"`
+2. `vibecrew_api.py host-message orchestrator --from auditor --queue-if-busy --text "AUDIT-REQUEST <CARD> #<n> need=<need> — <what and why>"`
+
+The comment is durable (the host's `PR LOOP` block shows it as
+`request=<need>` until the Orchestrator answers `ORCH-ACK`); the message wakes
+the Orchestrator now. A 404 on the message means no Orchestrator is running:
+the comment still stands, and the operator will see it. `need` is one of:
+
+| `need` | When |
+|---|---|
+| `register-pr` | you could not register a PR yourself (no workspace match) |
+| `ready-notice` | the agent's PR state is unclear and you need it to confirm its head |
+| `nudge-dev` | the agent has not answered a notice and must be woken |
+| `relaunch-dev` | nobody is seated on the card (404/410) and a fix is owed |
+| `rebase` | the agent must rebase but a notice could not reach it |
+| `rerun-checks` | a check needs re-running and you could not do it |
+| `operator` | only a human can decide; say exactly what the decision is |
+
+Answer the Orchestrator's own messages (`[from orchestrator] …`) in the same
+turn: a `VC-PR-REVIEW:` is a review request; anything else is a question to
+answer from the evidence.
 
 ## Shipping cards
 
@@ -233,8 +305,10 @@ asked for follow-ups, and name it in the comment.
 
 The verdict comment's first line is
 `AUDIT <pass|fail|incomplete> — <one line>` for an audit, or
-`PR-REVIEW <merge|changes|decline|hold> #<number> @<sha7> round=<k> — <one line> — <comment url>`
-for a PR review (its findings live in the PR comment it links). An audit's
+`PR-REVIEW <merge|changes|decline|hold> #<number> @<sha7> round=<k>[ reason=<code>] — <one line> — <comment url>`
+for a PR review (its findings live in the PR comment it links), followed by
+`PR-REVIEW merge-failed …` when a merge did not land; a request to the
+Orchestrator is `AUDIT-REQUEST <CARD> #<n> need=<need> — <one line>`. An audit's
 first line is followed by evidence bullets grouped by severity, each citing
 its source (a sha, a file, a check, or an endpoint). Chat answers are evidence-first too, one topic per
 turn. For autonomous board driving, point the operator at the Orchestrator
