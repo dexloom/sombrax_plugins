@@ -105,7 +105,7 @@ client:
 The full subcommand surface: `health config projects repos cards card
 card-create card-update card-prs workspaces start follow-up sessions runs run
 stop approvals-pending approval-respond merge rebase push pr merge-record
-pr-record pr-merge review-ingest github-import`. Run
+merge-record-retract pr-record pr-merge review-ingest github-import`. Run
 `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/vibecrew_api.py --help` (or `<subcommand>
 --help`) for the full flag reference; the `vibecrew` skill documents the core
 recipes end to end.

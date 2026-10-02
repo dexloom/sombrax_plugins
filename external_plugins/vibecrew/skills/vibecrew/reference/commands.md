@@ -20,7 +20,7 @@ Each one probes `GET /health` first and exits 3 when the backend is down (see
 - [Close a finished workspace (`workspace-update`, `workspace-delete`)](#close-a-finished-workspace)
 - [Sweep: bulk-close finished workspaces and their tmux](#sweep)
 - [Stop a run (`stop`)](#stop-a-run)
-- [Delivery (`merge`, `rebase`, `push`, `pr`, `merge-record`, `pr-record`)](#delivery)
+- [Delivery (`merge`, `rebase`, `push`, `pr`, `merge-record`, `merge-record-retract`, `pr-record`)](#delivery)
 - [GitHub depth (`pr-merge`, `review-ingest`, `github-import`)](#github-depth)
 - [curl fallback](#curl-fallback)
 
@@ -358,6 +358,7 @@ python3 ${CLAUDE_PLUGIN_ROOT}/scripts/vibecrew_api.py rebase <workspace_id> [--r
 python3 ${CLAUDE_PLUGIN_ROOT}/scripts/vibecrew_api.py push <workspace_id> [--repo-id <id>] [--remote <n>] [--force]
 python3 ${CLAUDE_PLUGIN_ROOT}/scripts/vibecrew_api.py pr <workspace_id> [--repo-id <id>] [--title <t>] [--body <b>]
 python3 ${CLAUDE_PLUGIN_ROOT}/scripts/vibecrew_api.py merge-record <workspace_id> --sha <sha> [--repo-id <id>] [--target <b>] [--message <m>]
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/vibecrew_api.py merge-record-retract <workspace_id> --merge-commit <sha> [--repo-id <id>]
 python3 ${CLAUDE_PLUGIN_ROOT}/scripts/vibecrew_api.py pr-record <workspace_id> --number <n> --url <u> [--status <s>] [--repo-id <id>] [--title <t>]
 ```
 
@@ -371,6 +372,16 @@ python3 ${CLAUDE_PLUGIN_ROOT}/scripts/vibecrew_api.py pr-record <workspace_id> -
   coding agent calls them right after a git direct merge or a `gh`-opened PR to
   leave durable delivery evidence. The `merge_commit: <sha>` completion-report
   line is still required either way.
+- `merge-record` validates the sha: one that does not resolve to a commit in
+  the repo is refused with a 422 and nothing is recorded (fetch first if the
+  merge landed remotely). A short sha is stored as the full 40-hex sha, so a
+  short and a full post of the same commit update ONE row.
+- `merge-record-retract` is the only way to remove a bad merge record. It
+  matches `merge_commit` exactly as stored (no prefix matching; 404 when no
+  row matches) and deletes the row only when it is not valid delivery
+  evidence: the sha does not resolve, it is not on the row's target branch,
+  or another row for the same card and repo names the same commit. A valid
+  record is refused with a 409. It prints the deleted row.
 
 ## GitHub depth
 

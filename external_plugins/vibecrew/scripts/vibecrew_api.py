@@ -1066,13 +1066,29 @@ def build_parser():
         "merge-record",
         help="POST /api/workspaces/:id/merge-record — records an "
         "already-performed merge; performs nothing, idempotent per "
-        "workspace/repo/sha. Always sends a JSON object body.",
+        "workspace/repo/sha. The sha must resolve to a commit in the repo "
+        "(else 422, nothing recorded; fetch first if it merged remotely) and "
+        "is stored as the full 40-hex sha. Always sends a JSON object body.",
     )
     p.add_argument("workspace_id")
     p.add_argument("--sha", required=True, help="the merge commit sha (wire key merge_commit)")
     p.add_argument("--repo-id", help="required on a multi-repo workspace")
     p.add_argument("--target", help="target branch override (wire key target_branch)")
     p.add_argument("--message")
+
+    p = sub.add_parser(
+        "merge-record-retract",
+        help="POST /api/workspaces/:id/merge-record/retract — removes a BAD "
+        "merge record and prints the deleted row. merge_commit is matched "
+        "exactly (no prefix matching; 404 if no row). Allowed only when the "
+        "sha does not resolve, is not on the row's target branch, or "
+        "duplicates another row for the same card/repo; a valid delivery "
+        "record is refused with 409. Performs nothing in git.",
+    )
+    p.add_argument("workspace_id")
+    p.add_argument("--merge-commit", "--sha", dest="sha", required=True,
+                   help="the stored merge_commit, exactly as recorded")
+    p.add_argument("--repo-id", help="required on a multi-repo workspace")
 
     p = sub.add_parser(
         "pr-record",
@@ -1594,6 +1610,15 @@ def main(argv=None):
         if args.message is not None:
             body["message"] = args.message
         call(base, "POST", build_path("api", "workspaces", args.workspace_id, "merge-record"),
+             body=body)
+        return
+
+    if cmd == "merge-record-retract":
+        body = {"merge_commit": args.sha}
+        if args.repo_id is not None:
+            body["repo_id"] = args.repo_id
+        call(base, "POST",
+             build_path("api", "workspaces", args.workspace_id, "merge-record", "retract"),
              body=body)
         return
 

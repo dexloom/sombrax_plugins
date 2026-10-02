@@ -81,6 +81,7 @@ re-resolving ids you were handed.
 | close or clean up workspaces | `workspace-update --archived true`, `workspace-delete` | Close a finished workspace, Sweep |
 | stop a run | `stop` | Stop a run |
 | merge, rebase, push, open or record a PR | `merge`, `rebase`, `push`, `pr`, `merge-record`, `pr-record` | Delivery |
+| remove a bad merge record (unresolvable, off-target or duplicate sha) | `merge-record-retract` | Delivery |
 | merge on GitHub, pull PR reviews, import issues | `pr-merge`, `review-ingest`, `github-import` | GitHub depth |
 
 ## Standing rules
@@ -109,7 +110,7 @@ re-resolving ids you were handed.
 - These commands mutate live state; none is a dry run: `card-create`,
   `card-update`, `card-relate`, `card-unrelate`, `start`, `follow-up`,
   `approval-respond`, `merge` / `rebase` / `push` / `pr`, `merge-record` /
-  `pr-record`, `pr-merge`, `review-ingest`, `github-import`, and `stop`.
+  `merge-record-retract` / `pr-record`, `pr-merge`, `review-ingest`, `github-import`, and `stop`.
   `pr-merge` also changes GitHub, and `github-import` can create many cards at
   once: confirm the repo and `--limit` with the operator before running it on a
   new board.
