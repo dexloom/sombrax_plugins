@@ -809,6 +809,30 @@ def build_parser():
     p.add_argument("--run-id", help="optional run_id for traceability")
 
     p = sub.add_parser(
+        "budget-extend",
+        help="POST /api/cards/:id/budget-extensions — orchestrated cards only "
+        "(409 otherwise): raise the card's budget ceiling at its BUDGET "
+        "CHECKPOINT. Each declared dimension you omit moves by the default "
+        "step (orchestrator.budget_extension_step_pct of the base ceiling). "
+        "Writes a VK-BUDGET-EXTEND comment and a budget.extend event.",
+    )
+    p.add_argument("card_id")
+    p.add_argument("--reason", required=True, help="why the work is moving (recorded verbatim)")
+    p.add_argument("--wall-minutes", type=float, help="minutes to add to the wall-clock ceiling")
+    p.add_argument("--usd", type=float, help="dollars to add to the spend ceiling")
+    p.add_argument("--fresh-tokens", type=int, help="fresh tokens to add to that ceiling")
+
+    p = sub.add_parser(
+        "budget-park",
+        help="POST /api/cards/:id/budget-park — orchestrated cards only (409 "
+        "otherwise): park the card at its BUDGET CHECKPOINT — stops its runs, "
+        "keeps worktree/branch/session, writes a VK-BUDGET-PARK comment with "
+        "your reason and a budget.park event.",
+    )
+    p.add_argument("card_id")
+    p.add_argument("--reason", required=True, help="why the work is stuck (recorded verbatim)")
+
+    p = sub.add_parser(
         "card-audit",
         help="GET /api/cards/:id/audit — the card's audit evidence bundle: "
         "card, spec/plan paperwork, finalization record (shipping report + "
@@ -918,6 +942,11 @@ def build_parser():
     p.add_argument("--variant")
     p.add_argument("--model-id")
     p.add_argument("--permission-policy")
+    p.add_argument(
+        "--card-id",
+        help="the task card this run serves (CREW-84 §5.3) — pass it when the "
+        "workspace is reused by another card, or the run is attributed to the "
+        "workspace's original card")
 
     p = sub.add_parser(
         "workspace-delete",
@@ -1446,6 +1475,23 @@ def main(argv=None):
              body=body)
         return
 
+    if cmd == "budget-extend":
+        body = {"reason": args.reason}
+        if args.wall_minutes is not None:
+            body["wall_minutes"] = args.wall_minutes
+        if args.usd is not None:
+            body["usd"] = args.usd
+        if args.fresh_tokens is not None:
+            body["fresh_tokens"] = args.fresh_tokens
+        call(base, "POST", build_path("api", "cards", args.card_id, "budget-extensions"),
+             body=body)
+        return
+
+    if cmd == "budget-park":
+        call(base, "POST", build_path("api", "cards", args.card_id, "budget-park"),
+             body={"reason": args.reason})
+        return
+
     if cmd == "card-audit":
         query = {"diff": "1"} if args.diff else None
         call(base, "GET", build_path("api", "cards", args.card_id, "audit"),
@@ -1536,6 +1582,8 @@ def main(argv=None):
             body["model_id"] = args.model_id
         if args.permission_policy is not None:
             body["permission_policy"] = args.permission_policy
+        if args.card_id is not None:
+            body["card_id"] = args.card_id
         call(base, "POST", build_path("api", "sessions", args.session_id, "follow-up"), body=body)
         return
 

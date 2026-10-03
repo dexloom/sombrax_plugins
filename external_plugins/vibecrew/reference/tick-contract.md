@@ -90,6 +90,18 @@ the exact protocol ask inline — a compacted context must be able to act on the
 block alone. The agent never arms its own disk probe; absence of the block
 means "not low, or not measured", not "healthy".
 
+Two budget blocks are optional and sit right after the digest:
+
+```
+PARKED ON BUDGET (host-enforced; worktree + session intact; do NOT re-dispatch — the operator raises the ceiling or closes the card):
+- <CARD> [ws <id>]: <spend> · ceiling from <rung> · … [— orchestrated: you MAY extend (budget-extend) and resume (follow-up) per your rubric]
+
+BUDGET CHECKPOINT (decide: extend or park — the host parks on its own after <G>m with no decision):
+- <CARD> [card <id>, ws <id>]: spent <spend>; ceiling <ceiling> (<rung>); extensions: <N>; stage: <id|?>; <output since last tick|no output for <M>m|no output ever>; checkpoint <M>m ago
+```
+
+`BUDGET CHECKPOINT` (CREW-121) lists only Orchestrate opt-in cards that are at 100 % of their ceiling and that the host has deliberately **not** stopped. The agent answers with `budget-extend` or `budget-park` (`POST /api/cards/:id/budget-extensions` or `/budget-park`) under the rubric in its definition. Silence past the grace means the host parks the card. A run row for such a card ends in `budget: N % (AT CHECKPOINT — see BUDGET CHECKPOINT)` instead of the stage-boundary wording. The `orchestrated:` clause on a `PARKED ON BUDGET` row appears only while that park is still the card's latest stop.
+
 ### The `DISPATCHABLE NOW` block (D1) — the one block that is not advisory
 
 Everything else the host sends is a fact to act on. This block is a
