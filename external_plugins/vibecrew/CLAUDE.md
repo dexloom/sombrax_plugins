@@ -142,12 +142,12 @@ delegable step inherits it unless the operator binds that step to another agent.
 
 | Type | File / name | Roster (order) | Default-on | Roles | Shipped `[agents]` |
 |---|---|---|---|---|---|
-| **Base** | `basic.toml` / `Basic` | `orchestrate, spec, plan, plan-review, wait-for-approval, code-review, update-docs, merge, pr` | `merge` | none — nothing is delegated | none |
-| **Planned** | `planned.toml` / `Planned` | same roster as Basic | `spec, plan, plan-review, merge` | `spec`→`product`, `plan`→`planner`, `plan-review`→`reviewer`, `code-review`→`reviewer` | `plan-review = "CODEX"`, `code-review = "CODEX"` |
+| **Base** | `basic.toml` / `Basic` | `orchestrate, spec, plan, plan-review, wait-for-approval, code, code-review, update-docs, merge, pr` | `merge` | `code`→`coder` (opt-in: unticked, the main loop codes) | none |
+| **Planned** | `planned.toml` / `Planned` | Basic's roster minus `code` | `spec, plan, plan-review, merge` | `spec`→`product`, `plan`→`planner`, `plan-review`→`reviewer`, `code-review`→`reviewer` | `plan-review = "CODEX"`, `code-review = "CODEX"` |
 | **Async** | `async.toml` / `Async` | `orchestrate, spec, plan, plan-review, code, code-review, update-docs, merge, pr` | `spec, plan, plan-review, code, merge` | `spec`→`product`, `plan`→`planner`, `plan-review`→`reviewer`, `code`→`coder`, `code-review`→`reviewer` | `plan-review = "CODEX"`, `code-review = "CODEX"` |
 
 **Planned** delegates the planning ceremony but keeps implementation in the main
-loop (no `code` stage, like Basic). **Async** is the full fan-out. Reviews
+loop (no `code` stage; Basic's is opt-in). **Async** is the full fan-out. Reviews
 default to Codex because that is the reviewer every per-model pipeline this set
 replaced used — it is a default like any other, overridable per card.
 
@@ -160,7 +160,10 @@ own default when it does not. Headed and headless twins of one agent are the
 **same** agent, so `CLAUDE_CODE` under a `CLAUDE_CODE_HEADED` main loop is not a
 cross-agent step. Only stages that carry a `subagent` role are bindable —
 `orchestrate`, `wait-for-approval`, `update-docs`, `merge` and `pr` always run in
-the main loop, which is why `Basic` offers no per-step controls at all.
+the main loop, which is why `Basic`'s only per-step controls are on its
+opt-in `code` step (agent, model and effort for the `vibecrew-coder` subagent).
+A same-family Claude Code step names all three on the Agent-tool call —
+`subagent_type`, `model`, `effort` (Claude Code 2.1.292+).
 
 **A step bound to another agent renders as a one-shot on that step's own CLI**,
 run from the main loop, acting as the stage's role, relaying its result, and
@@ -218,7 +221,8 @@ provider + env keys) is documented in the app's `docs/configuration.md`.
 **Planned** shares Basic's roster — same ids, same order, plus
 `wait-for-approval` and no `code` — with `spec`, `plan`, `plan-review` and
 `merge` on by default. `basic.toml` differs from both: every stage defaults off
-except `merge` (**on**), and no stage carries a role. Cards written before this
+except `merge` (**on**), and its one roled stage is the opt-in `code`
+(`coder`), whose prompt is Async's byte for byte. Cards written before this
 catalog may still name one of the twelve removed per-model pipelines, or one of
 the two removed agent-specific stage ids; the app resolves both through a legacy
 alias table (`PipelineLegacyAliases`) so old cards keep their labels and launch

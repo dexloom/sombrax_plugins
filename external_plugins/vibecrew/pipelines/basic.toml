@@ -36,6 +36,14 @@ default_enabled = false
 prompt = "Pause for operator approval at this point: commit the work so far, then stop and wait for the operator's decision or instructions before continuing to later stages — do not advance on your own until the operator responds."
 
 [[stage]]
+id = "code"
+label = "Code via {{agent_name}} · {{model_name}}"
+default_enabled = false
+subagent = "coder"
+prompt = "MODEL CHECK FIRST — the coder runs on this stage's bound agent and model (see the delegation clause below); if the plan blew its envelope (PLAN-FACTS at or above 40 KB, or open design decisions surfaced during planning), step the coder model up one tier within the bound agent's own catalog — Claude Code: sonnet → opus; OpenCode or Pi: MiniMax-M3 → glm-5.2; Codex: gpt-5.6-terra → gpt-5.6-sol; a model already at its ceiling stays put. An operator's per-step or card-level model pin always beats this advice. Report the single line `CODER-MODEL: <model> — <one-phrase reason>`. Then: Do NOT write the implementation yourself. {{DELEGATE}} to implement the card strictly from `SPEC.md` and `IMPLEMENTATION_PLAN.md` — pass the workspace-root path plus the card description in the delegate's prompt, and instruct it to follow the plan step by step and report what it changed. When it returns, verify the result builds and passes the project's own checks; if the delegate's work is incomplete or broken, re-delegate with the concrete gaps rather than fixing the code in the main loop. The delegate must never commit pipeline paperwork — `SPEC.md`, `IMPLEMENTATION_PLAN.md`, `PRIOR_KNOWLEDGE.md` stay out of every commit."
+
+
+[[stage]]
 id = "code-review"
 label = "Review via Codex"
 default_enabled = false

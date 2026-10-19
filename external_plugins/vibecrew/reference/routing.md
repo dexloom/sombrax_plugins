@@ -15,7 +15,7 @@ VibeCrew bundles **three** pipeline types, none of which binds an executor:
 
 | Type | Name | Delegation | Shipped `[agents]` |
 |---|---|---|---|
-| **Base** | `Basic` | none — no stage carries a role | none |
+| **Base** | `Basic` | `code`→`coder` only, opt-in (default off: the main loop codes) | none |
 | **Planned** | `Planned` | `spec`→`product`, `plan`→`planner`, `plan-review`→`reviewer`, `code-review`→`reviewer`; implementation stays in the main loop | `plan-review = "CODEX"`, `code-review = "CODEX"` |
 | **Async** | `Async` | the above plus `code`→`coder` — the full fan-out | `plan-review = "CODEX"`, `code-review = "CODEX"` |
 
