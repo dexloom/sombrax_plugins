@@ -199,11 +199,15 @@ PR LOOP (host-computed from the cards' marker comments; owner = whose move it is
 | `changes-requested` | dev | fixes owed, then `VC-PR-UPDATED` |
 | `approved-unmerged` | auditor | `merge` verdict, PR still open |
 | `merge-failed` | orchestrator | the merge did not land |
-| `held` | orchestrator, or operator for `rounds-exhausted` / `operator` / an untyped hold | typed hold |
+| `held` | orchestrator, or operator for `rounds-exhausted` / `operator` / `ci-infra` / an untyped hold | typed hold |
 | `declined` / `closed` | operator | the Auditor declined, or the PR closed unmerged |
 | `merged-unreflected` | orchestrator | merged on GitHub; the card is not `done` yet |
 
-`round=k/limit` — `limit` is `orchestrator.pr_fix_rounds` (default 3).
+`round=k/limit` — counted by the host: 1 + the `changes` verdicts before the
+newest READY/UPDATED, except `reason=conflict` and `reason=ci-infra` (a rebase
+or a CI re-trigger is not a fix round). The agent's own `round=` is ignored.
+`limit` is `orchestrator.pr_fix_rounds` (default 3). `reason=` shows the
+current verdict's reason for `changes` and `merge-failed` as well as `held`.
 `OVERDUE` marks a non-operator wait older than
 `orchestrator.pr_loop_overdue_minutes` (default 20): the orchestrator's cue to
 nudge that row's owner. Absent block ⇒ the host could not look; `none — …` ⇒
@@ -343,7 +347,7 @@ blindly.
 |---|---|---|
 | `409 dispatch refused: …` | the card is not in the `DISPATCHABLE NOW` set | don't retry this tick: read the reason, report it, and move on. A lane frees, a blocker merges, or the operator raises the cap. |
 
-### The PR review loop (VC-ORCH-CONTRACT v9 / VC-AUDIT-CONTRACT v4)
+### The PR review loop (VC-ORCH-CONTRACT v10 / VC-AUDIT-CONTRACT v5)
 
 The Auditor owns pull requests; the orchestrator owns every wait. The full
 method is in the two agent definitions; the wire is:
@@ -355,7 +359,10 @@ method is in the two agent definitions; the wire is:
   VC-PR-REVIEW: <CARD-N> card=<card_id> workspace=<workspace_id> pr=#<number> <url> head=<sha7> round=<k> internal_review=<yes|no> — review this PR against its card, then request changes, merge it, or decline it.
   ```
 
-- **The verdict:** the Auditor posts `PR-REVIEW <merge|changes|decline|hold> #<n> @<sha7> round=<k>[ reason=<code>] — … — <PR comment url>`,
+- **The verdict:** the Auditor chooses the depth itself — a light review
+  against card and plan always, a full `vibecrew-reviewer` pass only when the
+  pipeline's review did not run, left fixes unreviewed, or the diff touches a
+  risk area — and posts `PR-REVIEW <merge|changes|decline|hold> #<n> @<sha7> round=<k>[ reason=<code>] depth=<light|full> — … — <PR comment url>`,
   notifies the dev agent (`VC-PR-FIX`, `VC-PR-APPROVED`, `VC-PR-HOLD`,
   `VC-PR-DECLINED`) through `card-message --from auditor --queue-if-busy`,
   and acts. A failed merge adds `PR-REVIEW merge-failed … reason=<code>`.
@@ -363,8 +370,16 @@ method is in the two agent definitions; the wire is:
   posted on the card and sent with `target_kind: "orchestrator"`,
   `"from":"auditor"`. The orchestrator acts and answers `ORCH-ACK <CARD> #<n> need=<need> — done|failed: …`
   on the card and to the Auditor. The operator never relays between them.
+- **Operational acceptance never blocks a merge:** criteria that need a live
+  environment, funds, credentials, calendar time or a human sign-off move to
+  a follow-up card (`AUDIT-SPLIT <CARD> #<n> → <FOLLOW-UP>`) that blocks the
+  original card's dependents. A criterion the card marks `[blocks-merge]`
+  stays blocking.
 - **Holds are typed:** `checks-pending` is re-asked by the orchestrator;
-  `rounds-exhausted` and `operator` are the only human stops.
+  `rounds-exhausted`, `ci-infra` and `operator` are the only human stops.
+- **A parked agent owing a fix** is extended (`budget-extend`, allowed on any
+  card whose open PR waits on its agent's fix) and resumed by the orchestrator.
+  An open PR also pauses the card's wall clock whatever its column.
 - **Timeouts:** every wait has an owner and the `PR LOOP` block's `OVERDUE`
   flag; the orchestrator nudges the owner (re-ask the Auditor, re-send the fix,
   nudge or resume the dev agent), and surfaces to the operator after three.

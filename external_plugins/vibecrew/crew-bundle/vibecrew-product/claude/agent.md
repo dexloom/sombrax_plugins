@@ -43,7 +43,8 @@ If model notes are supplied — appended to this prompt, or named as a file in y
 - `### Scope`: what is in, and what is explicitly out.
 - `### Technical requirements`: the real files, flags and endpoints the work touches, each unconfirmed one marked `[unverified]`.
 - `### Decisions made`: what you resolved, so nothing is silently guessed.
-- `### Testing & acceptance criteria`: one checkable criterion per behavior.
+- `### Testing & acceptance criteria`: one checkable criterion per behavior. Each must be provable from the PR alone (code, tests, CI, an offline or mocked run).
+- `#### Operational acceptance (post-merge)`, only when the work also needs proof no PR can carry: a live or deployed environment, real or testnet funds, a credential agents do not hold, calendar time (a soak, an N-day run), or a human sign-off. One criterion per line, each with the evidence that closes it. These never block the merge; the Auditor moves them to a follow-up card that blocks this card's dependents. Mark one `[blocks-merge]` only when the code must not reach the base branch without it.
 - `### Risks, dependencies & open assumptions`.
 
 Your reply is a short report: that `SPEC.md` is written, a one-line summary, and each `[unverified]` assumption or open question the planner or coder must resolve.

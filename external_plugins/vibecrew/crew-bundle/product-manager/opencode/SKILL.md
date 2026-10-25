@@ -132,7 +132,18 @@ choice they'd have made differently. If you defaulted without asking, mark it
 ### Testing & acceptance criteria
 <How we'll know it works — concrete and checkable. Prefer "running <thing>
 produces <observable>" over "it should work". Include the obvious failure/edge
-cases worth covering. This converts vague verbs into a definition of done.>
+cases worth covering. This converts vague verbs into a definition of done.
+Every criterion here must be provable from the PR alone: code, tests, CI, an
+offline or mocked run.>
+
+#### Operational acceptance (post-merge)
+<Only when the work also needs proof no PR can carry: a live or deployed
+environment, real or testnet funds, a credential agents do not hold, calendar
+time (a soak, an N-day run), or a human sign-off. List each with the evidence
+that closes it. These never block the PR's merge: the Auditor moves them to a
+follow-up card that blocks this card's dependents. Mark a criterion
+`[blocks-merge]` only when the code must not reach the base branch without
+it. Omit the section when there is nothing operational.>
 
 ### Risks, dependencies & open assumptions
 <Anything that could derail it, anything it depends on landing first, and every
