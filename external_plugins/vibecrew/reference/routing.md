@@ -110,10 +110,12 @@ Claude-era, n=65 done); raw JSONs alongside. Collector:
 - **Codex review is its own budget, and the largest one:** 27.5M tokens
   across 8 reviewed cards; plan-review median **2.05M/card** — ~4× a whole
   GLM main loop. On all-in accounting GLM's 879 drops to 101 LOC/1M.
-- **Plan size ≥ ~40 KB is the strongest blowup predictor:** small-plan cards
+- **Plan size is the strongest blowup predictor** (first measured at ~40 KB): small-plan cards
   shipped 8-of-9; big-plan 1-of-4, absorbing 21.2M vs 6.3M review tokens.
   Measurable **after the plan, before any coder token** — hence the late
-  binding (§4).
+  binding (§4). Recalibrated by CREW-135 (2026-11-02): medium cards plan at
+  21–34 KB and heavy ones at 20–52 KB and deliver, so the heavy line is now
+  **over 48 KB** and the host park ceiling 96 KB.
 - **Review loops don't converge past two passes:** VIBE-6 paid 7.5M
   plan-review tokens for 0 LOC; VIBE-11 two diff passes, 2.1M, 0 LOC.
 - **Main-loop babysitting of codex is real money:** VIBE-13 burned 18.3M
@@ -218,7 +220,7 @@ rubric threshold** — it produces the evidence; acting on it is a separate card
         orchestrator: dependency gate (lanes) → dispatch lighter tiers first
                 │
                 ▼  runtime, after the plan stage exists:
-        PLAN-FACTS → PLAN-GATE (skip the plan review < 40 KB, 0 open
+        PLAN-FACTS → PLAN-GATE (skip the plan review ≤ 48 KB, 0 open
         decisions, unless Routing forces yes; cap 2 passes)
                  → CODER-MODEL (step up within the BOUND AGENT's catalog:
                    sonnet→opus, MiniMax→GLM, terra→sol; operator pin wins)

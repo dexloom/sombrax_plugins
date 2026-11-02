@@ -131,7 +131,7 @@ Notes for other agents or the operator go to card comments (`vibecrew_api.py com
   byte size; steps, files and open decisions from its Plan facts section, or
   counted yourself). The next two stages read this line. If the planner's
   report leads with `VK-ESCALATE:`, relay it and stop (see *When to stop*).
-- **plan-review** (if listed). Gate first. If the plan is under 40 KB and has 0
+- **plan-review** (if listed). Gate first. If the plan is at or under 48 KB and has 0
   open decisions and the Routing line does not force it with
   `plan-review: yes`, skip the stage: report the single line
   `PLAN-GATE: plan-review skipped (<size> KB, <n> open decisions)` and move on
@@ -168,7 +168,7 @@ Notes for other agents or the operator go to card comments (`vibecrew_api.py com
 
   If a stage delegates the coding to a subagent (the `coder` agent, `code`
   stage), run the model check first. Bind the coder model within the bound
-  agent's own catalog: if the plan blew its envelope (PLAN-FACTS ≥ 40 KB, or
+  agent's own catalog: if the plan blew its envelope (PLAN-FACTS over 48 KB, or
   open design decisions surfaced during planning), step the coder up one tier
   inside that catalog (Claude Code: sonnet → opus; OpenCode/Pi: MiniMax-M3 →
   glm-5.2; Codex: gpt-5.6-terra → gpt-5.6-sol; a coder already at its ceiling

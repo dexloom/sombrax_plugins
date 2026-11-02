@@ -248,7 +248,7 @@ These lines ride in card descriptions and run reports; keep them byte-stable.
   PLAN-GATE and the CODER-MODEL check.
 - **`PLAN-GATE: plan-review skipped|running (<size> KB, <n> open decisions)`**
   — emitted by the `plan-review` stage: the review runs only when the plan is
-  ≥ 40 KB, has open decisions, or the Routing line forces it; capped at two
+  over 48 KB, has open decisions, or the Routing line forces it; capped at two
   passes either way.
 - **`CODER-MODEL: <model> — <reason>`** — emitted by the `code` stage after
   binding the coder model **within the bound agent's own catalog** (Claude Code

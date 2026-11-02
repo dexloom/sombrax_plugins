@@ -203,10 +203,12 @@ Report every toggle; the caller applies them against the pipeline's
   by the `product` agent is always a full spec, so always `adopt`.
 - **plan-review:** `yes` (forced) when R = 2; otherwise `gate`. With `gate` the
   stage stays listed and the runtime PLAN-GATE decides once the plan exists
-  (skip when the plan is under ~40 KB with 0 open decisions). There is no `no`:
-  dropping the stage would blind the gate. Basis: plan size ≥ ~40 KB is the
+  (skip when the plan is at or under 48 KB with 0 open decisions). There is no
+  `no`: dropping the stage would blind the gate. Basis: plan size is the
   strongest blowup predictor on the board, and a Codex plan review routinely
-  costs more than the plan.
+  costs more than the plan. A ~40 KB plan is a standard medium plan here
+  (medium cards plan at 21–34 KB); a plan is heavy only over 48 KB, and the
+  host parks one only over 96 KB (CREW-135).
 - **code-review:** `yes` (tick the stage) for heavy, and for medium when
   R ≥ 1; otherwise `no`. The runtime caps it at two passes either way.
 - **completion:** `merge` at every tier and every risk level (the default;
