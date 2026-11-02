@@ -11,7 +11,7 @@ It holds:
 - **Pipeline-stage subagents** — `vibecrew-product`, `vibecrew-planner`,
   `vibecrew-coder`, `vibecrew-reviewer` — that run *inside a card's worktree*
   as stages of an execution pipeline.
-- **`code-review-checklist`** — a self-review skill invoked before opening a PR.
+- **`code-review-checklist`** — a self-review skill invoked before a change lands (merged, or opened as a PR when one was asked for).
 - **`commit-helper`** — a conventional-commit drafting subagent.
 - **`vibecrew-orchestrator`** / **`vibecrew-decider`** — standalone copies of
   the board orchestrator and its decider delegate (see below).

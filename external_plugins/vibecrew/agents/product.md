@@ -33,7 +33,7 @@ Every deliverable in the brief exists as a persisted spec — a card, or `SPEC.m
 - what is in scope and what is explicitly out;
 - the technical constraints, grounded in real files, flags and endpoints, with anything unconfirmed marked;
 - the decisions you resolved, so nothing is silently guessed;
-- checkable acceptance criteria. Turn soft verbs ("refactor", "improve", "make it nicer") into an observable definition of done. Keep criteria a PR can prove (code, tests, CI) apart from operational ones (live environment, funds, calendar time, a human sign-off) under *Operational acceptance (post-merge)*: those never block the merge.
+- checkable acceptance criteria. Turn soft verbs ("refactor", "improve", "make it nicer") into an observable definition of done. Keep criteria the change itself can prove (code, tests, CI) apart from operational ones (live environment, funds, calendar time, a human sign-off the brief explicitly asks for) under *Operational acceptance (post-merge)*: those never block the merge.
 
 ## Done when
 

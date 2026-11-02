@@ -143,7 +143,7 @@ debug card); Fable and the Kimi arm have no completed-card data.
 | **trivial** | **Basic** + executor pin | default state: implement + merge, no delegation |
 | **light** | **Planned** | delegated spec → plan → plan review; the main loop writes the code |
 | **medium** | **Async** | full fan-out: spec → plan → plan review → code → code review |
-| **heavy** | **Async** | + code-review ticked, `pr` instead of `merge` |
+| **heavy** | **Async** | + code-review ticked; still `merge` |
 
 - `light → Planned` is a deliberate re-route: a light task used to buy a full
   fan-out on a cheaper coder and now buys delegated planning with main-loop
@@ -209,9 +209,17 @@ Report every toggle; the caller applies them against the pipeline's
   costs more than the plan.
 - **code-review:** `yes` (tick the stage) for heavy, and for medium when
   R ≥ 1; otherwise `no`. The runtime caps it at two passes either way.
-- **completion:** `merge` (the default; every deployed pipeline ticks it) for
-  R ≤ 1; `pr` for heavy or R = 2 (un-tick `merge`, tick `pr`), which puts a
-  human gate before landing.
+- **completion:** `merge` at every tier and every risk level (the default;
+  every deployed pipeline ticks it). The board's job is to push cards through
+  at volume, and a PR nobody asked for stops the card, so risk never buys a
+  PR: it buys `code-review: yes` and `plan-review: yes` instead. `pr` (un-tick
+  `merge`, tick `pr`) only when a human or the Orchestrator explicitly asks
+  for a pull request on this card; record it as `forced by operator`.
+- **human review:** `no` by default. No card is reviewed by a human unless a
+  human or the Orchestrator explicitly asked for that review; then `yes`,
+  which ticks `wait-for-approval` (it parks after the code and its review,
+  before `merge`/`pr`). A request for a PR alone is not a request for a human
+  review: the Auditor reviews and merges a PR.
 - **coder model:** decided at runtime, not here. The CODER-MODEL check binds it
   after the plan exists and steps up within the bound agent's own catalog
   (Claude Code: sonnet → opus; OpenCode/Pi: MiniMax-M3 → glm-5.2; Codex:
@@ -279,7 +287,7 @@ first route plus that tripwire beats an expensive route taken just in case.
   executor), spec/plan and coder on `zai-coding-plan/glm-5.2`, reviews on
   Codex, spec: adopt (full PM spec already on the card), code-review: no.
 - *"Backtest replay engine + depth-aware fill sim + reports/CLI"* → S2 D2 R1
-  N2 V2 = 9 → heavy → Async [Claude Code] + code-review, completion: pr,
+  N2 V2 = 9 → heavy → Async [Claude Code] + code-review, completion: merge,
   spec/plan and coder on `opus` (`fable` only if the operator names it;
   uncalibrated).
 - *"Rethink the pipeline architecture — spec on Claude, plan on codex with

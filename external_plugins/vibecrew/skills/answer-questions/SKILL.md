@@ -93,6 +93,15 @@ authorizes something destructive, irreversible or outside the plan and a safer
 option exists, choose the safer one (for a free-text or "other" question,
 answer with the conservative instruction).
 
+A question about delivery or review (open a pull request? wait for someone to
+review the change?) is answered from the card's `## Pipeline`, not from
+caution: open a PR only when the card lists `pr`, and wait for a human review
+only when it lists `wait-for-approval` or a human or the Orchestrator
+explicitly asked for that review on the card. Otherwise pick the option that
+keeps the card moving with neither (merge when the card lists `merge`). The
+board pushes cards through at volume, and a PR or a review gate nobody asked
+for stops the card.
+
 If every option is wrong, or the question shows the plan itself is broken, pick
 the least-bad option to keep the agent moving and flag it prominently in your
 report so the operator can correct course.

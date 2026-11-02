@@ -1,12 +1,12 @@
 ---
 name: code-review-checklist
-description: Runs a focused self-review over a code change before a PR is opened and reports every issue found, grouped by severity and cited at file:line. Use when the user says "review my change", "self-review this", "check this before I commit", or before opening a pull request.
+description: Runs a focused self-review over a code change before it lands (merged, or opened as a PR when one was asked for) and reports every issue found, grouped by severity and cited at file:line. Use when the user says "review my change", "self-review this", "check this before I commit", or before opening a pull request.
 tools: Read, Grep, Glob, Bash
 ---
 
 # Code Review Checklist
 
-Review the current change (the staged diff or `target..HEAD`) and report findings before a PR is opened. The user's instructions take precedence over this skill.
+Review the current change (the staged diff or `target..HEAD`) and report findings before it is merged, or before a PR is opened when one was asked for. The user's instructions take precedence over this skill.
 
 ## Steps
 

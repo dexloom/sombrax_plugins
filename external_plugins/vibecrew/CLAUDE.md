@@ -358,8 +358,9 @@ knowledge-recall/enrich/release are deliberately deferred; see the README):
    listed → it merges its branch into the base branch (and opens no PR); `pr`
    listed → it pushes the branch and opens the PR (`gh pr create`, and merges
    nothing); both listed → both, in the order the card gives them; neither
-   listed → it does neither and simply reports complete. Both stages are
-   default-off, and **ticking one IS the operator's authorization** — there is
+   listed → it does neither and simply reports complete. `merge` is on by
+   default in every bundled pipeline and `pr` is off, and **a ticked delivery
+   stage IS the operator's authorization** — there is
    no further go to wait for and nothing to hand back. After a landed merge the
    agent also **restores the base branch's own checkout to clean** — the ref-only
    CAS leaves the old index behind there as staged residue, and step 7 of the
@@ -369,8 +370,19 @@ knowledge-recall/enrich/release are deliberately deferred; see the README):
    `prompts/pipeline.md`.
 
 **Wait for approval is the SOLE operator gate.** The operator's merge/PR
-decision is made **up front**, by ticking (or not ticking) the default-off
-`merge`/`pr` stage.
+decision is made **up front**, by ticking (or not ticking) the `merge`/`pr`
+stage.
+
+**No PR and no human review by default.** The board pushes cards through at
+volume, and a gate nobody asked for stops the card, so an automatically
+routed card delivers by `merge`, with no PR and no human review, at every tier
+and every risk level. `pr` is ticked only when a human or the Orchestrator
+explicitly asks for a pull request, and `wait-for-approval` (the human code
+review) only when one of them explicitly asks for that review — `classify-task`
+owns both toggles, `product-manager` applies them. An explicit ask is always
+honored. A PR on its own is no human gate either: the Auditor reviews and
+merges it (`agents/auditor.md`), and a human merges only when no Auditor is
+running.
 
 ## Delivery-signal asymmetry (the orchestrator's Done gate)
 

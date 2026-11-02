@@ -133,14 +133,15 @@ choice they'd have made differently. If you defaulted without asking, mark it
 <How we'll know it works — concrete and checkable. Prefer "running <thing>
 produces <observable>" over "it should work". Include the obvious failure/edge
 cases worth covering. This converts vague verbs into a definition of done.
-Every criterion here must be provable from the PR alone: code, tests, CI, an
-offline or mocked run.>
+Every criterion here must be provable from the change alone: code, tests, CI,
+an offline or mocked run.>
 
 #### Operational acceptance (post-merge)
-<Only when the work also needs proof no PR can carry: a live or deployed
+<Only when the work also needs proof no diff can carry: a live or deployed
 environment, real or testnet funds, a credential agents do not hold, calendar
-time (a soak, an N-day run), or a human sign-off. List each with the evidence
-that closes it. These never block the PR's merge: the Auditor moves them to a
+time (a soak, an N-day run), or a human sign-off the brief explicitly asks for.
+List each with the evidence that closes it. These never block the merge: the
+Auditor moves them to a
 follow-up card that blocks this card's dependents. Mark a criterion
 `[blocks-merge]` only when the code must not reach the base branch without
 it. Omit the section when there is nothing operational.>
@@ -252,8 +253,13 @@ How to set the flags:
   (`Basic`: `merge`; `Planned`: `spec, plan, plan-review, merge`; `Async`:
   `spec, plan, plan-review, code, merge`), then apply `classify-task`'s
   toggles: add `code-review` when the toggle says `yes`; for `completion: pr`,
-  drop `merge` and add `pr`. Add `orchestrate` only on an explicit auto-drive
-  ask ("execute this", "auto-drive it"), never by default or by routing.
+  drop `merge` and add `pr`; for `human review: yes`, add `wait-for-approval`.
+  Both of those come only from an explicit ask by a human or the Orchestrator
+  ("open a PR for this", "I want to review it before it lands"), never by
+  default, by tier or by risk: a card pushed through automatically ends in a
+  merge with no PR and no human review. Add `orchestrate` only on an explicit
+  auto-drive ask ("execute this", "auto-drive it"), never by default or by
+  routing.
 - **`--executor`.** Always pass it, because the bundled pipelines are
   agent-neutral. Use the raw value for the resolved main agent:
   `CLAUDE_CODE_HEADED`, `OPENCODE_HEADED`, `CODEX_HEADED`, `PI_HEADED`.

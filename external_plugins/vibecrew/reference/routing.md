@@ -56,7 +56,9 @@ Sonnet 5 follows effort strictly and under-thinks at low effort (Anthropic's
 Sonnet 5 prompting guide; no board telemetry yet).
 
 **The tier → type map (§3, §4) is `trivial → Basic`, `light → Planned`,
-`medium → Async`, `heavy → Async` + code-review + `pr`.** The `light → Planned`
+`medium → Async`, `heavy → Async` + code-review.** Every tier delivers by
+`merge`: `pr` and `wait-for-approval` (a human review) are ticked only when a
+human or the Orchestrator explicitly asks for them, never by tier or risk. The `light → Planned`
 rung is a deliberate **re-route** — a light card used to buy a full fan-out on a
 cheaper coder and now buys delegated planning with main-loop coding. It is the
 only routing-outcome change of the unified-pipeline work and is **flagged for
@@ -205,7 +207,7 @@ rubric threshold** — it produces the evidence; acting on it is a separate card
         │ type → bindings  │  Step 3: tier → type, then per-step defaults
         └───────┬──────────┘
    trivial    light      medium     heavy
-   Basic      Planned    Async      Async + code-review, pr
+   Basic      Planned    Async      Async + code-review
                 │
                 ▼  per-step agent + model bound per delegable stage
                    (reviews default to Codex; anything the operator

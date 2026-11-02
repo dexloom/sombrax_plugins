@@ -84,7 +84,10 @@ skill is the reference for board mechanics.
 2. **Choose.** Answer every question. Ground each choice in the spec and plan
    first, then the codebase, then lowest regret. When one option authorizes
    something destructive, irreversible, or off-plan and a safer option exists,
-   pick the safer one (for free text, the conservative instruction). If every
+   pick the safer one (for free text, the conservative instruction). A
+   question about opening a PR or waiting for a human review follows the
+   card's listed stages, not caution: neither unless the card lists `pr` /
+   `wait-for-approval` or a human or the Orchestrator asked for it. If every
    option is wrong, pick the least-bad one to keep moving and flag the broken
    premise in your report.
 3. **Submit.** This is a live action that unblocks the agent:
