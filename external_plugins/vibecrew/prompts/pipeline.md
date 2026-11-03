@@ -166,6 +166,18 @@ Notes for other agents or the operator go to card comments (`vibecrew_api.py com
   `SPEC.md` (when it exists), not only the first, and say which ones you
   verified and how.
 
+  Keep tool output small while you code, since every byte stays in your
+  context for the rest of the card. Locate with `grep -n`, then read only that
+  range (`Read` with offset/limit, or `sed -n 'A,Bp' <file>` on a CLI without
+  one). Never dump a whole file, and never re-read a file you just edited. Run
+  builds and tests into a log, then print only the tail or the failures:
+  `cargo test > "$LOG" 2>&1; echo exit=$?; tail -n 60 "$LOG"`, or
+  `grep -E "^(error|FAILED|test .* FAILED)" "$LOG"`; the same goes for
+  `npm`/`bun test`, `swift test` and `go test ./...`. Take the result from
+  `exit=`, not from a pipe. When a filtered run fails, read the full failing
+  section from the log before you fix or report it. Filtering must never hide
+  a failure. Summarize diffs with `git diff --stat`.
+
   If a stage delegates the coding to a subagent (the `coder` agent, `code`
   stage), run the model check first. Bind the coder model within the bound
   agent's own catalog: if the plan blew its envelope (PLAN-FACTS over 48 KB, or
@@ -176,6 +188,11 @@ Notes for other agents or the operator go to card comments (`vibecrew_api.py com
   the single line `CODER-MODEL: <model> — <one-phrase reason>`, then spawn.
   In the delegation, point the coder at `SPEC.md` and `IMPLEMENTATION_PLAN.md`
   and name its done-criterion (every plan step implemented and verified).
+  Pass it the output rules above, and require its final message to end with
+  the `CODER-HANDOFF:` block (`done: <steps>`, `changed: <files>`,
+  `tests: <pass|fail|not-run> <command>`, `gotchas: <one line each>`). If the
+  block is missing, ask the coder for it instead of writing it yourself, then
+  forward it verbatim in your report.
 
   The coder leaves the worktree dirty on purpose: it never commits, because you
   own the git ceremony. When it reports back, verify its work yourself (read the

@@ -53,6 +53,23 @@ Size verification to the change, and run each rung once:
 
 Then check each acceptance criterion in `SPEC.md` against what you ran. Fix what you broke. If a check fails for a reason unrelated to your change, report it with its output. If validation cannot be run, say why and name the next best check.
 
+## Output hygiene
+
+Every byte a tool prints stays in your context for the rest of the card, so print only what you will act on. These rules never trade away a failure: a filtered run that fails is always followed by a read of the full failing section.
+
+- **Locate, then read a range.** Find the spot with `Grep` (or `grep -n <pattern> <file>`), then `Read` with `offset`/`limit` around the hit, about 100–200 lines. Do not `cat` a file, `sed -n` through a whole file, or `cd <repo> && sed -n …` your way through the repo. Read a whole file only when it is short or you really need all of it.
+- **Do not re-read what you just edited.** `Edit`/`Write` fail loudly when they do not apply. Re-read a narrow range only when a later edit needs the current text.
+- **Run builds and tests into a log, then print the tail or the failures.** Keep the full output on disk so you never have to re-run to see it:
+  - `LOG="${TMPDIR:-/tmp}/coder-test.log"; cargo test > "$LOG" 2>&1; echo "exit=$?"; tail -n 60 "$LOG"`
+  - `grep -E "^(error|FAILED|test .* FAILED)" "$LOG" | head -n 40` (cargo)
+  - `npm test > "$LOG" 2>&1; echo "exit=$?"; tail -n 60 "$LOG"` (likewise `bun test`, `pnpm test`)
+  - `swift test > "$LOG" 2>&1; echo "exit=$?"; grep -E "error:|failed|Executed .* tests" "$LOG" | tail -n 40`
+  - `go test ./... > "$LOG" 2>&1; echo "exit=$?"; grep -E "^(--- FAIL|FAIL|panic|ok )" "$LOG"`
+
+  Take the result from the printed `exit=`, not from a pipe: `cmd | tail` reports `tail`'s exit status, not the command's.
+- **On a failure, read the whole failing section before you act.** Find it in the log with `grep -n` (the first `error`, the failing test's name), then `Read` the log with `offset`/`limit` from there to the end of that section. Never fix or report a failure from the filtered lines alone, and never report `tests: pass` unless you saw `exit=0` and the runner's own summary line.
+- **Summarize diffs and listings.** Use `git diff --stat` and `git status --short`, then `git diff -- <file>` for the one file you need. Cap long listings with `| head -n 50`.
+
 ## Escalation tripwire
 
 If the task has outgrown its classification (the card's `**Routing:**` tier priced a change far smaller than the code demands: a "light" fix whose root cause needs a redesign, scope spreading across packages the plan never named, an unpriced design decision), stop and make the first line of your report exactly:
@@ -63,9 +80,21 @@ Your caller relays it and the card is re-routed. Use the marker only for genuine
 
 ## Output contract
 
-A short report:
+A short report, ending with the handoff block:
 
 - The card, and the plan steps completed (`N of M`), with any skipped or re-scoped step and why.
 - What changed: files touched, grouped by step, one line each.
 - Verification: each check you ran and its outcome, failures included with output.
 - What the caller must decide or do next: spec/plan mismatches, failed `[unverified]` assumptions, follow-ups you did not do.
+
+End your final message with this block, exactly, as the last thing in it. Your caller forwards it verbatim, so keep it to these four fields:
+
+```
+CODER-HANDOFF:
+done: <plan steps completed, e.g. 1-4, 6 (5 skipped: see gotchas)>
+changed: <files touched, comma-separated repo-relative paths>
+tests: <pass|fail|not-run> <the exact command you ran>
+gotchas: <one line each; `none` if there are none>
+```
+
+Write `tests: fail` whenever any check you ran failed, and `tests: not-run` with the reason in `gotchas:` when you could not run one. Put extra gotchas on their own lines directly under `gotchas:`, each starting with `- `. The `VK-ESCALATE:` line, when you need it, still goes first; the block still goes last.

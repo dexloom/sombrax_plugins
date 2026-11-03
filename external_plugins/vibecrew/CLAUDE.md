@@ -255,6 +255,20 @@ These lines ride in card descriptions and run reports; keep them byte-stable.
   sonnet→opus / OpenCode/Pi MiniMax-M3→glm-5.2 / Codex gpt-5.6-terra→gpt-5.6-sol
   step-up on blown plans; an operator's per-step or card-level model pin always
   wins).
+- **`CODER-HANDOFF:`** — the block every coder **ends** its final message with
+  (CREW-140). It is the introducing literal line followed by exactly four
+  lines: `done: <steps>`, `changed: <files>`, `tests: <pass|fail|not-run>
+  <command>`, `gotchas: <one line each>`, with extra gotchas as `- ` lines
+  under the last one. Producers: `agents/coder.md` (and its crew-bundle copies)
+  for a subagent coder, and the `code` stage prompt plus `prompts/pipeline.md`,
+  which put it in the brief of any other coder (a nested Codex, OpenCode or Pi
+  one-shot reads the stage prompt, never `coder.md`). Consumer: the main loop,
+  which checks the block is present, asks the coder again when it is missing
+  rather than writing it itself, and forwards it verbatim. The same sources
+  carry the coder's **output rules**: read narrow ranges, run builds and tests
+  into a log and print only the tail or the failures, take the result from
+  `exit=` rather than from a pipe, and read the full failing section before
+  fixing or reporting a failure.
 - **`VK-ESCALATE: <tier>-><proposed-tier> — <one-line evidence>`** — the
   misclassification tripwire, the **second park marker**. Producer: the coding
   agent makes it the **first line of its final message** (committing safe work
@@ -341,7 +355,8 @@ knowledge-recall/enrich/release are deliberately deferred; see the README):
    `codex exec resume --last "…" < /dev/null` (same session — codex keeps the
    plan and its findings in context, far cheaper than a fresh review).
 5. **implement** — *always*; the coding agent's own core work, committed as it
-   goes.
+   goes, under the coder output rules (see `CODER-HANDOFF:` above) whether the
+   main loop codes or a `code` stage delegates.
 6. **code-review** — the `reviewer` delegate (Codex by default) reviews the
    diff read-only on whichever agent the stage binds. On Codex that is
    `codex exec --sandbox read-only "Review the diff … git diff <base> …"
