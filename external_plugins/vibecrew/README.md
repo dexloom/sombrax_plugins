@@ -148,9 +148,13 @@ env toggles — see [`scripts/README.md`](scripts/README.md):
   at 3 (`409 nudge_cap_reached`, digest `nudges: 3/3`). Excludes a `running` run (which would 409 anyway) and a
   parked card (waiting on the operator, not stuck).
 
-There is **no context-compaction directive** here — headless per-run
-processes never accumulate context across a session (each run is a fresh
-process), so that class of problem doesn't apply to VibeCrew.
+There is **no context-compaction directive** here, because compaction is
+the host's job, not the orchestrator's. Since session reuse (CREW-84) a headed
+agent is no longer a fresh process per run, so its context does accumulate —
+the orchestrator's grew to 639–941k tokens with zero compactions (#9). VibeCrew
+now sends each idle headed agent its executor's compact command over tmux every
+`periodic_compact_minutes` (default 30, per role, `0` = off; CREW-138). See the
+app's agent config for the knob.
 
 See [`scripts/README.md`](scripts/README.md) for the full toggle docs and
 usage examples.

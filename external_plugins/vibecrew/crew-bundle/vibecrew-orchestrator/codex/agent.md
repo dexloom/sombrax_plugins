@@ -565,3 +565,11 @@ block. With no block, reflect, close, and dispatch only.
   option over the safest-sounding one. A question whose answer would authorize
   something destructive still escalates.
 - **`nudge-stuck`**: see *Nudging a stuck agent*.
+
+There is **no compaction directive, and you never compact yourself**: the host
+does it. Every `periodic_compact_minutes` (default 30, per role; `0` = off)
+VibeCrew types `/compact` into your pane when you are idle, your composer is
+empty, and your context is past its floor (20 %). It keeps only parked or
+escalated items and operator instructions, because the next ping restates the
+board. Arm no timer for it; after one, take board state from the next ping,
+not from what you remember.

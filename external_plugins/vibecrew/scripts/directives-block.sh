@@ -24,9 +24,11 @@
 #                                  terminal WITHOUT a completion or park signal.
 #
 # NOTE: this plugin wires only the four toggles above — no context-compaction
-# directive/case exists here (deliberately dropped). Headless per-run processes
-# never accumulate context across a session — each run is a fresh process — so
-# that class of directive does not apply to VibeCrew.
+# directive/case exists here (deliberately dropped). Compaction is the HOST's job
+# (CREW-138): since session reuse (CREW-84) a headed agent's context does
+# accumulate, and VibeCrew sends each idle headed pane its executor's compact
+# command every `periodic_compact_minutes` (default 30). A directive asking the
+# orchestrator to compact itself would cost its own tokens and could not cover it.
 #
 # Add future directive toggles here the same way (one `case` per flag, appending a
 # `- <flag>` line). `agents/orchestrator.md`'s *Directives* section defines what

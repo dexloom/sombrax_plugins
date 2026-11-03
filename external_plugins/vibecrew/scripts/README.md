@@ -93,10 +93,13 @@ lives in `agents/orchestrator.md`; this script only names which flags are on.
   idempotence field, which is why the agent needs no memory of what it sent.
 
 There is **no context-compaction directive** in this plugin (the
-`vibe-kanban-indie` equivalent is deliberately dropped): headless per-run
-processes never accumulate context across a session — each run is its own
-fresh process — so the class of problem that directive solves doesn't apply
-here.
+`vibe-kanban-indie` equivalent is deliberately dropped), and that is not
+because the problem went away. Since session reuse (CREW-84) a headed agent
+keeps one TUI across tasks and its context accumulates. The HOST compacts it
+instead (CREW-138): every `periodic_compact_minutes` (default 30, per role,
+`0` = off) VibeCrew types the executor's compact command into each idle headed
+pane over tmux. That is deterministic, costs no orchestrator tokens, and covers
+the orchestrator itself, which a directive could not.
 
 To wire a new directive toggle, add a `case` to `directives-block.sh` and
 document the behavior in `agents/orchestrator.md`.
