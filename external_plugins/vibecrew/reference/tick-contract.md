@@ -225,7 +225,7 @@ never judges whether a run is stalled, only reports how long it has been quiet.
 |---|---|
 | `<CARD>` | card `simple_id`, else workspace name, else workspace id |
 | `<status>` | the run row's status verbatim |
-| activity | output since last tick, how long it has been silent (and for how many **delivered** ticks), or `not observed by this app session` |
+| activity | output since last tick, how long it has been silent (and for how many **observed** ticks — delivered ones plus no-op skips, §2 *Skipped ticks*), or `not observed by this app session` |
 | `input-sent-since-last-output` | the host already delivered input to this run since its last output |
 | `approvals pending` | count of unresolved approvals on that run |
 | `nudges: <n>/3` | optional, appended last: stall nudges the host has counted for this run since its last progress. Omitted at 0, so every other row is unchanged. At `3/3` it adds `— cap reached; do NOT nudge …`: the host has stopped nudging and reported the run (§5) |
@@ -238,8 +238,10 @@ Notes that matter:
   running. Probe yourself.
 - `- (no non-terminal runs)` **is** a digest: it means nothing is running.
 - The orchestrator's own session is excluded — it is not a card being driven.
-- Silent-tick counts increment only on **delivered** ticks. A tick the host
-  skipped (agent mid-turn) is not the agent's silence.
+- Silent-tick counts increment on **observed** ticks: delivered ones, and
+  ticks skipped because nothing changed (the host looked; the silence is
+  real). A tick the host could not deliver (agent mid-turn) is not the
+  agent's silence and does not count.
 - `not observed by this app session (log tail lost on restart)` is not
   silence. A headed agent survives an app restart; its log drain does not, so
   its output stops reaching `run_logs` while it works normally. Such a row never
@@ -247,6 +249,40 @@ Notes that matter:
   (`GET /api/runs/<run>/pane`) instead, which reads the screen directly.
 - Capped at 30 rows, **stalest first**, with a `+N more` line. The rows that get
   cut are the ones producing output — the ones you least need told about.
+
+### Skipped ticks (E1)
+
+The host does not deliver a tick when nothing in it has changed since the
+last tick it delivered. It fingerprints the facts the ping is built from, not
+the text: the `DISPATCHABLE NOW` list, every digest row's state (status,
+approvals, output or silence up to 2 ticks, input sent, budget phase and
+checkpoint, review wait, nudges, delivered, the watchdog's frozen latch),
+every `PR LOOP` row including its `OVERDUE` flag, the open card workspaces'
+columns and delivery state, the parked and checkpointed cards, whether `DISK
+LOW` shows, the directives, and the tick mode. Clocks (`for=`, `no output for
+<M>m`, the tick number) are not fingerprinted; each is reduced to the
+threshold you act at.
+
+What this means for you:
+
+- A delivered tick always carries something new, unless it is a forced wake.
+  The tick number counts delivered ticks only, so it can jump in wall-clock
+  time.
+- The forced wake delivers a tick after `orchestrator.noop_skip_max_ticks`
+  skips (default 6) or `orchestrator.noop_skip_max_minutes` since the last
+  delivery (default 30). Duties nothing on the board signals ride on it: the
+  hourly inventory, `checks-pending` and `ci-infra` re-asks.
+- While `auto-answer-questions` is on and an approval is pending, no tick is
+  skipped: that directive's grace is counted in ticks.
+- A relaunched orchestrator always gets its next tick, and so does the first
+  tick after an app restart.
+- Skipping changes nothing you send back. Keep ending every report with
+  `CADENCE:`. The host applies it on skipped ticks as well: it sets how soon
+  the board is checked again.
+
+`0` ticks turns skipping off. Each skip is one `orchestrator.noop_skip`
+mission event, and each delivered `orchestrator.tick` row names its
+`wake: <reason>`.
 
 ### The first tick
 
@@ -476,6 +512,7 @@ Ids are byte-identical to vibe-kanban-indie's, and are also the persistence keys
 |---|---|---|
 | Ping text | `CrewOrchestrator/OrchestratorTickPing.swift` | this file, the agent definitions |
 | Digest row format | `CrewOrchestrator/FleetDigest.swift` | this file, the agent definitions |
+| Tick fingerprint, the skip verdict, `orchestrator.noop_skip_max_ticks` / `_max_minutes` | `CrewOrchestrator/TickFingerprint.swift` (`TickFingerprint`, `NoopTickSkip`) | this file, `docs/configuration.md` |
 | `CADENCE:` grammar | `CrewOrchestrator/CadenceDirective.swift` | this file, the agent definitions, `scripts/orchestrator.sh` |
 | `VC-NUDGE:` prefix, the payload shapes, the 3-nudge cap | `CrewLaunch/StallNudge.swift` (`StallNudge.prefix`, `compose`, `cap`; re-exported as `OrchestratorNudge`) | this file, the agent definitions, `vibecrew_api.py` (`send-input --nudge`) |
 | Directive ids + copy | `CrewOrchestrator/OrchestratorDirectives.swift` | the launch sheet, the agent definitions |
