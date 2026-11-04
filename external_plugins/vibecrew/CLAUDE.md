@@ -269,6 +269,17 @@ These lines ride in card descriptions and run reports; keep them byte-stable.
   into a log and print only the tail or the failures, take the result from
   `exit=` rather than from a pipe, and read the full failing section before
   fixing or reporting a failure.
+- **`CODER-SPLIT: single coder (<size> KB, <n> steps)`** or
+  **`CODER-SPLIT: <n> phases — <phase>: steps <a-b>; …`** — emitted by a `code`
+  stage whose pipeline opted in with `[coding] split = true` (CREW-141). One
+  coder per plan phase, in order; a plan of 4 steps or fewer, under 15 KB, or
+  with fewer than 3 phases keeps one coder.
+- **`FANOUT-PLAN: <n> batches — <batch>: steps <list>`** — emitted by Planned's
+  opt-in `code-fanout` stage before it dispatches. No batch exceeds 5 steps or
+  8 files by default; an over-cap batch is split, never merged.
+- **`CODER-CEILING: <phase or batch> — <reason>`** — the recorded reason a
+  split coder passed the context ceiling (250k by default). `[coding]` in the
+  pipeline TOML moves every number above.
 - **`VK-ESCALATE: <tier>-><proposed-tier> — <one-line evidence>`** — the
   misclassification tripwire, the **second park marker**. Producer: the coding
   agent makes it the **first line of its final message** (committing safe work
@@ -356,7 +367,7 @@ knowledge-recall/enrich/release are deliberately deferred; see the README):
    plan and its findings in context, far cheaper than a fresh review).
 5. **implement** — *always*; the coding agent's own core work, committed as it
    goes, under the coder output rules (see `CODER-HANDOFF:` above) whether the
-   main loop codes or a `code` stage delegates.
+   main loop codes or a `code` or `code-fanout` stage delegates.
 6. **code-review** — the `reviewer` delegate (Codex by default) reviews the
    diff read-only on whichever agent the stage binds. On Codex that is
    `codex exec --sandbox read-only "Review the diff … git diff <base> …"

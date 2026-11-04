@@ -56,7 +56,9 @@ HEADER = (
 # `{{DELEGATE}}` is the per-step delegation placeholder, so only the delegating
 # types (`Async`, `Planned`) assert it; `CODER-MODEL:` belongs to the `code`
 # stage, which only `Async` has (Planned keeps implementation in the main loop);
-# `CODER-HANDOFF:` belongs to the `code` stage too, which Basic carries opt-in.
+# `CODER-HANDOFF:` and `{{CODER_SPLIT}}` belong to the `code` stage too, which
+# Basic carries opt-in; Planned's opt-in `code-fanout` carries the handoff and
+# `{{CODER_BATCH_CAP}}`.
 ASSERT_CONTAINS = {
     "async.toml": [
         "PLAN-FACTS:",
@@ -64,17 +66,21 @@ ASSERT_CONTAINS = {
         "{{DELEGATE}}",
         "CODER-MODEL:",
         "CODER-HANDOFF:",
+        "{{CODER_SPLIT}}",
         "merge-record",
     ],
     "planned.toml": [
         "PLAN-FACTS:",
         "PLAN-GATE:",
         "{{DELEGATE}}",
+        "CODER-HANDOFF:",
+        "{{CODER_BATCH_CAP}}",
         "merge-record",
     ],
     "basic.toml": [
         "PLAN-FACTS:",
         "CODER-HANDOFF:",
+        "{{CODER_SPLIT}}",
         "merge-record",
     ],
 }

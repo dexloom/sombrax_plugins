@@ -178,8 +178,8 @@ Notes for other agents or the operator go to card comments (`vibecrew_api.py com
   section from the log before you fix or report it. Filtering must never hide
   a failure. Summarize diffs with `git diff --stat`.
 
-  If a stage delegates the coding to a subagent (the `coder` agent, `code`
-  stage), run the model check first. Bind the coder model within the bound
+  If a stage delegates the coding to a subagent (the `coder` agent, `code` or
+  `code-fanout` stage), run the model check first. Bind the coder model within the bound
   agent's own catalog: if the plan blew its envelope (PLAN-FACTS over 48 KB, or
   open design decisions surfaced during planning), step the coder up one tier
   inside that catalog (Claude Code: sonnet → opus; OpenCode/Pi: MiniMax-M3 →
@@ -193,6 +193,13 @@ Notes for other agents or the operator go to card comments (`vibecrew_api.py com
   `tests: <pass|fail|not-run> <command>`, `gotchas: <one line each>`). If the
   block is missing, ask the coder for it instead of writing it yourself, then
   forward it verbatim in your report.
+
+  A stage may split that delegation. A `code` stage carrying `PHASE SPLIT` runs
+  one coder per plan phase, in order, and a `code-fanout` stage runs capped
+  batches. Follow the stage text: each coder gets its step range, the
+  `git diff --stat` against base, and the previous coder's `CODER-HANDOFF:`
+  block verbatim, and each phase is verified and committed before the next one
+  starts. On an executor with no subagents, work the same phases in one session.
 
   The coder leaves the worktree dirty on purpose: it never commits, because you
   own the git ceremony. When it reports back, verify its work yourself (read the

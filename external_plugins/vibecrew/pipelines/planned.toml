@@ -7,7 +7,9 @@ description = "Spec → plan → plan review, each step on the agent and model y
 
 # The middle tier: the planning ceremony is delegated and per-step bindable,
 # but the implementation stays in the main loop — there is no `code` stage, so
-# the agent that runs the card writes the code itself.
+# the agent that runs the card writes the code itself. The opt-in `code-fanout`
+# stage is the exception: ticked, the main loop hands the plan to capped batches
+# of coders instead (`[coding]` sizes them).
 #
 # Family-neutral like Async: no `agent =`, no `[models]`. Every step runs on the
 # card's main agent unless the operator binds it; the two review steps default
@@ -49,6 +51,13 @@ id = "wait-for-approval"
 label = "Wait for approval"
 default_enabled = false
 prompt = "Pause for operator approval at this point: commit the work so far, then stop and wait for the operator's decision or instructions before continuing to later stages — do not advance on your own until the operator responds."
+
+[[stage]]
+id = "code-fanout"
+label = "Code in batches via {{agent_name}} · {{model_name}}"
+default_enabled = false
+subagent = "coder"
+prompt = "MODEL CHECK FIRST — the coder runs on this stage's bound agent and model (see the delegation clause below); if the plan blew its envelope (PLAN-FACTS over 48 KB, or open design decisions surfaced during planning), step the coder model up one tier within the bound agent's own catalog — Claude Code: sonnet → opus; OpenCode or Pi: MiniMax-M3 → glm-5.2; Codex: gpt-5.6-terra → gpt-5.6-sol; a model already at its ceiling stays put. An operator's per-step or card-level model pin always beats this advice. Report the single line `CODER-MODEL: <model> — <one-phrase reason>`. Then: Do NOT write the implementation yourself. Partition the plan's numbered steps into batches such that no two batches touch the same file and no batch depends on a later batch's output; run dependent batches in sequence and independent batches concurrently. {{CODER_BATCH_CAP}}Report the single line `FANOUT-PLAN: <n> batches — <batch>: steps <list>` before dispatching. {{DELEGATE}} once per batch to implement exactly that batch's steps strictly from `SPEC.md` and `IMPLEMENTATION_PLAN.md` — pass the workspace-root path, the card description, the batch's step numbers, and the `CODER-HANDOFF:` block of any batch it depends on verbatim in each delegate's prompt, and instruct it to follow those steps in order, stay inside its own batch's files, and report what it changed. After each batch returns, verify the result builds and passes the project's own checks before dispatching any batch that depends on it; if a delegate's work is incomplete or broken, re-delegate that batch with the concrete gaps rather than fixing the code in the main loop. When every batch is in, reconcile the seams the partition created — imports, shared signatures, call sites spanning two batches — and run the project's checks once over the whole result. If this stage runs in your own session (no subagents, or a nested run is unavailable), there is nothing to spawn: work the same batches in order in this one session, checking at each boundary. OUTPUT RULES — put these in each delegate's prompt (they bind you too if you end up running this stage yourself): locate with `grep -n`, then read only that range (`Read` with offset/limit; `sed -n 'A,Bp' <file>` on a CLI without one) — never dump a whole file, never re-read a file just edited; run builds and tests into a log and print only the tail or the failures (`cargo test > \"$LOG\" 2>&1; echo exit=$?; tail -n 60 \"$LOG\"`, or `grep -E \"^(error|FAILED|test .* FAILED)\" \"$LOG\"`; likewise `npm`/`bun test`, `swift test`, `go test ./...`), taking the result from `exit=`, not from a pipe; when a filtered run fails, read the full failing section from the log before fixing or reporting — filtering must never hide a failure; summarize diffs with `git diff --stat`. Each delegate's final message must END with a `CODER-HANDOFF:` block of exactly these lines: `done: <steps>`, `changed: <files>`, `tests: <pass|fail|not-run> <command>`, `gotchas: <one line each>`. When one returns, check the block is there (ask the delegate for it if missing rather than writing it yourself) and forward it verbatim in your stage report and to any batch that depends on it. No delegate may commit pipeline paperwork — `SPEC.md`, `IMPLEMENTATION_PLAN.md`, `PRIOR_KNOWLEDGE.md` stay out of every commit."
 
 [[stage]]
 id = "code-review"
