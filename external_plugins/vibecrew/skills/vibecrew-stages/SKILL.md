@@ -51,14 +51,19 @@ python3 "${VIBECREW_API:-${CLAUDE_PLUGIN_ROOT}/scripts/vibecrew_api.py}" stages 
 ```
 
 That prints every ticked stage, numbered as the card numbers them, with its
-full prompt and resolved binding. For one stage:
+full prompt and resolved binding, and under each one the kickoff guide's full
+text for that stage (its bullet from `prompts/pipeline.md`'s
+`## How to run each stage`). A reference-form card's first prompt carries only
+a one-line header per listed stage there (CREW-143), so this is where the
+guide lives: follow the prompt and the guide together. For one stage:
 
 ```sh
-python3 "${VIBECREW_API:-${CLAUDE_PLUGIN_ROOT}/scripts/vibecrew_api.py}" stages $VIBECREW_CARD_ID --stage merge
+python3 "${VIBECREW_API:-${CLAUDE_PLUGIN_ROOT}/scripts/vibecrew_api.py}" stages $VIBECREW_CARD_ID --text --stage merge
 ```
 
 Leave out `--text` for JSON (`id`, `label`, `prompt`, `agent`, `model`,
-`cross_agent`) when you want a field rather than the prose.
+`cross_agent`, and `guide` when the manual has one for the stage) when you
+want a field rather than the prose.
 
 The numbering matches the card: stage 3 here is the stage the card calls 3, and
 the `VK-PIPELINE-STAGE: 3` you emit refers to the same stage.

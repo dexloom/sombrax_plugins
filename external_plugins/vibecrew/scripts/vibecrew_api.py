@@ -395,6 +395,80 @@ def block_stage_ids(description):
     return ids
 
 
+# CREW-143 — the kickoff's per-stage guide (`## How to run each stage` in
+# `prompts/pipeline.md`). The host trims that section of a reference-form
+# card's first prompt to one header per listed stage, so the full text for a
+# stage has to come back through `stages --text`. The bullet→stage-id table is
+# `StageManualComposer.bulletStageIds` on the Swift side; keep the two equal.
+MANUAL_HEADING = "## How to run each stage"
+MANUAL_BULLET_STAGE_IDS = {
+    "spec": ["spec"],
+    "plan": ["plan"],
+    "plan-review": ["plan-review"],
+    "code-review": ["code-review"],
+    "update documentation": ["update-docs"],
+    "wait for approval": ["wait-for-approval"],
+    "merge / pr": ["merge", "pr"],
+}
+MANUAL_BULLET_RE = re.compile(r"^- \*\*([^*]+)\*\*")
+
+
+def manual_path():
+    """`prompts/pipeline.md` beside this script's plugin root."""
+    return Path(__file__).resolve().parent.parent / "prompts" / "pipeline.md"
+
+
+def manual_guides(path=None):
+    """{stage id: the guide bullet's text} from the kickoff manual.
+
+    A bullet runs until the next non-blank line at column 0 outside a code
+    fence, the same rule the host's trimmer splits by. Missing or unreadable
+    manual ⇒ {} (the stage prompts still print).
+    """
+    try:
+        text = Path(path or manual_path()).read_text(encoding="utf-8")
+    except OSError:
+        return {}
+    lines = text.split("\n")
+    try:
+        start = lines.index(MANUAL_HEADING)
+    except ValueError:
+        return {}
+    guides, current, ids, in_fence = {}, None, None, False
+
+    def flush():
+        if current is not None and ids:
+            body = "\n".join(current).rstrip()
+            for stage in ids:
+                guides[stage] = body
+
+    for line in lines[start + 1:]:
+        stripped = line.strip()
+        if not in_fence and line.startswith("## "):
+            break
+        if in_fence:
+            if current is not None:
+                current.append(line)
+            if stripped.startswith("```"):
+                in_fence = False
+            continue
+        if stripped.startswith("```"):
+            in_fence = True
+        at_column_zero = bool(line) and not line[0].isspace()
+        match = MANUAL_BULLET_RE.match(line) if at_column_zero else None
+        if match:
+            flush()
+            current = [line]
+            ids = MANUAL_BULLET_STAGE_IDS.get(match.group(1).lower())
+        elif at_column_zero:
+            flush()
+            current, ids = None, None
+        elif current is not None:
+            current.append(line)
+    flush()
+    return guides
+
+
 def card_stages(base, card_id, stage_id=None, as_text=False):
     """A4 — re-render the card's pipeline stages and print their full prompts.
 
@@ -507,7 +581,11 @@ def card_stages(base, card_id, stage_id=None, as_text=False):
             print(f"stage \"{stage_id}\" is not ticked on this card", file=sys.stderr)
             sys.exit(1)
 
+    guides = manual_guides()
     if not as_text:
+        for step in steps:
+            if guides.get(step.get("id")):
+                step["guide"] = guides[step["id"]]
         print(json.dumps(steps, indent=2))
         sys.exit(0)
 
@@ -522,6 +600,15 @@ def card_stages(base, card_id, stage_id=None, as_text=False):
         print("-" * len(header))
         print(step.get("prompt", ""))
         print()
+        guide = guides.get(step.get("id"))
+        if guide:
+            print("How to run it — the kickoff guide's full text for this stage "
+                  "(prompts/pipeline.md; follow it together with the prompt above):")
+            if "{{BASE_BRANCH}}" in guide:
+                print("(`{{BASE_BRANCH}}` below is the base branch your kickoff names; default `main`.)")
+            print()
+            print(guide)
+            print()
     sys.exit(0)
 
 

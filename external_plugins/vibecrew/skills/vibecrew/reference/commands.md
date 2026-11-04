@@ -68,8 +68,10 @@ call is enough to classify readiness (the `## Pipeline` Orchestrate opt-in).
 each with an `` `id:` ``, instead of inlined prompts. It re-renders the ticked
 stages through the server's own composer and prints them in the card's order,
 so the text matches an inlined block byte for byte. Use it whenever you need
-to know what a stage instructs. `--stage <id>` prints one stage; leave out
-`--text` for JSON. The `vibecrew-stages` skill wraps the same call with the
+to know what a stage instructs. Under each prompt it also prints the kickoff
+guide's text for that stage (from `prompts/pipeline.md`; a `guide` field in
+JSON), which a reference-form card's first prompt replaces with a one-line
+header. `--stage <id>` prints one stage; leave out `--text` for JSON. The `vibecrew-stages` skill wraps the same call with the
 fallbacks written out.
 
 ## Create or groom a card

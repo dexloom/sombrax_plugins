@@ -43,7 +43,10 @@ python3 "${VIBECREW_API:-${CLAUDE_PLUGIN_ROOT}/scripts/vibecrew_api.py}" stages 
 
 That prints every ticked stage, numbered as the card numbers them, with its
 full prompt, re-rendered by the same composer that wrote the block (so it is
-byte-identical to an inlined one). The `vibecrew-stages` skill wraps it. If the
+byte-identical to an inlined one), and under it this guide's full text for
+that stage. The `vibecrew-stages` skill wraps it. For a reference-form card the
+host trims *How to run each stage* below to a header per listed stage, so the
+guide for a stage is in that output, not here: follow both. If the
 call is unavailable, the block's stage-reference line names the fallback: read
 each `prompt` by `id` from the pipeline's TOML
 (`GET $VIBECREW_URL/api/pipelines/<name>` → `toml`, or `~/.vibecrew/pipelines/`).

@@ -46,6 +46,27 @@ Measured: a `Basic` spec+plan+merge card went 2,290 → 1,073 bytes, `Async`
 8,590 → 1,234. That block is re-read on every stage, hand-off and resume, so the
 saving is per-read, not per-card.
 
+**The kickoff's stage manual follows the block (CREW-143).** When the host
+starts a card session (`POST /api/workspaces/start`), `StageManualComposer`
+rewrites the `## How to run each stage` section of the filled
+`prompts/pipeline.md`, for every executor. Reference form: each listed stage's
+bullet becomes a one-line header naming `stages $VIBECREW_CARD_ID --text --stage
+<id>`, and unlisted stages are dropped. Full-text form: the bullets for
+unlisted stages are dropped and listed ones stay whole (the ids come from
+`extension_metadata.pipeline.enabledIds`). Always kept: the `implement` bullet,
+any bullet the table does not know, the paragraph after the bullets, and
+*Delegation* / *When to stop*. `stages --text` prints each stage's guide bullet
+under its prompt, so nothing is lost. The bullet → stage-id table exists twice,
+as `StageManualComposer.bulletStageIds` (Swift) and `MANUAL_BULLET_STAGE_IDS`
+(`scripts/vibecrew_api.py`), and the two must stay equal. **Renaming a bullet's
+bold name, or adding one, means updating both.** An unknown name is sent whole,
+never dropped. A reference-form card with no pipeline metadata is not trimmed,
+because `stages` refuses it. Sync this plugin with any host that trims: an older
+`stages --text` does not print the guide. The composed first prompt's size is recorded on the run row
+(`runs.first_prompt_bytes`, shown in the workspace Telemetry tab) and, when the
+manual was trimmed, logged as
+`First prompt: N B; stage manual X → Y B`.
+
 **Readers must accept both, and there is no flag day.** `parseStages` counts the
 contiguous `N. ` run either way; in reference form it also splits the ``` — `id:
 x` ``` suffix off the display label and returns it as `stageId`, which is `nil`
